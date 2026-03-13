@@ -1,0 +1,149 @@
+services:
+
+  # ── Database ────────────────────────────────────────────────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mtg}
+      POSTGRES_USER: ${POSTGRES_USER:-mtg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./data/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mtg} -d ${POSTGRES_DB:-mtg}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── API ─────────────────────────────────────────────────────────────────────
+  api:
+    build: ./services/api
+    image: mtg-pytorch-api:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
+      MODEL_CHECKPOINT_DIR: /app/checkpoints
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./services/api:/app:cached
+      - model_checkpoints:/app/checkpoints:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mtg-api.rule=Host(`${API_HOST:-edh-api.cardtrak.app}`)"
+      - "traefik.http.routers.mtg-api.entrypoints=websecure"
+      - "traefik.http.routers.mtg-api.tls=true"
+      - "traefik.http.routers.mtg-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mtg-api.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik-public"
+
+  # ── UI ──────────────────────────────────────────────────────────────────────
+  ui:
+    build: ./services/ui
+    image: mtg-pytorch-ui:latest
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      - api
+    networks:
+      - internal
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mtg-ui.rule=Host(`${UI_HOST:-edh.cardtrak.app}`)"
+      - "traefik.http.routers.mtg-ui.entrypoints=websecure"
+      - "traefik.http.routers.mtg-ui.tls=true"
+      - "traefik.http.routers.mtg-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mtg-ui.loadbalancer.server.port=8501"
+      - "traefik.docker.network=traefik-public"
+
+  # ── Ingest ──────────────────────────────────────────────────────────────────
+  # One-shot / scheduled pipeline: Scryfall bulk data → pgvector embeddings
+  ingest:
+    build: ./services/ingest
+    image: mtg-pytorch-ingest:latest
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
+      # MTGJSON is used as primary; Scryfall only as fallback
+      SCRYFALL_BULK_TYPE: ${SCRYFALL_BULK_TYPE:-oracle_cards}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EDHREC_CACHE_DIR: /data/edhrec
+      BATCH_SIZE: ${INGEST_BATCH_SIZE:-256}
+    volumes:
+      - ./services/ingest:/app:cached
+      - ingest_cache:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Trainer ─────────────────────────────────────────────────────────────────
+  trainer:
+    build: ./services/trainer
+    image: mtg-pytorch-trainer:latest
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
+      CHECKPOINT_DIR: /checkpoints
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_PROJECT: ${WANDB_PROJECT:-edh-builder}
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
+    volumes:
+      - ./services/trainer:/app:cached
+      - ./models:/app/models:cached
+      - model_checkpoints:/checkpoints
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Jupyter Lab ─────────────────────────────────────────────────────────────
+  jupyter:
+    build: ./services/trainer
+    image: mtg-pytorch-trainer:latest
+    restart: unless-stopped
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --NotebookApp.token=${JUPYTER_TOKEN:-} --notebook-dir=/notebooks
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
+    volumes:
+      - ./notebooks:/notebooks:cached
+      - ./models:/app/models:cached
+      - model_checkpoints:/checkpoints:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mtg-jupyter.rule=Host(`${JUPYTER_HOST:-edh-nb.cardtrak.app}`)"
+      - "traefik.http.routers.mtg-jupyter.entrypoints=websecure"
+      - "traefik.http.routers.mtg-jupyter.tls=true"
+      - "traefik.http.routers.mtg-jupyter.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mtg-jupyter.loadbalancer.server.port=8888"
+      - "traefik.docker.network=traefik-public"
+
+networks:
+  internal:
+    driver: bridge
+  traefik-public:
+    external: true
+
+volumes:
+  db_data:
+  model_checkpoints:
+  ingest_cache:

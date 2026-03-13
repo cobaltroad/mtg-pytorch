@@ -1,0 +1,13 @@
+services:
+  trainer:
+    image: mtg-pytorch-trainer-gpu:latest
+    build:
+      context: ./services/trainer
+      dockerfile: Dockerfile.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

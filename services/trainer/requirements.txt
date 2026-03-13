@@ -1,0 +1,14 @@
+torch>=2.3
+sentence-transformers>=3.0
+transformers>=4.40
+psycopg2-binary>=2.9
+sqlalchemy>=2.0
+pgvector>=0.3
+numpy>=1.26
+tqdm>=4.66
+wandb>=0.17
+pydantic-settings>=2.3
+jupyterlab>=4.2
+ipywidgets>=8.1
+matplotlib>=3.8
+seaborn>=0.13

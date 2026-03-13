@@ -1,0 +1,9 @@
+/mage
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+*.pt
+*.ckpt
+wandb/
