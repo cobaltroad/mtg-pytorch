@@ -53,7 +53,15 @@ with tab_search:
             st.info("No results found.")
         else:
             df = pd.DataFrame(results)[["name", "type_line", "mana_cost", "cmc", "oracle_text"]]
-            selected = st.dataframe(df, use_container_width=True, on_select="rerun", selection_mode="single-row")
+            selected = st.dataframe(
+                df,
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                column_config={
+                    "oracle_text": st.column_config.TextColumn("oracle_text", width="medium"),
+                },
+            )
 
             if selected and selected.selection.rows:
                 row = results[selected.selection.rows[0]]

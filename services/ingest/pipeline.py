@@ -407,7 +407,16 @@ async def tag_abilities() -> None:
 
 # ── Stage 5: Synergy edges ────────────────────────────────────────────────────
 
+SYNERGY_CHUNK = 200   # producers per transaction — keeps each commit ~200×consumers rows
+
 async def compute_synergy() -> None:
+    """Build synergy edges in small chunked transactions.
+
+    Fetches producer card IDs in Python, then drives INSERT...SELECT statements
+    SYNERGY_CHUNK producers at a time so no single transaction materialises more
+    than ~200 × 6k = ~1.2M rows.  Progress is checkpointed after every chunk so
+    a restart resumes without duplicates (ON CONFLICT DO NOTHING).
+    """
     log.info("Computing ability-trigger synergy edges…")
 
     PRODUCER_MAP = {
@@ -418,43 +427,55 @@ async def compute_synergy() -> None:
         "phase_begin": ["upkeep", "end step", "combat"],
     }
 
-    async with Session() as db:
-        for trigger_event, producer_keywords in PRODUCER_MAP.items():
-            consumers = (await db.execute(text("""
-                SELECT card_id FROM card_abilities WHERE trigger_event = :te
-            """), {"te": trigger_event})).fetchall()
+    for trigger_event, producer_keywords in PRODUCER_MAP.items():
+        like_clauses = " OR ".join(
+            f"lower(oracle_text) LIKE '%{kw}%'" for kw in producer_keywords
+        )
 
-            if not consumers:
-                continue
-
-            like_clauses = " OR ".join(
-                f"lower(oracle_text) LIKE '%{kw}%'" for kw in producer_keywords
-            )
-            producers = (await db.execute(text(f"""
+        # Fetch just the IDs of producer cards — tiny result set
+        async with Session() as db:
+            rows = (await db.execute(text(f"""
                 SELECT id FROM cards WHERE {like_clauses}
             """))).fetchall()
+        producer_ids = [str(r[0]) for r in rows]
 
-            edges = []
-            for prod in producers:
-                for cons in consumers:
-                    if prod[0] == cons[0]:
-                        continue
-                    edges.append({
-                        "card_a": str(prod[0]),
-                        "card_b": str(cons[0]),
-                        "score_type": "ability_trigger",
-                        "score": 1.0,
-                        "metadata": json.dumps({"trigger_event": trigger_event}),
-                    })
+        if not producer_ids:
+            log.info("  %s → no producers found, skipping", trigger_event)
+            continue
 
-            for i in range(0, len(edges), BATCH_SIZE):
-                await db.execute(text("""
+        total_inserted = 0
+        n_chunks = (len(producer_ids) + SYNERGY_CHUNK - 1) // SYNERGY_CHUNK
+        log.info("  %s: %d producers in %d chunks…", trigger_event, len(producer_ids), n_chunks)
+
+        for chunk_idx in range(0, len(producer_ids), SYNERGY_CHUNK):
+            chunk = producer_ids[chunk_idx : chunk_idx + SYNERGY_CHUNK]
+            id_list = "'" + "','".join(chunk) + "'"
+
+            async with Session() as db:
+                result = await db.execute(text(f"""
                     INSERT INTO synergy_edges (card_a, card_b, score_type, score, metadata)
-                    VALUES (:card_a, :card_b, :score_type, :score, :metadata)
+                    SELECT
+                        c.id::uuid,
+                        ca.card_id,
+                        'ability_trigger',
+                        1.0,
+                        '{{"trigger_event": "{trigger_event}"}}'::jsonb
+                    FROM (SELECT unnest(ARRAY[{id_list}]::uuid[]) AS id) c
+                    CROSS JOIN (
+                        SELECT card_id FROM card_abilities
+                        WHERE trigger_event = '{trigger_event}'
+                    ) ca
+                    WHERE c.id != ca.card_id
                     ON CONFLICT (card_a, card_b, score_type) DO NOTHING
-                """), edges[i : i + BATCH_SIZE])
-            await db.commit()
-            log.info("  %s → %d edges", trigger_event, len(edges))
+                """))
+                await db.commit()
+            total_inserted += result.rowcount
+
+            if (chunk_idx // SYNERGY_CHUNK) % 10 == 0:
+                log.info("    chunk %d/%d — %d edges so far",
+                         chunk_idx // SYNERGY_CHUNK + 1, n_chunks, total_inserted)
+
+        log.info("  %s → %d edges total", trigger_event, total_inserted)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

@@ -101,10 +101,11 @@ def load_synergy_pairs(
                 SELECT card_a::text, card_b::text
                 FROM synergy_edges
                 WHERE score_type = 'ability_trigger'
-                  AND card_a::text = ANY(%s)
-                  AND card_b::text = ANY(%s)
-            """, (list(embeddings.keys()), list(embeddings.keys())))
-            positives = [(r[0], r[1], 1.0) for r in cur.fetchall()]
+            """)
+            positives = [
+                (r[0], r[1], 1.0) for r in cur.fetchall()
+                if r[0] in embeddings and r[1] in embeddings
+            ]
 
     log.info("  %d positive pairs", len(positives))
 
