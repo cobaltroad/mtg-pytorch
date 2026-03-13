@@ -428,7 +428,7 @@ async def compute_synergy() -> None:
                 continue
 
             like_clauses = " OR ".join(
-                f"lower(c.oracle_text) LIKE '%{kw}%'" for kw in producer_keywords
+                f"lower(oracle_text) LIKE '%{kw}%'" for kw in producer_keywords
             )
             producers = (await db.execute(text(f"""
                 SELECT id FROM cards WHERE {like_clauses}
