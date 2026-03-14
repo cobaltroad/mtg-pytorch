@@ -3,9 +3,12 @@ MTG Commander deck construction trainer.
 
 Training progression
 --------------------
-Phase 1 – Text equivalence
-    Contrastive loss on card embeddings: same-named reprints → positive pairs,
-    random cards → negative pairs.
+Phase 1 – Text equivalence (SimCLR-style)
+    NT-Xent contrastive loss: two Gaussian-noised views of the same card
+    embedding are the positive pair; all other cards in the batch are
+    in-batch negatives.  No reprints required — works with one row per
+    oracle_id.  Teaches the encoder to produce stable, denoised representations
+    that preserve sentence-transformer similarity structure.
 
 Phase 2 – Ability-trigger synergy
     Binary classification: given (card_a, card_b), predict synergy_edges score.
@@ -186,6 +189,22 @@ def load_synergy_pairs(
     return pairs
 
 
+# ── Phase 1 data ──────────────────────────────────────────────────────────────
+
+class AllCardsDataset(Dataset):
+    """Phase 1: every card is a sample; two noisy views are created in the loop."""
+
+    def __init__(self, embeddings: dict):
+        self.ids = list(embeddings.keys())
+        self.embs = np.stack([embeddings[k] for k in self.ids]).astype(np.float32)
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.embs[idx])
+
+
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 class CardEncoder(nn.Module):
@@ -276,6 +295,80 @@ class DeckDataset(Dataset):
 
 
 # ── Training loops ────────────────────────────────────────────────────────────
+
+def nt_xent_loss(z_i: torch.Tensor, z_j: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+    """NT-Xent (InfoNCE) loss for a batch of positive pairs.
+
+    z_i, z_j: (B, D) L2-normalised embeddings.
+    Each (z_i[k], z_j[k]) is a positive pair; all cross-pairs are negatives.
+    """
+    B = z_i.size(0)
+    z = torch.cat([z_i, z_j], dim=0)                       # (2B, D)
+    sim = (z @ z.T) / temperature                           # (2B, 2B)
+    # Mask self-similarity (diagonal) so a sample isn't its own negative
+    mask = torch.eye(2 * B, device=z.device).bool()
+    sim = sim.masked_fill(mask, float("-inf"))
+    # For i in [0,B): positive is at i+B; for i in [B,2B): positive is at i-B
+    labels = torch.cat([torch.arange(B, 2 * B), torch.arange(B)]).to(z.device)
+    return F.cross_entropy(sim, labels)
+
+
+def train_contrastive_phase(
+    model: CardEncoder,
+    dataset: AllCardsDataset,
+    epochs: int,
+    lr: float,
+    batch_size: int = 512,
+    noise_std: float = 0.05,
+    temperature: float = 0.07,
+):
+    """Phase 1: SimCLR-style contrastive pre-training.
+
+    Two Gaussian-noised views of each card embedding form the positive pair.
+    NT-Xent loss over in-batch negatives.  Large batches help significantly
+    (more in-batch negatives); default 512 gives 511 negatives per anchor.
+    """
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
+                        num_workers=0, drop_last=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    device = next(model.parameters()).device
+
+    best_loss = float("inf")
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        for emb in loader:
+            emb = emb.to(device)
+            # Create two independent noisy views then re-normalise
+            view1 = F.normalize(emb + torch.randn_like(emb) * noise_std, dim=-1)
+            view2 = F.normalize(emb + torch.randn_like(emb) * noise_std, dim=-1)
+
+            z1 = model(view1)
+            z2 = model(view2)
+            loss = nt_xent_loss(z1, z2, temperature)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            total_loss += loss.item()
+
+        scheduler.step()
+        avg = total_loss / len(loader)
+        log.info("Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+
+        if WANDB_ENABLED:
+            wandb.log({"phase": 1, "epoch": epoch + 1, "loss": avg,
+                       "lr": scheduler.get_last_lr()[0]})
+
+        if avg < best_loss:
+            best_loss = avg
+            save_checkpoint(model, "phase1_best")
+
+    save_checkpoint(model, f"phase1_epoch{epochs}")
+
 
 def train_synergy_phase(
     model: CardEncoder,
@@ -374,8 +467,13 @@ def main():
                         help="Max positive pairs to sample from synergy_edges")
     parser.add_argument("--label-smoothing", type=float, default=0.1,
                         help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2")
+    parser.add_argument("--noise", type=float, default=0.05,
+                        help="Phase 1: std of Gaussian noise added to create augmented views")
+    parser.add_argument("--temperature", type=float, default=0.07,
+                        help="Phase 1: NT-Xent temperature (lower=sharper contrast)")
     parser.add_argument("--resume", action="store_true",
-                        help="Resume from latest checkpoint")
+                        help="Resume from latest checkpoint (phase2→phase2_best, "
+                             "phase1→phase1_best; falls back to previous phase if not found)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -387,7 +485,25 @@ def main():
             config=vars(args),
         )
 
-    if args.phase == 2:
+    if args.phase == 1:
+        embeddings = load_embeddings()
+        if not embeddings:
+            log.error("No embeddings found — run the ingest pipeline first.")
+            return
+
+        dataset = AllCardsDataset(embeddings)
+        log.info("Dataset: %d cards", len(dataset))
+
+        model = CardEncoder().to(device)
+        if args.resume:
+            load_checkpoint(model, "phase1_best", device)
+
+        train_contrastive_phase(
+            model, dataset, args.epochs, args.lr, args.batch_size,
+            noise_std=args.noise, temperature=args.temperature,
+        )
+
+    elif args.phase == 2:
         embeddings = load_embeddings()
         if not embeddings:
             log.error("No embeddings found — run the ingest pipeline first.")
@@ -408,7 +524,12 @@ def main():
 
         model = CardEncoder().to(device)
         if args.resume:
-            load_checkpoint(model, "phase2_best", device)
+            # Try phase2_best first; fall back to phase1_best (warm start from Phase 1)
+            if (CHECKPOINT_DIR / "phase2_best.pt").exists():
+                load_checkpoint(model, "phase2_best", device)
+            else:
+                log.info("No phase2_best found — loading phase1_best as warm start")
+                load_checkpoint(model, "phase1_best", device)
 
         train_synergy_phase(
             model, dataset, args.epochs, args.lr, args.batch_size,
