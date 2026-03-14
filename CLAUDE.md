@@ -114,6 +114,55 @@ The model is trained in four phases, each building on the last:
   `docker-compose.yml`.  Do not add TLS config inside containers.
 - Never commit `.env`; only commit `.env.example`.
 
+## Phase 2 training — findings (2026-03-14)
+
+**Run ID:** `671fpop8` (wandb project `edh-builder`, run name `lemon-spaceship-7`)
+
+### Loss benchmarks
+
+| Outcome | Final loss |
+|---------|-----------|
+| Barely learning | > 0.65 |
+| Good | 0.55 – 0.60 |
+| Excellent | 0.45 – 0.50 |
+| Overfit risk | < 0.45 |
+
+Epoch 1 baseline: **0.6610** (random baseline ≈ 0.693 — model is learning from batch 1).
+
+### Infrastructure lessons learned
+
+- **synergy_edges table size** — naïve Python cartesian product (7 609 producers ×
+  5 841 consumers = 44 M rows) OOM'd silently.  Fixed by rewriting `compute_synergy`
+  to use chunked `INSERT…SELECT` entirely inside Postgres (`SYNERGY_CHUNK=200` cards
+  per chunk, `SYNERGY_LIMIT=100_000` rows per trigger event).  First uncapped run
+  produced **135 M rows / 37 GB** and filled the disk; always keep the cap in place
+  and expand only after verifying the process end-to-end.
+
+- **Sampling synergy_edges for training** — `SELECT * FROM synergy_edges` on a
+  multi-million-row table OOM'd the trainer.  Fixed with
+  `TABLESAMPLE SYSTEM(10) LIMIT <sample>` (default 500 k positives).  Never use
+  `ORDER BY random()` on large tables — it reads the whole table first.
+
+- **Training sampler (`--sample` flag)** — controls the maximum positive pairs
+  fetched per run.  Start with the default (500 k) and reduce if memory is tight.
+  Negative pairs are sampled in Python at `--neg-ratio × len(positives)` (default 3×).
+
+- **wandb charts** — system metrics appear automatically; custom charts (loss, lr)
+  require at least one `wandb.log()` call with the desired keys.  The trainer logs
+  `phase`, `epoch`, `loss`, and `lr` per epoch.  If charts are missing, confirm
+  `WANDB_API_KEY` is set and the run finished at least one epoch.
+
+### Next steps after Phase 2
+
+1. Evaluate final loss (epoch 20) against benchmarks above.
+2. If loss > 0.65, re-run with more synergy data (increase `SYNERGY_LIMIT`) and/or
+   more epochs.
+3. Rebuild `synergy_edges` with a larger cap once disk space allows, then re-train.
+4. Implement Phase 3 (deck co-occurrence): populate `decks` table from EDHREC data
+   and train `DeckConstructor` on commander → card-set ranking.
+
+---
+
 ## XMage as a training signal
 
 XMage's Java card implementations encode machine-readable ability structure
