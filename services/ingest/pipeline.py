@@ -352,6 +352,36 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     (r"sacrifice .{0,40}:", "Sacrifice activated", "activated_sacrifice"),
 ]
 
+# Major Commander tribes, in rough popularity order.
+# For each tribe we generate two trigger patterns:
+#   tribal_{tribe}_cast — "whenever you cast a {Tribe} spell"
+#   tribal_{tribe}_etb  — "whenever a {Tribe} enters (the battlefield)"
+TRIBES: list[str] = [
+    "Dragon", "Elf", "Zombie", "Vampire", "Eldrazi", "Human",
+    "Dinosaur", "Goblin", "Angel", "Pirate", "Wizard", "Assassin",
+    "Merfolk", "Cat", "Sliver",
+]
+
+for _tribe in TRIBES:
+    _t = _tribe.lower()
+    TRIGGER_PATTERNS.append((
+        rf"when(ever)?\s+you cast (a |an )?{_tribe}",
+        f"{_tribe} cast trigger",
+        f"tribal_{_t}_cast",
+    ))
+    TRIGGER_PATTERNS.append((
+        rf"when(ever)?\s+(a |another )?{_tribe}.{{0,20}}enters",
+        f"{_tribe} ETB trigger",
+        f"tribal_{_t}_etb",
+    ))
+    # Lord / anthem effect: "(other) {Tribe}s you control get +1/+1" — static ability
+    # Treated as a triggered-style consumer so the lord card pairs with tribe members.
+    TRIGGER_PATTERNS.append((
+        rf"(other )?{_tribe}s? (you control|you own).{{0,30}}(get|have|gain)",
+        f"{_tribe} lord effect",
+        f"tribal_{_t}_lord",
+    ))
+
 KEYWORD_RE = re.compile(
     r"\b(flying|trample|haste|vigilance|deathtouch|lifelink|reach|hexproof|"
     r"indestructible|flash|first strike|double strike|menace|prowess|"
@@ -592,6 +622,15 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%sacrifice:%'"
     ),
 }
+
+# Tribal producers: cards of each creature type generate both cast and ETB tribal events.
+# Add entries for both trigger sub-types so the consumer query finds them.
+for _tribe in TRIBES:
+    _t = _tribe.lower()
+    _where = f"lower(type_line) LIKE '%{_t}%'"
+    PRODUCER_MAP[f"tribal_{_t}_cast"] = _where
+    PRODUCER_MAP[f"tribal_{_t}_etb"] = _where
+    PRODUCER_MAP[f"tribal_{_t}_lord"] = _where  # lord consumers pair with tribe members
 
 
 async def compute_synergy() -> None:
