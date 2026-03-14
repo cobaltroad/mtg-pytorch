@@ -109,6 +109,8 @@ def _mine_hard_negatives(
 
     unique_a = list({a for a, _, _ in positives})
     random.shuffle(unique_a)
+    # How many hard negatives to collect per anchor card
+    per_anchor = max(1, -(-n_hard // max(len(unique_a), 1)))  # ceiling division
 
     hard_negs: list[tuple[str, str, float]] = []
     for card_a in unique_a:
@@ -117,11 +119,14 @@ def _mine_hard_negatives(
         a_vec = normed[id_to_idx[card_a]]          # (384,)
         sims = normed @ a_vec                       # (N,) cosine similarities
         ranked = np.argsort(sims)[::-1]             # descending
+        collected = 0
         for idx in ranked[1: top_k + 1]:           # skip self (idx 0)
             cand = all_ids[int(idx)]
             if (card_a, cand) not in pos_set and (cand, card_a) not in pos_set:
                 hard_negs.append((card_a, cand, 0.0))
-                break
+                collected += 1
+                if collected >= per_anchor or len(hard_negs) >= n_hard:
+                    break
 
     log.info("  %d hard negatives mined", len(hard_negs))
     return hard_negs
