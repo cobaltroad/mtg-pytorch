@@ -320,14 +320,36 @@ async def embed_cards() -> None:
 # ── Stage 4: Tag abilities ────────────────────────────────────────────────────
 
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
-    (r"when(ever)?\s+.{0,60}enters", "ETB trigger", "enters_battlefield"),
+    # ── Tightened existing ────────────────────────────────────────────────────
+    # ETB subtypes — checked before the generic ETB catch-all so the most specific wins
+    (r"when(ever)?\s+(a |another )?nontoken creature.{0,30}enters the battlefield", "Nontoken creature ETB", "nontoken_etb"),
+    (r"when(ever)?\s+(a |another )?creature.{0,30}enters the battlefield", "Creature ETB trigger", "creature_etb"),
+    (r"when(ever)?\s+(a |an )?artifact.{0,30}enters the battlefield", "Artifact ETB trigger", "artifact_etb"),
+    # Generic ETB catch-all (also catches enchantments, planeswalkers, etc.)
+    (r"when(ever)?\s+.{0,60}enters the battlefield", "ETB trigger", "enters_battlefield"),
+    # Nontoken creature dies: the most common Aristocrats / sacrifice payoff template
+    (r"when(ever)?\s+(a |another )?nontoken creature.{0,30}dies", "Nontoken dies trigger", "nontoken_dies"),
+    # Generic dies trigger (any creature)
     (r"when(ever)?\s+.{0,60}dies", "Dies trigger", "dies"),
     (r"when(ever)?\s+.{0,60}attacks", "Attack trigger", "attacks"),
-    (r"when(ever)?\s+you (draw|cast|play)", "Spell/Draw trigger", "spell_or_draw"),
-    (r"at the beginning of (your|each player's|each)?\s*(upkeep|combat|end step)", "Phase trigger", "phase_begin"),
-    (r"tap\s*:", "Tap ability", "activated_tap"),
-    (r"sacrifice .{0,40}:", "Sacrifice ability", "activated_sacrifice"),
+    # Split spell_or_draw into two precise events
+    (r"when(ever)?\s+(you |a player )?draw", "Draw trigger", "draw"),
+    (r"when(ever)?\s+(you |a player |an opponent )cast.{0,10}(noncreature|instant or sorcery|a spell)", "Cast trigger", "spell_cast"),
+    # Phase: drop "combat" (ambiguous with attacks trigger)
+    (r"at the beginning of (your|each player's|each)?\s*(upkeep|end step)", "Phase trigger", "phase_begin"),
+
+    # ── New trigger types ─────────────────────────────────────────────────────
+    (r"when(ever)?\s+(you |a player )?gain(s)? life", "Lifegain trigger", "lifegain"),
+    (r"when(ever)?\s+a land enters", "Landfall trigger", "landfall"),
+    (r"when(ever)?\s+(you |a player |an opponent )discard", "Discard trigger", "discard"),
+    (r"when(ever)?\s+(you )?create.{0,30}token", "Token creation trigger", "token_creation"),
+    (r"when(ever)?\s+.{0,40}(counter|counters).{0,20}(placed|put) on", "Counter trigger", "counter_added"),
+    (r"when(ever)?\s+.{0,50}deals? (combat )?damage to (a player|an opponent|you)", "Combat damage trigger", "combat_damage"),
+    (r"when(ever)?\s+(you )?sacrifice", "Sacrifice trigger", "sacrifice"),
+
+    # ── Activated abilities (unchanged) ───────────────────────────────────────
     (r"\{t\}\s*:", "Tap ability", "activated_tap"),
+    (r"sacrifice .{0,40}:", "Sacrifice activated", "activated_sacrifice"),
 ]
 
 KEYWORD_RE = re.compile(
@@ -408,35 +430,185 @@ async def tag_abilities() -> None:
 # ── Stage 5: Synergy edges ────────────────────────────────────────────────────
 
 SYNERGY_CHUNK = 200   # producers per transaction — keeps each commit ~200×consumers rows
-SYNERGY_LIMIT = int(os.environ.get("SYNERGY_LIMIT", "100000"))  # max edges per trigger_event
+SYNERGY_LIMIT = int(os.environ.get("SYNERGY_LIMIT", "500000"))  # max edges per trigger_event
+
+# PRODUCER_MAP: trigger_event → raw SQL WHERE fragment identifying PRODUCER cards.
+# Producers are cards that GENERATE the event; consumers (from card_abilities) REACT to it.
+# Values are raw SQL so we can use both oracle_text and type_line for precision.
+PRODUCER_MAP: dict[str, str] = {
+    # Cards that put NONTOKEN creatures onto the battlefield:
+    #   reanimation (from graveyard), library cheating, blink
+    "nontoken_etb": (
+        # Graveyard reanimation
+        "lower(oracle_text) LIKE '%return target%creature%battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from%graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from a graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%put target%creature%card%battlefield%'"
+        # Library cheating
+        " OR lower(oracle_text) LIKE '%search your library for a%creature%battlefield%'"
+        " OR lower(oracle_text) LIKE '%look at the top%put%creature%battlefield%'"
+        # Blink
+        " OR lower(oracle_text) LIKE '%exile target%return%battlefield%'"
+    ),
+    # Cards that put ANY creatures onto the battlefield (tokens + reanimation + library)
+    "creature_etb": (
+        # Token creation
+        "lower(oracle_text) LIKE '%create a%'"
+        " OR lower(oracle_text) LIKE '%create two%'"
+        " OR lower(oracle_text) LIKE '%create three%'"
+        # Graveyard reanimation
+        " OR lower(oracle_text) LIKE '%return target%creature%battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from%graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from a graveyard%battlefield%'"
+        # Library cheating
+        " OR lower(oracle_text) LIKE '%search your library for a%creature%battlefield%'"
+        " OR lower(oracle_text) LIKE '%look at the top%put%creature%battlefield%'"
+        # Blink
+        " OR lower(oracle_text) LIKE '%exile target%return%battlefield%'"
+    ),
+    # Cards that put artifacts onto the battlefield (artifact token makers, cheat-into-play)
+    "artifact_etb": (
+        "lower(oracle_text) LIKE '%create%treasure%'"
+        " OR lower(oracle_text) LIKE '%create%food%'"
+        " OR lower(oracle_text) LIKE '%create%clue%'"
+        " OR lower(oracle_text) LIKE '%create%gold%'"
+        " OR lower(oracle_text) LIKE '%put%artifact%battlefield%'"
+        " OR lower(type_line) LIKE '%artifact%'"
+    ),
+    # Cards that PUT things onto the battlefield (token generators, reanimation, blink)
+    "enters_battlefield": (
+        "lower(oracle_text) LIKE '%create a%'"
+        " OR lower(oracle_text) LIKE '%create two%'"
+        " OR lower(oracle_text) LIKE '%create three%'"
+        " OR lower(oracle_text) LIKE '%put onto the battlefield%'"
+        " OR lower(oracle_text) LIKE '%return target%creature%battlefield%'"
+        " OR lower(oracle_text) LIKE '%exile target%return%battlefield%'"
+    ),
+    # Cards that cause nontoken creatures to die (Aristocrats: sac outlets, kill spells, wipes)
+    "nontoken_dies": (
+        "lower(oracle_text) LIKE '%sacrifice a creature%'"
+        " OR lower(oracle_text) LIKE '%sacrifice another%'"
+        " OR lower(oracle_text) LIKE '%destroy target creature%'"
+        " OR lower(oracle_text) LIKE '%destroy all creatures%'"
+        " OR lower(oracle_text) LIKE '%each creature dies%'"
+        " OR lower(oracle_text) LIKE '%creatures your opponents control%'"
+    ),
+    # Cards that cause any creature to die
+    "dies": (
+        "lower(oracle_text) LIKE '%sacrifice a creature%'"
+        " OR lower(oracle_text) LIKE '%sacrifice another%'"
+        " OR lower(oracle_text) LIKE '%destroy target creature%'"
+        " OR lower(oracle_text) LIKE '%destroy all%'"
+        " OR lower(oracle_text) LIKE '%deals damage%'"
+    ),
+    # Cards that enable or create attacking creatures (haste, tokens that attack)
+    "attacks": (
+        "lower(oracle_text) LIKE '% haste%'"
+        " OR lower(oracle_text) LIKE '%must attack%'"
+        " OR lower(oracle_text) LIKE '%attacks each combat%'"
+        " OR lower(oracle_text) LIKE '%attacks each turn%'"
+        " OR lower(oracle_text) LIKE '%with haste%'"
+    ),
+    # Cards that draw cards
+    "draw": (
+        "lower(oracle_text) LIKE '%draw a card%'"
+        " OR lower(oracle_text) LIKE '%draw two cards%'"
+        " OR lower(oracle_text) LIKE '%draw three cards%'"
+        " OR lower(oracle_text) LIKE '%draw cards%'"
+        " OR lower(oracle_text) LIKE '%draw x%'"
+    ),
+    # Instant and sorcery spells are the natural producers of "whenever you cast" triggers.
+    # Also includes storm/cascade/flashback which generate extra casts.
+    "spell_cast": (
+        "lower(type_line) LIKE '%instant%'"
+        " OR lower(type_line) LIKE '%sorcery%'"
+        " OR lower(oracle_text) LIKE '%storm%'"
+        " OR lower(oracle_text) LIKE '%cascade%'"
+        " OR lower(oracle_text) LIKE '%flashback%'"
+        " OR lower(oracle_text) LIKE '%cast another%'"
+        " OR lower(oracle_text) LIKE '%cast an additional%'"
+    ),
+    # Cards with beginning-of-phase triggers or that accelerate phase effects
+    "phase_begin": (
+        "lower(oracle_text) LIKE '%at the beginning of%'"
+        " OR lower(oracle_text) LIKE '%during your upkeep%'"
+        " OR lower(oracle_text) LIKE '%each upkeep%'"
+    ),
+    # Cards that gain life or grant lifelink
+    "lifegain": (
+        "lower(oracle_text) LIKE '%you gain%life%'"
+        " OR lower(oracle_text) LIKE '%gain life%'"
+        " OR lower(oracle_text) LIKE '%gains life%'"
+        " OR lower(oracle_text) LIKE '%lifelink%'"
+        " OR lower(oracle_text) LIKE '%life equal to%'"
+    ),
+    # Cards that put lands into play (fetch effects, ramp spells)
+    "landfall": (
+        "lower(oracle_text) LIKE '%search your library for a%land%'"
+        " OR lower(oracle_text) LIKE '%put a basic land%'"
+        " OR lower(oracle_text) LIKE '%put a land%battlefield%'"
+        " OR lower(oracle_text) LIKE '%play an additional land%'"
+        " OR lower(oracle_text) LIKE '%land card onto the battlefield%'"
+    ),
+    # Cards that cause discarding (wheels, loot effects, discard outlets)
+    "discard": (
+        "lower(oracle_text) LIKE '%discard a card%'"
+        " OR lower(oracle_text) LIKE '%discard your hand%'"
+        " OR lower(oracle_text) LIKE '%each player discards%'"
+        " OR lower(oracle_text) LIKE '%target player discards%'"
+        " OR lower(oracle_text) LIKE '%discard two%'"
+        " OR lower(oracle_text) LIKE '%draw a card, then discard%'"
+    ),
+    # Cards that specifically create tokens
+    "token_creation": (
+        "lower(oracle_text) LIKE '%create a%token%'"
+        " OR lower(oracle_text) LIKE '%create two%'"
+        " OR lower(oracle_text) LIKE '%create three%'"
+        " OR lower(oracle_text) LIKE '%create x%'"
+        " OR lower(oracle_text) LIKE '%put a%token%onto the battlefield%'"
+    ),
+    # Cards that add counters (proliferate, +1/+1 counter engines)
+    "counter_added": (
+        "lower(oracle_text) LIKE '%proliferate%'"
+        " OR lower(oracle_text) LIKE '%put a +1/+1 counter%'"
+        " OR lower(oracle_text) LIKE '%+1/+1 counter on each%'"
+        " OR lower(oracle_text) LIKE '%put a counter on%'"
+        " OR lower(oracle_text) LIKE '%double the number of counters%'"
+    ),
+    # Cards with evasion or power that deal combat damage
+    "combat_damage": (
+        "lower(oracle_text) LIKE '%can''t be blocked%'"
+        " OR lower(oracle_text) LIKE '%double strike%'"
+        " OR lower(oracle_text) LIKE '%trample%'"
+        " OR lower(oracle_text) LIKE '%menace%'"
+        " OR lower(oracle_text) LIKE '%deals combat damage%'"
+    ),
+    # Sacrifice outlets (cards that let you sacrifice as cost or effect)
+    "sacrifice": (
+        "lower(oracle_text) LIKE '%sacrifice a creature%'"
+        " OR lower(oracle_text) LIKE '%sacrifice another%'"
+        " OR lower(oracle_text) LIKE '%sacrifice a permanent%'"
+        " OR lower(oracle_text) LIKE '%sacrifice target%'"
+        " OR lower(oracle_text) LIKE '%sacrifice:%'"
+    ),
+}
+
 
 async def compute_synergy() -> None:
     """Build synergy edges in small chunked transactions.
 
     Fetches producer card IDs in Python, then drives INSERT...SELECT statements
     SYNERGY_CHUNK producers at a time so no single transaction materialises more
-    than ~200 × 6k = ~1.2M rows.  Progress is checkpointed after every chunk so
+    than ~200 × consumers rows.  Progress is checkpointed after every chunk so
     a restart resumes without duplicates (ON CONFLICT DO NOTHING).
     """
     log.info("Computing ability-trigger synergy edges…")
 
-    PRODUCER_MAP = {
-        "enters_battlefield": ["token", "create", "put", "enters"],
-        "dies": ["dies", "graveyard", "sacrifice"],
-        "attacks": ["attack", "combat"],
-        "spell_or_draw": ["draw", "cast", "spell"],
-        "phase_begin": ["upkeep", "end step", "combat"],
-    }
-
-    for trigger_event, producer_keywords in PRODUCER_MAP.items():
-        like_clauses = " OR ".join(
-            f"lower(oracle_text) LIKE '%{kw}%'" for kw in producer_keywords
-        )
-
-        # Fetch just the IDs of producer cards — tiny result set
+    for trigger_event, producer_where in PRODUCER_MAP.items():
+        # Fetch just the IDs of producer cards — small result set
         async with Session() as db:
             rows = (await db.execute(text(f"""
-                SELECT id FROM cards WHERE {like_clauses}
+                SELECT id FROM cards WHERE {producer_where}
             """))).fetchall()
         producer_ids = [str(r[0]) for r in rows]
 

@@ -96,7 +96,7 @@ def _mine_hard_negatives(
     all_ids: list[str],
     pos_set: set,
     n_hard: int,
-    top_k: int = 50,
+    top_k: int = 200,
 ) -> list[tuple[str, str, float]]:
     """Return hard negatives: cards semantically similar to card_a but not synergistic.
 
