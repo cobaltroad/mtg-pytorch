@@ -428,6 +428,116 @@ def train_synergy_phase(
     save_checkpoint(model, f"phase2_epoch{epochs}")
 
 
+# ── Phase 3: Deck co-occurrence ───────────────────────────────────────────────
+
+def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
+    """Load decks from DB, filtering to cards that have embeddings."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT commander_id::text,
+                       ARRAY(SELECT unnest(card_ids)::text) AS card_ids
+                FROM decks
+                WHERE commander_id IS NOT NULL
+            """)
+            rows = cur.fetchall()
+
+    decks = []
+    for row in rows:
+        cmd_id = row["commander_id"]
+        if cmd_id not in embeddings:
+            continue
+        card_ids = [str(c) for c in (row["card_ids"] or []) if str(c) in embeddings]
+        if len(card_ids) < 10:
+            continue
+        decks.append({"commander_id": cmd_id, "card_ids": card_ids})
+
+    log.info("Loaded %d decks (%d skipped — commander or cards not embedded)",
+             len(decks), len(rows) - len(decks))
+    return decks
+
+
+def train_deck_phase(
+    model: CardEncoder,
+    dataset: DeckDataset,
+    embeddings: dict[str, np.ndarray],
+    epochs: int,
+    lr: float,
+    batch_size: int = 32,
+):
+    """Phase 3: BPR ranking loss on human Commander decklists.
+
+    For each (commander, deck_card, random_card) triple, push the commander
+    embedding closer to actual deck cards than to random cards.
+
+    BPR loss: -log(sigmoid(score_pos - score_neg))
+    This teaches relative preference rather than absolute scores, which suits
+    the noisy signal from human deckbuilding better than BCE.
+    """
+    all_ids = list(embeddings.keys())
+    all_embs = torch.from_numpy(
+        np.stack([embeddings[k] for k in all_ids])
+    )  # (N, D)
+
+    loader = DataLoader(
+        dataset, batch_size=1, shuffle=True, num_workers=0, collate_fn=lambda x: x[0]
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    device = next(model.parameters()).device
+    all_embs = all_embs.to(device)
+
+    best_loss = float("inf")
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        n_batches = 0
+
+        for cmd_emb, card_embs in loader:
+            cmd_emb  = cmd_emb.to(device)   # (D,)
+            card_embs = card_embs.to(device)  # (K, D)
+
+            if card_embs.size(0) < 2:
+                continue
+
+            # Project commander and deck cards
+            z_cmd  = model(cmd_emb.unsqueeze(0))            # (1, D')
+            z_pos  = model(card_embs)                       # (K, D')
+
+            # Sample K random negatives from the full card pool
+            neg_idx = torch.randint(0, all_embs.size(0), (card_embs.size(0),), device=device)
+            z_neg  = model(all_embs[neg_idx])               # (K, D')
+
+            # BPR: cosine similarity between commander and pos/neg cards
+            score_pos = (z_cmd * z_pos).sum(dim=-1)         # (K,)
+            score_neg = (z_cmd * z_neg).sum(dim=-1)         # (K,)
+
+            loss = -F.logsigmoid(score_pos - score_neg).mean()
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            total_loss += loss.item()
+            n_batches  += 1
+
+        scheduler.step()
+        avg = total_loss / max(n_batches, 1)
+        log.info("Phase 3  epoch %d/%d  loss=%.4f  lr=%.2e",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+
+        if WANDB_ENABLED:
+            wandb.log({"phase": 3, "epoch": epoch + 1, "loss": avg,
+                       "lr": scheduler.get_last_lr()[0]})
+
+        if avg < best_loss:
+            best_loss = avg
+            save_checkpoint(model, "phase3_best")
+
+    save_checkpoint(model, f"phase3_epoch{epochs}")
+
+
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
 
 def save_checkpoint(model: nn.Module, name: str):
@@ -534,6 +644,32 @@ def main():
         train_synergy_phase(
             model, dataset, args.epochs, args.lr, args.batch_size,
             label_smoothing=args.label_smoothing,
+        )
+
+    elif args.phase == 3:
+        embeddings = load_embeddings()
+        if not embeddings:
+            log.error("No embeddings found — run the ingest pipeline first.")
+            return
+
+        decks = load_decks(embeddings)
+        if not decks:
+            log.error("No decks found — run import_decklists.py first.")
+            return
+
+        dataset = DeckDataset(decks, embeddings)
+        log.info("Dataset: %d decks", len(dataset))
+
+        model = CardEncoder().to(device)
+        if args.resume:
+            if (CHECKPOINT_DIR / "phase3_best.pt").exists():
+                load_checkpoint(model, "phase3_best", device)
+            else:
+                log.info("No phase3_best found — loading phase2_best as warm start")
+                load_checkpoint(model, "phase2_best", device)
+
+        train_deck_phase(
+            model, dataset, embeddings, args.epochs, args.lr, args.batch_size,
         )
 
     else:

@@ -332,9 +332,9 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     # Generic dies trigger (any creature)
     (r"when(ever)?\s+.{0,60}dies", "Dies trigger", "dies"),
     (r"when(ever)?\s+.{0,60}attacks", "Attack trigger", "attacks"),
-    # Split spell_or_draw into two precise events
-    (r"when(ever)?\s+(you |a player )?draw", "Draw trigger", "draw"),
+    # Spellslinger: explicit instant/sorcery triggers + magecraft keyword
     (r"when(ever)?\s+(you |a player |an opponent )cast.{0,10}(noncreature|instant or sorcery|a spell)", "Cast trigger", "spell_cast"),
+    (r"\bmagecraft\b", "Magecraft", "spell_cast"),
     # Phase: drop "combat" (ambiguous with attacks trigger)
     (r"at the beginning of (your|each player's|each)?\s*(upkeep|end step)", "Phase trigger", "phase_begin"),
 
@@ -346,6 +346,47 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     (r"when(ever)?\s+.{0,40}(counter|counters).{0,20}(placed|put) on", "Counter trigger", "counter_added"),
     (r"when(ever)?\s+.{0,50}deals? (combat )?damage to (a player|an opponent|you)", "Combat damage trigger", "combat_damage"),
     (r"when(ever)?\s+(you )?sacrifice", "Sacrifice trigger", "sacrifice"),
+
+    # ── Deckbuilding themes ────────────────────────────────────────────────────
+    # Equipment: payoffs, cost-reducers, and auto-attachers
+    (r"equipped creature (gets?|gains?|has|deals?)"
+     r"|when(ever)?\s+(an )?equipment.{0,30}enters"
+     r"|creatures?.{0,30}equipped .{0,20}(get|have|gain)"
+     r"|equip (costs?|abilities).{0,20}(less|reduced|\{0\})"
+     r"|equip \{0\}"
+     r"|enters the battlefield attached to"
+     r"|attach .{0,20}to target creature", "Equipment payoff", "equipment_matters"),
+    # Legendary / historic matters — oracle text references AND type-line legends
+    (r"when(ever)?\s+(you )?cast a (legendary|historic)|legendary (creatures?|permanents?|spells?).{0,40}(get|gain|have)|historic (spell|permanent|card)|you cast a historic", "Legendary/historic matters", "legendary_matters"),
+    # Reanimator: cards with graveyard-activated abilities or that return creatures from graveyards
+    (r"you may (cast|activate) .{0,40}(from|in) (your |a |the )?graveyard"
+     r"|activate .{0,40}only from (your )?graveyard"
+     r"|when(ever)?\s+.{0,40}return(s|ed)?.{0,20}from (your |a |the )?graveyard"
+     r"|from (your|a) graveyard (to the battlefield|to play)", "Graveyard return trigger", "graveyard_return"),
+    # Graveyard fill: threshold / delirium / morbid keywords + cards-in-graveyard triggers
+    (r"\b(threshold|delirium|morbid)\b|when(ever)?\s+(a |any )?card.{0,30}(put into|enters?).{0,15}graveyard", "Graveyard fill trigger", "graveyard_fill"),
+    # +1/+1 counters: placement triggers, counter doublers, and replacement effects
+    (r"when(ever)?\s+.{0,20}(gets?|receives?|is given|placed with|put) (a |one or more )?\+1/\+1 counter"
+     r"|if (one or more )?\+1/\+1 counter.{0,30}would be (placed|put)"
+     r"|(one |an )?additional \+1/\+1 counter"
+     r"|double.{0,30}(number of )?(counter|\+1)", "Counter placed/doubled trigger", "plus_one_counters"),
+
+    # Artifacts matter: casting artifacts, artifact payoffs, artifact token payoffs
+    (r"when(ever)?\s+(you )?cast an artifact spell|whenever (a |an )?artifact (enters?|is created)|artifacts?.{0,10}you control.{0,30}(get|gain|have)|artifact (creatures?|tokens?).{0,20}you control", "Artifact matters", "artifact_matters"),
+    # Modified: super-type for (counter|aura|equip) — covers equipment, aura, and counter sub-themes
+    (r"\bmodified\b"
+     r"|creatures? .{0,30}(counter|aura|equip).{0,30}(get|gain|have|are|attached)"
+     r"|auras? and equipment"
+     r"|(enchantment|aura).{0,10}(and|or).{0,10}(equipment|artifact)", "Modified trigger", "modified"),
+    # Aura matters: enchanted-creature payoffs, enchantress triggers, auto-attach auras
+    (r"enchanted creature (gets?|gains?|has|deals?)"
+     r"|when(ever)?\s+(an )?(aura|enchantment).{0,30}(enters?|you cast|attaches?)"
+     r"|auras? you control.{0,20}(get|give|have)"
+     r"|when .{0,30}becomes? enchanted"
+     r"|when(ever)?\s+(you )?cast an enchantment"
+     r"|enchantments? you control.{0,30}(get|gain|have)", "Aura matters", "aura_matters"),
+    # Proliferate matters: focuses on infect/toxic/wither keywords and -1/-1 / poison counter producers
+    (r"\b(infect|toxic|wither)\b|-1\/-1 counter|\bpoison\b|when(ever)?\s+.{0,30}planeswalker.{0,20}enters", "Proliferate matters", "proliferate_matters"),
 
     # ── Activated abilities (unchanged) ───────────────────────────────────────
     (r"\{t\}\s*:", "Tap ability", "activated_tap"),
@@ -539,14 +580,6 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%attacks each turn%'"
         " OR lower(oracle_text) LIKE '%with haste%'"
     ),
-    # Cards that draw cards
-    "draw": (
-        "lower(oracle_text) LIKE '%draw a card%'"
-        " OR lower(oracle_text) LIKE '%draw two cards%'"
-        " OR lower(oracle_text) LIKE '%draw three cards%'"
-        " OR lower(oracle_text) LIKE '%draw cards%'"
-        " OR lower(oracle_text) LIKE '%draw x%'"
-    ),
     # Instant and sorcery spells are the natural producers of "whenever you cast" triggers.
     # Also includes storm/cascade/flashback which generate extra casts.
     "spell_cast": (
@@ -621,6 +654,126 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%sacrifice target%'"
         " OR lower(oracle_text) LIKE '%sacrifice:%'"
     ),
+
+    # ── Deckbuilding themes ────────────────────────────────────────────────────
+
+    # Equipment: equipment cards + cost-reducers + auto-attachers
+    "equipment_matters": (
+        "lower(type_line) LIKE '%equipment%'"
+        # Equip cost reducers ("equip costs {X} less", "equip {0}")
+        " OR lower(oracle_text) LIKE '%equip costs%less%'"
+        " OR lower(oracle_text) LIKE '%equip {0}%'"
+        " OR lower(oracle_text) LIKE '%equip abilities%less%'"
+        # Auto-attachers (Stoneforge Mystic, Living Weapon, Puresteel Paladin style)
+        " OR lower(oracle_text) LIKE '%enters the battlefield attached%'"
+        " OR lower(oracle_text) LIKE '%attach target equipment%'"
+        " OR lower(oracle_text) LIKE '%attach it to target creature%'"
+    ),
+
+    # Legendary matters: any legendary permanent is a producer; also historic (legendary/artifact/saga)
+    "legendary_matters": (
+        "lower(type_line) LIKE '%legendary%'"
+        " OR lower(type_line) LIKE '%artifact%'"   # artifacts are historic
+        " OR (lower(type_line) LIKE '%enchantment%' AND lower(type_line) LIKE '%saga%')"  # sagas are historic
+    ),
+
+    # Reanimator: spells that return creatures from the graveyard (Resurrection/Reanimate style)
+    # + cards with graveyard-activated abilities (Unearth, Flashback, Escape, etc.)
+    # + mill — fills the graveyard making reanimation viable
+    "graveyard_return": (
+        # Classic reanimation spells (Reanimate, Animate Dead, Resurrection, etc.)
+        "lower(oracle_text) LIKE '%return target%creature%graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from%graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from a graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%put target%creature%graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%return%from your graveyard to the battlefield%'"
+        # Graveyard-activated abilities (Unearth, Escape, Flashback, etc.)
+        " OR lower(oracle_text) LIKE '%unearth%'"
+        " OR lower(oracle_text) LIKE '%escape%'"
+        " OR lower(oracle_text) LIKE '%flashback%'"
+        " OR lower(oracle_text) LIKE '%you may cast%from your graveyard%'"
+        " OR lower(oracle_text) LIKE '%activate%only from%graveyard%'"
+        # Mill fills the graveyard, enabling reanimation
+        " OR lower(oracle_text) LIKE '%mill%'"
+        " OR lower(oracle_text) LIKE '%put the top%card%into%graveyard%'"
+    ),
+
+    # Graveyard fill: mill, surveil, dredge, loot — feeds threshold/delirium/morbid payoffs
+    "graveyard_fill": (
+        "lower(oracle_text) LIKE '%mill%'"
+        " OR lower(oracle_text) LIKE '%put the top%card%graveyard%'"
+        " OR lower(oracle_text) LIKE '%surveil%'"
+        " OR lower(oracle_text) LIKE '%dredge%'"
+        " OR lower(oracle_text) LIKE '%draw a card, then discard%'"
+        " OR lower(oracle_text) LIKE '%discard a card%draw%'"
+        " OR lower(oracle_text) LIKE '%each player discards%'"
+    ),
+
+    # +1/+1 counters: placement engines + counter doublers + replacement ("additional counter") effects
+    "plus_one_counters": (
+        "lower(oracle_text) LIKE '%put a +1/+1 counter%'"
+        " OR lower(oracle_text) LIKE '%put two +1/+1 counters%'"
+        " OR lower(oracle_text) LIKE '%put x +1/+1 counters%'"
+        " OR lower(oracle_text) LIKE '%+1/+1 counter on each%'"
+        " OR lower(oracle_text) LIKE '%proliferate%'"
+        # Counter doublers (Doubling Season, Hardened Scales, etc.)
+        " OR lower(oracle_text) LIKE '%double the number of counters%'"
+        " OR lower(oracle_text) LIKE '%twice the number of%counter%'"
+        " OR lower(oracle_text) LIKE '%if one or more +1/+1 counter%would be%'"
+        # Replacement effects: "one additional +1/+1 counter" (Corpsejack Menace, etc.)
+        " OR lower(oracle_text) LIKE '%one additional +1/+1 counter%'"
+        " OR lower(oracle_text) LIKE '%an additional +1/+1 counter%'"
+    ),
+
+    # Artifacts matter: artifact cards as producers for artifact-payoff consumers
+    # Includes vehicles, equipment, treasure/food/blood/clue/junk/mutagen token producers
+    "artifact_matters": (
+        "lower(type_line) LIKE '%artifact%'"
+        " OR lower(oracle_text) LIKE '%create%treasure%'"
+        " OR lower(oracle_text) LIKE '%create%food%'"
+        " OR lower(oracle_text) LIKE '%create%blood%'"
+        " OR lower(oracle_text) LIKE '%create%clue%'"
+        " OR lower(oracle_text) LIKE '%create%junk%'"
+        " OR lower(oracle_text) LIKE '%create%mutagen%'"
+    ),
+
+    # Modified: counters + auras + equipment attached to a creature
+    "modified": (
+        "lower(type_line) LIKE '%equipment%'"
+        " OR (lower(type_line) LIKE '%enchantment%' AND lower(oracle_text) LIKE '%enchant creature%')"
+        " OR lower(oracle_text) LIKE '%put a +1/+1 counter%'"
+        " OR lower(oracle_text) LIKE '%proliferate%'"
+        " OR lower(oracle_text) LIKE '%attach%equipment%'"
+    ),
+
+    # Aura matters: aura enchantments, enchantress effects, and auto-attach auras
+    "aura_matters": (
+        # Aura cards themselves
+        "(lower(type_line) LIKE '%enchantment%' AND lower(oracle_text) LIKE '%enchant creature%')"
+        # Enchantress / all-enchantments-matter effects
+        " OR lower(oracle_text) LIKE '%whenever (an )?enchantment enters%'"
+        " OR lower(oracle_text) LIKE '%whenever you cast an enchantment%'"
+        " OR lower(oracle_text) LIKE '%enchantments you control%'"
+        " OR lower(oracle_text) LIKE '%number of enchantments%'"
+        # Aura tutors and recursion
+        " OR lower(oracle_text) LIKE '%return%aura%from%graveyard%'"
+        " OR lower(oracle_text) LIKE '%search your library for%aura%'"
+        " OR lower(oracle_text) LIKE '%search your library for an enchantment%'"
+        # Auto-attach (Eldrazi Conscription / totem armor style)
+        " OR (lower(type_line) LIKE '%enchantment%' AND lower(oracle_text) LIKE '%enters the battlefield attached%')"
+    ),
+
+    # Proliferate matters: infect/toxic (poison counters), wither/-1/-1 counters, planeswalkers
+    # (loyalty counters). These are the things that have counters worth proliferating.
+    "proliferate_matters": (
+        "lower(oracle_text) LIKE '%proliferate%'"
+        " OR lower(oracle_text) LIKE '%infect%'"
+        " OR lower(oracle_text) LIKE '%toxic%'"
+        " OR lower(oracle_text) LIKE '%wither%'"
+        " OR lower(oracle_text) LIKE '%poison counter%'"
+        " OR lower(oracle_text) LIKE '%-1/-1 counter%'"
+        " OR lower(type_line) LIKE '%planeswalker%'"
+    ),
 }
 
 # Tribal producers: cards of each creature type generate both cast and ETB tribal events.
@@ -631,6 +784,30 @@ for _tribe in TRIBES:
     PRODUCER_MAP[f"tribal_{_t}_cast"] = _where
     PRODUCER_MAP[f"tribal_{_t}_etb"] = _where
     PRODUCER_MAP[f"tribal_{_t}_lord"] = _where  # lord consumers pair with tribe members
+
+# Cross-synergy: Zombies naturally pair with reanimation effects (graveyard recursion)
+_zombie_reanimation = (
+    "lower(type_line) LIKE '%zombie%'"
+    " OR lower(oracle_text) LIKE '%return target%creature%graveyard%battlefield%'"
+    " OR lower(oracle_text) LIKE '%creature card from%graveyard%battlefield%'"
+    " OR lower(oracle_text) LIKE '%put target%creature%graveyard%battlefield%'"
+    " OR lower(oracle_text) LIKE '%unearth%'"
+)
+PRODUCER_MAP["tribal_zombie_cast"] = _zombie_reanimation
+PRODUCER_MAP["tribal_zombie_etb"]  = _zombie_reanimation
+PRODUCER_MAP["tribal_zombie_lord"] = _zombie_reanimation
+
+# Cross-synergy: Angels naturally pair with lifegain effects
+_angel_lifegain = (
+    "lower(type_line) LIKE '%angel%'"
+    " OR lower(oracle_text) LIKE '%you gain%life%'"
+    " OR lower(oracle_text) LIKE '%lifelink%'"
+    " OR lower(oracle_text) LIKE '%life equal to%'"
+    " OR lower(oracle_text) LIKE '%gain life%'"
+)
+PRODUCER_MAP["tribal_angel_cast"] = _angel_lifegain
+PRODUCER_MAP["tribal_angel_etb"]  = _angel_lifegain
+PRODUCER_MAP["tribal_angel_lord"] = _angel_lifegain
 
 
 async def compute_synergy() -> None:
