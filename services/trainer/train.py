@@ -87,6 +87,7 @@ def load_embeddings(model_name: str = EMBEDDING_MODEL) -> dict[str, np.ndarray]:
 def load_synergy_pairs(
     embeddings: dict,
     neg_ratio: int = 3,
+    sample: int = 500_000,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
@@ -94,14 +95,16 @@ def load_synergy_pairs(
     Negatives: random pairs sampled from cards that have embeddings,
                at neg_ratio × len(positives).
     """
-    log.info("Loading synergy pairs…")
+    log.info("Loading synergy pairs (sample=%d)…", sample)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # TABLESAMPLE avoids a full sort — safe even on large tables
             cur.execute("""
                 SELECT card_a::text, card_b::text
-                FROM synergy_edges
+                FROM synergy_edges TABLESAMPLE SYSTEM(10)
                 WHERE score_type = 'ability_trigger'
-            """)
+                LIMIT %s
+            """, (sample,))
             positives = [
                 (r[0], r[1], 1.0) for r in cur.fetchall()
                 if r[0] in embeddings and r[1] in embeddings
@@ -299,6 +302,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--neg-ratio", type=int, default=3,
                         help="Negative pairs per positive for phase 2")
+    parser.add_argument("--sample", type=int, default=500_000,
+                        help="Max positive pairs to sample from synergy_edges")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint")
     args = parser.parse_args()
@@ -318,7 +323,7 @@ def main():
             log.error("No embeddings found — run the ingest pipeline first.")
             return
 
-        pairs = load_synergy_pairs(embeddings, neg_ratio=args.neg_ratio)
+        pairs = load_synergy_pairs(embeddings, neg_ratio=args.neg_ratio, sample=args.sample)
         if not pairs:
             log.error("No synergy pairs found — run compute_synergy stage first.")
             return

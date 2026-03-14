@@ -408,6 +408,7 @@ async def tag_abilities() -> None:
 # ── Stage 5: Synergy edges ────────────────────────────────────────────────────
 
 SYNERGY_CHUNK = 200   # producers per transaction — keeps each commit ~200×consumers rows
+SYNERGY_LIMIT = int(os.environ.get("SYNERGY_LIMIT", "100000"))  # max edges per trigger_event
 
 async def compute_synergy() -> None:
     """Build synergy edges in small chunked transactions.
@@ -448,6 +449,11 @@ async def compute_synergy() -> None:
         log.info("  %s: %d producers in %d chunks…", trigger_event, len(producer_ids), n_chunks)
 
         for chunk_idx in range(0, len(producer_ids), SYNERGY_CHUNK):
+            if total_inserted >= SYNERGY_LIMIT:
+                log.info("  %s: SYNERGY_LIMIT=%d reached, stopping early",
+                         trigger_event, SYNERGY_LIMIT)
+                break
+
             chunk = producer_ids[chunk_idx : chunk_idx + SYNERGY_CHUNK]
             id_list = "'" + "','".join(chunk) + "'"
 
