@@ -9,8 +9,11 @@ Phase 1 – Text equivalence
 
 Phase 2 – Ability-trigger synergy
     Binary classification: given (card_a, card_b), predict synergy_edges score.
-    Positives from synergy_edges (ability_trigger); negatives sampled randomly
-    at a configurable ratio (default 3:1 neg:pos).
+    Positives from synergy_edges (ability_trigger); negatives are a mix of hard
+    negatives (semantically similar cards that are NOT synergistic, mined from
+    the embedding space) and random negatives (default 50/50 split, 3:1 total
+    neg:pos ratio).  Label smoothing is applied to handle noisy regex-derived
+    positive labels (default ε=0.1 → pos→0.95, neg→0.05).
 
 Phase 3 – Deck co-occurrence (human signal)
     Multi-label: given a commander embedding, rank which cards appear in
@@ -84,16 +87,58 @@ def load_embeddings(model_name: str = EMBEDDING_MODEL) -> dict[str, np.ndarray]:
     return embeddings
 
 
+def _mine_hard_negatives(
+    positives: list[tuple],
+    embeddings: dict,
+    all_ids: list[str],
+    pos_set: set,
+    n_hard: int,
+    top_k: int = 50,
+) -> list[tuple[str, str, float]]:
+    """Return hard negatives: cards semantically similar to card_a but not synergistic.
+
+    For each unique card_a in positives, ranks all other cards by cosine similarity
+    and picks the highest-similarity card not already in pos_set.  This forces the
+    model to learn the synergy distinction rather than just text similarity.
+    """
+    log.info("Mining %d hard negatives (top_k=%d)…", n_hard, top_k)
+    id_to_idx = {card_id: i for i, card_id in enumerate(all_ids)}
+    emb_matrix = np.stack([embeddings[k] for k in all_ids])          # (N, 384)
+    norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
+    normed = (emb_matrix / np.maximum(norms, 1e-8)).astype(np.float32)  # (N, 384)
+
+    unique_a = list({a for a, _, _ in positives})
+    random.shuffle(unique_a)
+
+    hard_negs: list[tuple[str, str, float]] = []
+    for card_a in unique_a:
+        if len(hard_negs) >= n_hard:
+            break
+        a_vec = normed[id_to_idx[card_a]]          # (384,)
+        sims = normed @ a_vec                       # (N,) cosine similarities
+        ranked = np.argsort(sims)[::-1]             # descending
+        for idx in ranked[1: top_k + 1]:           # skip self (idx 0)
+            cand = all_ids[int(idx)]
+            if (card_a, cand) not in pos_set and (cand, card_a) not in pos_set:
+                hard_negs.append((card_a, cand, 0.0))
+                break
+
+    log.info("  %d hard negatives mined", len(hard_negs))
+    return hard_negs
+
+
 def load_synergy_pairs(
     embeddings: dict,
     neg_ratio: int = 3,
     sample: int = 500_000,
+    hard_neg_frac: float = 0.5,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
     Positives: synergy_edges rows with score_type='ability_trigger'.
-    Negatives: random pairs sampled from cards that have embeddings,
-               at neg_ratio × len(positives).
+    Negatives: hard_neg_frac of budget from hard negatives (nearest neighbours
+               in embedding space that are NOT synergistic), the rest random.
+    Total negatives = neg_ratio × len(positives).
     """
     log.info("Loading synergy pairs (sample=%d)…", sample)
     with get_conn() as conn:
@@ -115,15 +160,22 @@ def load_synergy_pairs(
     all_ids = list(embeddings.keys())
     pos_set = {(a, b) for a, b, _ in positives}
     n_neg = len(positives) * neg_ratio
-    negatives = []
+    n_hard = int(n_neg * hard_neg_frac)
+    n_rand = n_neg - n_hard
+
+    hard_negs = _mine_hard_negatives(positives, embeddings, all_ids, pos_set, n_hard)
+
+    rand_negs: list[tuple[str, str, float]] = []
     attempts = 0
-    while len(negatives) < n_neg and attempts < n_neg * 10:
+    while len(rand_negs) < n_rand and attempts < n_rand * 10:
         a, b = random.sample(all_ids, 2)
         if (a, b) not in pos_set and (b, a) not in pos_set:
-            negatives.append((a, b, 0.0))
+            rand_negs.append((a, b, 0.0))
         attempts += 1
 
-    log.info("  %d negative pairs", len(negatives))
+    negatives = hard_negs + rand_negs
+    log.info("  %d negative pairs (%d hard, %d random)",
+             len(negatives), len(hard_negs), len(rand_negs))
     pairs = positives + negatives
     random.shuffle(pairs)
     return pairs
@@ -226,8 +278,13 @@ def train_synergy_phase(
     epochs: int,
     lr: float,
     batch_size: int = 256,
+    label_smoothing: float = 0.1,
 ):
-    """Phase 2: binary cross-entropy on ability-trigger synergy pairs."""
+    """Phase 2: binary cross-entropy on ability-trigger synergy pairs.
+
+    label_smoothing: ε applied as smooth = label*(1-ε) + ε/2
+    (pos → 1-ε/2, neg → ε/2).  Handles noisy regex-derived positive labels.
+    """
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
@@ -241,6 +298,10 @@ def train_synergy_phase(
             emb_a  = emb_a.to(device)
             emb_b  = emb_b.to(device)
             labels = labels.to(device)
+
+            # Label smoothing: pull hard 0/1 targets toward centre
+            if label_smoothing > 0:
+                labels = labels * (1 - label_smoothing) + label_smoothing / 2
 
             proj_a = model(emb_a)
             proj_b = model(emb_b)
@@ -302,8 +363,12 @@ def main():
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--neg-ratio", type=int, default=3,
                         help="Negative pairs per positive for phase 2")
+    parser.add_argument("--hard-neg-frac", type=float, default=0.5,
+                        help="Fraction of negatives that are hard (nearest-neighbour) vs random")
     parser.add_argument("--sample", type=int, default=500_000,
                         help="Max positive pairs to sample from synergy_edges")
+    parser.add_argument("--label-smoothing", type=float, default=0.1,
+                        help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint")
     args = parser.parse_args()
@@ -323,7 +388,12 @@ def main():
             log.error("No embeddings found — run the ingest pipeline first.")
             return
 
-        pairs = load_synergy_pairs(embeddings, neg_ratio=args.neg_ratio, sample=args.sample)
+        pairs = load_synergy_pairs(
+            embeddings,
+            neg_ratio=args.neg_ratio,
+            sample=args.sample,
+            hard_neg_frac=args.hard_neg_frac,
+        )
         if not pairs:
             log.error("No synergy pairs found — run compute_synergy stage first.")
             return
@@ -335,7 +405,10 @@ def main():
         if args.resume:
             load_checkpoint(model, "phase2_best", device)
 
-        train_synergy_phase(model, dataset, args.epochs, args.lr, args.batch_size)
+        train_synergy_phase(
+            model, dataset, args.epochs, args.lr, args.batch_size,
+            label_smoothing=args.label_smoothing,
+        )
 
     else:
         log.warning("Phase %d not yet implemented.", args.phase)
