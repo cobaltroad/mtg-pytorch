@@ -4,11 +4,15 @@ Batch-import Moxfield Commander decklist exports into the mtg-pytorch decks tabl
 Input:  A folder of .txt files exported from Moxfield (one deck per file).
 Output: rows inserted into the decks table (commander_id, source, card_ids[])
 
-Moxfield export format
-----------------------
-The file is divided into labelled sections. Only 'Commander' and 'Mainboard'
-(sometimes 'Deck') are used; everything else (Sideboard, Maybeboard, etc.)
-is ignored.
+Supported decklist formats
+--------------------------
+1. Sectioned (standard Moxfield export): labelled sections Commander /
+   Mainboard. Only those two sections are used; Sideboard, Maybeboard, etc.
+   are ignored.
+
+2. Headerless (plain list, commander last): all maindeck cards listed first,
+   then a blank line, then the commander. Common from other tools or when
+   lists are assembled manually.
 
     Commander
     1 Wilhelt, the Rotcleaver
@@ -72,9 +76,39 @@ SKIP_SECTIONS = {"sideboard", "maybeboard", "commanders", "companion",
 _QTY_RE = re.compile(r"^\d+x?\s+")  # strip leading "1 " or "2x "
 
 
+def _parse_card_line(raw_line: str) -> tuple[str, int] | None:
+    """Parse a card line into (name, qty). Returns None if not a card line."""
+    line = raw_line.strip()
+    if not line or not (line[0].isdigit() or _QTY_RE.match(line)):
+        return None
+    qty_match = _QTY_RE.match(line)
+    qty = int(qty_match.group().strip().rstrip("x")) if qty_match else 1
+    name = _QTY_RE.sub("", line).strip()
+    # Strip set/collector annotations Moxfield sometimes appends: " (MH2) 123"
+    name = re.sub(r"\s+\([A-Z0-9]{2,6}\)\s*\d*$", "", name).strip()
+    return (name, qty) if name else None
+
+
 def parse_moxfield_txt(text: str) -> tuple[list[str], list[str]]:
     """
-    Parse a Moxfield export.
+    Parse a decklist export into (commanders, maindeck).
+
+    Handles two formats:
+
+    1. Sectioned (standard Moxfield export):
+          Commander
+          1 Sauron, the Dark Lord
+
+          Mainboard
+          1 Sol Ring
+          ...
+
+    2. Headerless (plain list, commander last after a blank line):
+          1 Sol Ring
+          1 Arcane Signet
+          ...
+
+          1 Sauron, the Dark Lord
 
     Returns:
         commanders : list of card names (usually 1, occasionally 2 for partners)
@@ -84,6 +118,7 @@ def parse_moxfield_txt(text: str) -> tuple[list[str], list[str]]:
     maindeck:   list[str] = []
 
     current_section: str | None = None
+    found_section_header = False
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -94,10 +129,9 @@ def parse_moxfield_txt(text: str) -> tuple[list[str], list[str]]:
             continue
 
         # Section header — no quantity prefix, not a card line
-        lower = line.lower()
         if not _QTY_RE.match(line) and not line[0].isdigit():
-            # Treat the whole line as a potential section name
-            slug = lower.rstrip(":")
+            found_section_header = True
+            slug = line.lower().rstrip(":")
             if slug in CMD_SECTIONS:
                 current_section = "commander"
             elif slug in MAIN_SECTIONS:
@@ -107,23 +141,53 @@ def parse_moxfield_txt(text: str) -> tuple[list[str], list[str]]:
             # else: unknown header — ignore until next blank line
             continue
 
-        if current_section == "skip" or current_section is None:
+        if current_section == "skip":
             continue
 
-        # Strip quantity prefix to get the card name
-        name = _QTY_RE.sub("", line).strip()
-        # Strip set/collector annotations Moxfield sometimes appends: " (MH2) 123"
-        name = re.sub(r"\s+\([A-Z0-9]{2,6}\)\s*\d*$", "", name).strip()
-        if not name:
+        parsed = _parse_card_line(raw_line)
+        if parsed is None:
             continue
-
-        qty_match = _QTY_RE.match(raw_line.strip())
-        qty = int(qty_match.group().strip().rstrip("x")) if qty_match else 1
+        name, qty = parsed
 
         if current_section == "commander":
             commanders.append(name)
         elif current_section == "main":
             maindeck.extend([name] * qty)
+        elif current_section is None and not found_section_header:
+            # Headerless format: accumulate everything; we'll split after
+            maindeck.extend([name] * qty)
+
+    # ── Headerless fallback ───────────────────────────────────────────────────
+    # If no section headers were ever seen, the commander is conventionally
+    # the last blank-line-separated group of cards at the end of the file.
+    # Split on the final blank line: everything before → maindeck,
+    # everything after → commanders.
+    if not found_section_header and maindeck and not commanders:
+        lines = [l.strip() for l in text.splitlines()]
+        # Find the last blank line
+        last_blank = -1
+        for i, l in enumerate(lines):
+            if not l:
+                last_blank = i
+        if last_blank != -1:
+            tail_lines = lines[last_blank + 1:]
+            tail_cards: list[str] = []
+            for tl in tail_lines:
+                parsed = _parse_card_line(tl)
+                if parsed:
+                    tail_cards.extend([parsed[0]] * parsed[1])
+            if tail_cards:
+                # Tail is the commander block; strip those from maindeck
+                tail_set = set(tail_cards)
+                # Remove tail cards from the end of maindeck
+                trimmed: list[str] = []
+                for name in reversed(maindeck):
+                    if name in tail_set and name not in trimmed:
+                        tail_set.discard(name)
+                        continue
+                    trimmed.append(name)
+                maindeck = list(reversed(trimmed))
+                commanders = tail_cards
 
     return commanders, maindeck
 
