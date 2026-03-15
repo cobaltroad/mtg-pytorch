@@ -1,0 +1,65 @@
+1 Accursed Marauder
+1 Army of the Damned
+1 Bastion of Remembrance
+1 Black Sun's Twilight
+1 Bygone Colossus
+1 Cemetery Reaper
+1 Cemetery Recruitment
+1 Consuming Corruption
+1 Corpse Augur
+1 Crowded Crypt
+1 Deadly Plot
+1 Decree of Pain
+1 Defile
+1 Disciple of Bolas
+1 Dread Return
+1 Eliminate the Competition
+1 Ever After
+1 Fake Your Own Death
+1 Feeding Frenzy
+1 Fleshbag Marauder
+1 Gempalm Polluter
+1 Ghoulcaller's Chant
+1 Ghouls' Night Out
+1 God-Eternal Bontu
+1 Gray Merchant of Asphodel
+1 Hunted Bonebrute
+1 Josu Vess, Lich Knight
+1 Kalakscion, Hunger Tyrant
+1 Lashwrithe
+1 Liliana's Mastery
+1 Liliana's Standard Bearer
+1 Lord of the Accursed
+1 Magus of the Will
+1 Malevolent Witchkite
+1 March of Wretched Sorrow
+1 Midnight Reaper
+1 Mimic Vat
+1 Minions' Murmurs
+1 Mirkwood Bats
+1 Monoist Sentry
+1 Moonlight Bargain
+1 Necromantic Selection
+1 Nested Shambler
+1 Oversold Cemetery
+1 Overwhelming Remorse
+1 Raise the Draugr
+1 Scourge of Nel Toth
+1 Shepherd of Rot
+1 Soul Enervation
+1 Squelching Leeches
+1 Supernatural Stamina
+37 Swamp
+1 Syphon Mind
+1 Tragic Slip
+1 Transmogrant's Crown
+1 Unbreathing Horde
+1 Undead Augur
+1 Undying Malice
+1 Unearth
+1 Vengeful Dead
+1 Victimize
+1 Withered Wretch
+1 Zul Ashur, Lich Lord
+
+1 Ghoulcaller Gisa
