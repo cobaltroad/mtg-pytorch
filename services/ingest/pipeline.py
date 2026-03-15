@@ -958,11 +958,19 @@ async def compute_synergy() -> None:
                         1.0,
                         '{{"trigger_event": "{trigger_event}"}}'::jsonb
                     FROM (SELECT unnest(ARRAY[{id_list}]::uuid[]) AS id) c
+                    JOIN cards pc ON pc.id = c.id
                     CROSS JOIN (
-                        SELECT card_id FROM card_abilities
-                        WHERE trigger_event = '{trigger_event}'
+                        SELECT ca.card_id, cc.color_identity AS consumer_ci
+                        FROM card_abilities ca
+                        JOIN cards cc ON cc.id = ca.card_id
+                        WHERE ca.trigger_event = '{trigger_event}'
                     ) ca
                     WHERE c.id != ca.card_id
+                      AND (
+                          pc.color_identity = '{{}}'
+                          OR ca.consumer_ci = '{{}}'
+                          OR pc.color_identity && ca.consumer_ci
+                      )
                     ON CONFLICT (card_a, card_b, score_type) DO NOTHING
                 """))
                 await db.commit()

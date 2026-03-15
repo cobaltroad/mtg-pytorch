@@ -605,6 +605,7 @@ def train_deck_constructor_phase(
     n_neg: int = 64,
     positions_per_deck: int = 10,
     temperature: float = 0.1,
+    freeze_encoder: bool = True,
 ):
     """Phase 4: autoregressive deck construction via transformer decoder + InfoNCE.
 
@@ -618,12 +619,17 @@ def train_deck_constructor_phase(
     The full card pool is pre-projected at the start of each epoch so negative
     sampling is O(1); projections are refreshed each epoch as encoder weights update.
     """
+    if freeze_encoder:
+        model.card_encoder.requires_grad_(False)
+        log.info("Phase 4: card_encoder frozen — only decoder + scorer will be trained")
+
     all_ids = list(embeddings.keys())
     all_raw = torch.from_numpy(
         np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
     all_raw = all_raw.to(device)
@@ -767,6 +773,12 @@ def main():
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint (phase2→phase2_best, "
                              "phase1→phase1_best; falls back to previous phase if not found)")
+    parser.add_argument("--freeze-encoder", action="store_true", default=True,
+                        dest="freeze_encoder",
+                        help="Phase 4: freeze card_encoder weights so the decoder learns "
+                             "to use fixed Phase 3 representations without collapsing them "
+                             "(default: True; use --no-freeze-encoder to disable)")
+    parser.add_argument("--no-freeze-encoder", action="store_false", dest="freeze_encoder")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -885,6 +897,7 @@ def main():
         train_deck_constructor_phase(
             model, dataset, embeddings, args.epochs, args.lr,
             n_neg=64, positions_per_deck=10, temperature=args.temperature,
+            freeze_encoder=args.freeze_encoder,
         )
 
     else:

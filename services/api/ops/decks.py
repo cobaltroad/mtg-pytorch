@@ -31,7 +31,7 @@ async def generate(
         return None
 
     commander_id = commander_row[0]
-    color_identity = commander_row[6] or []  # color_identity column index
+    color_identity = commander_row[5] or []  # color_identity column index
 
     # Stub: return top synergy partners within colour identity, ordered by score
     card_result = await db.execute(
