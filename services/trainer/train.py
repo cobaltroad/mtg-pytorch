@@ -606,6 +606,7 @@ def train_deck_constructor_phase(
     positions_per_deck: int = 10,
     temperature: float = 0.1,
     freeze_encoder: bool = True,
+    encoder_lr_scale: float = 0.1,
 ):
     """Phase 4: autoregressive deck construction via transformer decoder + InfoNCE.
 
@@ -618,18 +619,32 @@ def train_deck_constructor_phase(
 
     The full card pool is pre-projected at the start of each epoch so negative
     sampling is O(1); projections are refreshed each epoch as encoder weights update.
+
+    When freeze_encoder=False, the encoder is updated at lr * encoder_lr_scale
+    (default 0.1×) to prevent it from collapsing Phase 3 representations while the
+    decoder learns quickly at the full lr.
     """
     if freeze_encoder:
         model.card_encoder.requires_grad_(False)
         log.info("Phase 4: card_encoder frozen — only decoder + scorer will be trained")
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=1e-4)
+    else:
+        encoder_lr = lr * encoder_lr_scale
+        log.info(
+            "Phase 4: encoder unfrozen — encoder lr=%.2e (%.0f%% of decoder lr=%.2e)",
+            encoder_lr, encoder_lr_scale * 100, lr,
+        )
+        optimizer = torch.optim.AdamW([
+            {"params": model.card_encoder.parameters(), "lr": encoder_lr},
+            {"params": list(model.decoder.parameters()) + list(model.scorer.parameters()), "lr": lr},
+        ], weight_decay=1e-4)
 
     all_ids = list(embeddings.keys())
     all_raw = torch.from_numpy(
         np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
     )
 
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
     all_raw = all_raw.to(device)
@@ -779,6 +794,9 @@ def main():
                              "to use fixed Phase 3 representations without collapsing them "
                              "(default: True; use --no-freeze-encoder to disable)")
     parser.add_argument("--no-freeze-encoder", action="store_false", dest="freeze_encoder")
+    parser.add_argument("--encoder-lr-scale", type=float, default=0.1,
+                        help="Phase 4 --no-freeze-encoder: encoder lr as fraction of decoder lr "
+                             "(default 0.1 — encoder updates 10× slower to prevent collapse)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -898,6 +916,7 @@ def main():
             model, dataset, embeddings, args.epochs, args.lr,
             n_neg=64, positions_per_deck=10, temperature=args.temperature,
             freeze_encoder=args.freeze_encoder,
+            encoder_lr_scale=args.encoder_lr_scale,
         )
 
     else:
