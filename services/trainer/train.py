@@ -663,11 +663,24 @@ def save_checkpoint(model: nn.Module, name: str):
 
 def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Module:
     path = CHECKPOINT_DIR / f"{name}.pt"
-    if path.exists():
-        model.load_state_dict(torch.load(path, map_location=device))
-        log.info("Loaded checkpoint: %s", path)
-    else:
+    if not path.exists():
         log.warning("Checkpoint not found: %s — starting from scratch", path)
+        return model
+
+    state = torch.load(path, map_location=device)
+
+    # If we're loading a DeckConstructor checkpoint into a CardEncoder, extract
+    # just the card_encoder sub-module weights (keys prefixed "card_encoder.").
+    model_keys = set(model.state_dict().keys())
+    if not model_keys.issubset(set(state.keys())):
+        prefix = "card_encoder."
+        extracted = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)}
+        if extracted and model_keys.issubset(set(extracted.keys())):
+            log.info("Extracting card_encoder weights from DeckConstructor checkpoint: %s", path)
+            state = extracted
+
+    model.load_state_dict(state)
+    log.info("Loaded checkpoint: %s", path)
     return model
 
 

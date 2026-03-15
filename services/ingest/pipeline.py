@@ -810,6 +810,109 @@ PRODUCER_MAP["tribal_angel_etb"]  = _angel_lifegain
 PRODUCER_MAP["tribal_angel_lord"] = _angel_lifegain
 
 
+TRIBAL_MEMBER_LIMIT = int(os.environ.get("TRIBAL_MEMBER_LIMIT", "50_000"))
+"""Max intra-tribal member→member edges per tribe (commander→member edges are uncapped)."""
+
+
+async def compute_tribal_typeline_synergy() -> None:
+    """Build synergy edges based purely on shared creature type in type_line.
+
+    Two kinds of edges are generated for each tribe in TRIBES:
+
+    1. Commander → member  (uncapped)
+       Legendary creature cards of that tribe → every other card of that tribe.
+       This is the critical signal for commanders like Wilhelt whose synergy
+       is entirely encoded in type_line, not oracle text.
+
+    2. Member → member  (capped at TRIBAL_MEMBER_LIMIT per tribe)
+       All non-legendary tribe members paired with each other, so intra-tribal
+       co-occurrence is reflected in the embedding space.
+
+    Both use score_type='ability_trigger' so Phase 2 training picks them up
+    without any changes to train.py.
+    """
+    log.info("Computing tribal type_line synergy edges…")
+
+    for tribe in TRIBES:
+        t = tribe.lower()
+
+        async with Session() as db:
+            all_members = (await db.execute(text(f"""
+                SELECT id::text FROM cards
+                WHERE lower(type_line) LIKE '%{t}%'
+                  AND lower(type_line) LIKE '%creature%'
+            """))).fetchall()
+            commanders = (await db.execute(text(f"""
+                SELECT id::text FROM cards
+                WHERE lower(type_line) LIKE '%{t}%'
+                  AND lower(type_line) LIKE '%creature%'
+                  AND lower(type_line) LIKE '%legendary%'
+            """))).fetchall()
+
+        member_ids = [r[0] for r in all_members]
+        cmd_ids    = [r[0] for r in commanders]
+
+        if not member_ids:
+            log.info("  %s: no members found, skipping", tribe)
+            continue
+
+        log.info("  %s: %d members, %d legendary commanders", tribe, len(member_ids), len(cmd_ids))
+
+        # ── 1. Commander → all tribe members (uncapped) ─────────────────────
+        cmd_inserted = 0
+        for chunk_start in range(0, len(cmd_ids), SYNERGY_CHUNK):
+            chunk = cmd_ids[chunk_start : chunk_start + SYNERGY_CHUNK]
+            id_list    = "'" + "','".join(chunk) + "'"
+            member_list = "'" + "','".join(member_ids) + "'"
+            async with Session() as db:
+                result = await db.execute(text(f"""
+                    INSERT INTO synergy_edges (card_a, card_b, score_type, score, metadata)
+                    SELECT
+                        c.id::uuid,
+                        m.id::uuid,
+                        'ability_trigger',
+                        1.0,
+                        '{{"trigger_event": "tribal_{t}_typeline", "role": "commander_member"}}'::jsonb
+                    FROM (SELECT unnest(ARRAY[{id_list}]::uuid[]) AS id) c
+                    CROSS JOIN (SELECT unnest(ARRAY[{member_list}]::uuid[]) AS id) m
+                    WHERE c.id != m.id
+                    ON CONFLICT (card_a, card_b, score_type) DO NOTHING
+                """))
+                await db.commit()
+            cmd_inserted += result.rowcount
+        log.info("    commander→member: %d edges", cmd_inserted)
+
+        # ── 2. Member → member (capped) ──────────────────────────────────────
+        member_inserted = 0
+        for chunk_start in range(0, len(member_ids), SYNERGY_CHUNK):
+            if member_inserted >= TRIBAL_MEMBER_LIMIT:
+                log.info("    TRIBAL_MEMBER_LIMIT=%d reached for %s, stopping",
+                         TRIBAL_MEMBER_LIMIT, tribe)
+                break
+            chunk = member_ids[chunk_start : chunk_start + SYNERGY_CHUNK]
+            id_list     = "'" + "','".join(chunk) + "'"
+            member_list = "'" + "','".join(member_ids) + "'"
+            async with Session() as db:
+                result = await db.execute(text(f"""
+                    INSERT INTO synergy_edges (card_a, card_b, score_type, score, metadata)
+                    SELECT
+                        c.id::uuid,
+                        m.id::uuid,
+                        'ability_trigger',
+                        1.0,
+                        '{{"trigger_event": "tribal_{t}_typeline", "role": "member_member"}}'::jsonb
+                    FROM (SELECT unnest(ARRAY[{id_list}]::uuid[]) AS id) c
+                    CROSS JOIN (SELECT unnest(ARRAY[{member_list}]::uuid[]) AS id) m
+                    WHERE c.id != m.id
+                    ON CONFLICT (card_a, card_b, score_type) DO NOTHING
+                """))
+                await db.commit()
+            member_inserted += result.rowcount
+        log.info("    member→member: %d edges", member_inserted)
+
+    log.info("Tribal type_line synergy complete")
+
+
 async def compute_synergy() -> None:
     """Build synergy edges in small chunked transactions.
 
@@ -880,6 +983,7 @@ async def run_all():
     await embed_cards()
     await tag_abilities()
     await compute_synergy()
+    await compute_tribal_typeline_synergy()
 
 
 async def _load_cards_stage():
@@ -891,7 +995,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--stage",
-        choices=["fetch_cards", "load_cards", "embed_cards", "tag_abilities", "compute_synergy"],
+        choices=["fetch_cards", "load_cards", "embed_cards", "tag_abilities",
+                 "compute_synergy", "compute_tribal_typeline_synergy"],
         default=None,
     )
     args = parser.parse_args()
@@ -906,5 +1011,7 @@ if __name__ == "__main__":
         asyncio.run(tag_abilities())
     elif args.stage == "compute_synergy":
         asyncio.run(compute_synergy())
+    elif args.stage == "compute_tribal_typeline_synergy":
+        asyncio.run(compute_tribal_typeline_synergy())
     else:
         asyncio.run(run_all())

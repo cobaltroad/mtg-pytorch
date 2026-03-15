@@ -10,7 +10,10 @@ To regenerate edges after changing patterns, re-run:
 ```
 docker compose run --rm ingest python pipeline.py --stage tag_abilities
 docker compose run --rm ingest python pipeline.py --stage compute_synergy
+docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
 ```
+
+The third stage runs independently and can be re-run alone whenever tribe lists change.
 
 ---
 
@@ -308,6 +311,19 @@ Dragon, Elf, Zombie, Vampire, Eldrazi, Human, Dinosaur, Goblin, Angel, Pirate, W
 
 All three patterns for a tribe share the same producer pool — creature cards of that type. This means a lord effect on Dragon cards pairs with all Dragon creatures as producers.
 
+### Type-line tribal edges (compute_tribal_typeline_synergy)
+
+A separate pipeline stage (`compute_tribal_typeline_synergy`) generates edges based purely on the `type_line` column — no oracle text involved. This is the critical signal for tribal commanders like Wilhelt whose synergy partners are identified entirely by creature type, not by what their abilities say.
+
+Two edge classes per tribe, both stored as `score_type = 'ability_trigger'`:
+
+| Class | card_a | card_b | Cap |
+|---|---|---|---|
+| `commander_member` | Legendary creature of that tribe | Any creature of that tribe | Uncapped |
+| `member_member` | Any creature of that tribe | Any creature of that tribe | `TRIBAL_MEMBER_LIMIT` (default 50 000) |
+
+`TRIBAL_MEMBER_LIMIT` env var controls the member→member cap. Increase it (or set to 0 to disable) per tribe if needed. Commander→member edges are always inserted in full because those sets are small.
+
 ### Cross-synergy overrides
 
 Two tribes have their producer pools extended to capture their natural deckbuilding companions:
@@ -363,6 +379,7 @@ These tag cards that have on-board activated abilities, creating edges with card
 | `draw` removed | Draw synergies were too noisy (every deck runs draw). Re-add as `wheel` (group draw/discard events specifically) if needed. |
 | `activated_tap` / `activated_sacrifice` | No producer map yet — these tag consumers but produce no edges. |
 | Ninjutsu | "Return an unblocked attacker you control" — a distinct ninjutsu/evasion theme. |
+| Type-line tribal | Addressed by `compute_tribal_typeline_synergy` stage — Zombie/Dragon/etc. creatures now have direct synergy edges from shared type_line, not just oracle-text trigger patterns. |
 | Partner commanders | Cross-color identity synergies not modeled. |
 | Storm / combo | "Win the game" or "deal infinite damage" patterns would require templating beyond regex. |
 | Vehicle crew | `crew {N}` is not captured as a distinct synergy event. |
