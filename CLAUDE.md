@@ -217,11 +217,27 @@ Previous run: 0.5432 on 94 decks → 0.43 on 120 decks — meaningful improvemen
 from additional co-occurrence data.  Score compression remains (0.894–0.999
 cosine range across card pool); more decks needed to further separate embeddings.
 
-### Phase 4 — DeckConstructor transformer decoder (2026-03-15, in progress)
+### Phase 3 — rerun 2 (2026-03-15)
+
+278 decks (previous 120 + additional zombies, tokens, +1/+1 counters, dragons,
+Tiamat, Rivaz).  Warm-started from phase3_best (neat-donkey-26).  50 epochs,
+lr=1e-4.  **Best loss: 0.3922**.
+
+0.43 → 0.3922 — continued improvement; more data is the primary driver.
+
+### Phase 4 — DeckConstructor transformer decoder (2026-03-15)
 
 InfoNCE loss; transformer decoder cross-attends to commander embedding; 64
 random negatives per position; temperature=0.1.  Warm-started from phase3_best
-CardEncoder weights.  50 epochs, lr=1e-4.  Epoch 9 loss: **0.4684**.
+CardEncoder weights.  50 epochs, lr=1e-4.
+
+**Run 1 (freeze_encoder=False, single LR):** best loss 0.0654 at epoch 12, then
+collapsed to 3.8565 by epoch 50.  Root cause: encoder and decoder shared the same
+lr=1e-4; after memorising 177 decks, unconstrained encoder gradients destroyed
+Phase 3 representations.
+
+**Fix:** differential learning rates — encoder at `lr * encoder_lr_scale` (default
+0.1×), decoder at full lr.  Added `--encoder-lr-scale` CLI arg.
 
 ---
 
