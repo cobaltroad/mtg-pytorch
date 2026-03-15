@@ -1,0 +1,77 @@
+1 Agent Venom
+1 Arcane Signet
+1 Bastion of Remembrance
+1 Blood Artist
+1 Bojuka Bog
+1 Carrion Feeder
+1 Casting of Bones
+1 Caves of Koilos
+1 Command Tower
+1 Concealed Courtyard
+1 Conclave Tribunal
+1 Corrupted Conviction
+1 Cruel Celebrant
+1 Dark Privilege
+1 Day of Judgment
+1 Deadly Dispute
+1 Demolition Field
+1 Desolate Mire
+1 Despark
+1 Dimir House Guard
+1 Disenchant
+1 Doomed Traveler
+1 Elas il-Kor, Sadistic Pilgrim
+1 Faller's Faithful
+1 Fanatical Devotion
+1 Fetid Heath
+1 Garrison Cat
+1 Grim Haruspex
+1 Hunted Witness
+1 Indebted Spirit
+1 Infestation Sage
+1 Isolated Chapel
+1 Kaya's Ghostform
+1 Lapse of Certainty
+1 Lively Dirge
+1 Mana Tithe
+1 Market Gnome
+1 Martyr's Cause
+1 Midgar, City of Mako
+1 Midnight Reaper
+1 Morbid Opportunist
+1 Mortify
+1 Nested Shambler
+1 Nesting Bot
+1 Nezumi Linkbreaker
+1 Night's Whisper
+1 Ophiomancer
+1 Orzhov Basilica
+1 Orzhov Charm
+1 Orzhov Signet
+13 Plains
+1 Plumb the Forbidden
+1 Priest of Forgotten Gods
+1 Rite of Oblivion
+1 Roc Egg
+1 Rowan's Grim Search
+1 Scout for Survivors
+1 Shambling Ghast
+1 Shineshadow Snarl
+1 Skullclamp
+1 Sol Ring
+1 Solemn Simulacrum
+1 Spectacular Pileup
+13 Swamp
+1 Temple of Silence
+1 Tragic Slip
+1 Treasure Keeper
+1 Umbral Collar Zealot
+1 Venerated Stormsinger
+1 Vesperlark
+1 Village Rites
+1 Viscera Seer
+1 Woe Strider
+1 Wriggling Grub
+1 Zulaport Cutthroat
+
+1 Teysa Karlov

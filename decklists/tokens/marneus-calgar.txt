@@ -1,0 +1,96 @@
+1 Adeline, Resplendent Cathar
+1 Akroma's Will
+1 Anointed Procession
+1 Arcane Signet
+1 Archaeomancer's Map
+1 Bennie Bracks, Zoologist
+1 Bitterbloom Bearer
+1 Bitterblossom
+1 Bleachbone Verge
+1 Blood Funnel
+1 Caretaker's Talent
+1 Chasm Skulker
+1 Command Beacon
+1 Command Tower
+1 Commissar Severina Raine
+1 Corpse Knight
+1 Cyclonic Rift
+1 Dark Ritual
+1 Delney, Streetwise Lookout
+1 Elas il-Kor, Sadistic Pilgrim
+1 Elder Arthur Maxson
+1 Elenda, the Dusk Rose
+1 Elesh Norn, Grand Cenobite
+1 Elspeth, Knight-Errant
+1 Elspeth, Storm Slayer
+1 Esper Sentinel
+1 Exalted Sunborn
+1 Felisa, Fang of Silverquill
+1 Flooded Strand
+1 Floodfarm Verge
+1 Flowering of the White Tree
+1 Gloomlake Verge
+1 Godless Shrine
+1 Hallowed Fountain
+1 Halo Fountain
+1 Homunculus Horde
+1 Hop to It
+1 Inkshield
+1 Inquisitor Greyfax
+1 Inquisitorial Rosette
+5 Island
+1 Kambal, Profiteering Mayor
+1 Liliana, Dreadhorde General
+1 Lotho, Corrupt Shirriff
+1 Lotus Petal
+1 Marsh Flats
+1 Mirkwood Bats
+1 Mondrak, Glory Dominus
+1 Moonlit Meditation
+1 Moonshaker Cavalry
+1 Nadir Kraken
+1 Ocelot Pride
+1 Officious Interrogation
+1 Ominous Seas
+1 Phyrexian Altar
+1 Phyrexian Tower
+5 Plains
+1 Polluted Delta
+1 Prince Imrahil the Fair
+1 Psychosis Crawler
+1 Raffine, Scheming Seer
+1 Raffine's Tower
+1 Reliquary Tower
+1 Scrubland
+1 Sea of Clouds
+1 Season of the Burrow
+1 Sephiroth, Fabled SOLDIER
+1 Shadrix Silverquill
+1 Shorikai, Genesis Engine
+1 Skullclamp
+1 Smothering Tithe
+1 Sol Ring
+1 Soundwave, Sonic Spy
+5 Swamp
+1 Teferi's Protection
+1 Tempt with Bunnies
+1 Teysa Karlov
+1 Thalisse, Reverent Medium
+1 Thopter Fabricator
+1 Tundra
+1 Underground River
+1 Underground Sea
+1 Vault of Champions
+1 Warren Soultrader
+1 Watery Grave
+1 Wispdrinker Vampire
+1 Zulaport Cutthroat
+
+SIDEBOARD:
+1 Claire D'Loon, Joy Sculptor
+1 Endless Foot Assault
+1 Judge Magister Gabranth
+1 Rufus Shinra
+1 Starting Town
+
+1 Marneus Calgar
