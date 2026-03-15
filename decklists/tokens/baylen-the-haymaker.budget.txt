@@ -1,0 +1,82 @@
+1 Aerith Rescue Mission
+1 Arterial Alchemy
+1 Artifact Mutation
+1 Assemble the Legion
+1 Assure/Assemble
+1 Battle for Bretagard
+1 Blacksmith's Skill
+1 Brigid's Command
+1 Cabaretti Courtyard
+1 Cinder Glade
+1 Clifftop Retreat
+1 Defend the Rider
+1 Divine Resilience
+1 Duelist's Heritage
+1 Elemental Spectacle
+1 Enter the Avatar State
+1 Evolving Wilds
+1 Exotic Orchard
+1 Ezuri's Predation
+1 Font of Fertility
+14 Forest
+1 Form a Posse
+1 Fortified Village
+1 Furycalm Snarl
+1 Glimpse the Impossible
+1 Gluntch, the Bestower
+1 Grasp of Fate
+1 Harmonize
+1 Heaped Harvest
+1 Hop to It
+1 Iridescent Hornbeetle
+1 Jungle Shrine
+1 Junk Jet
+1 Kellan, Daring Traveler
+1 Killer Service
+1 Last Night Together
+1 Legion Leadership
+1 Llanowar Elves
+1 Love Song of Night and Day
+1 Loyal Apprentice
+1 Many Partings
+2 Mountain
+1 Orchard Strider
+1 Overrun
+1 Peregrin Took
+6 Plains
+1 Pollenbright Wings
+1 Promise of Loyalty
+1 Queen Allenal of Ruadach
+1 Quina, Qu Gourmet
+1 Rampant Growth
+1 Release the Dogs
+1 Return from the Wilds
+1 Return of the Wildspeaker
+1 Rith's Charm
+1 Rocco, Street Chef
+1 Roiling Regrowth
+1 Rootcast Apprenticeship
+1 Rosie Cotton of South Lane
+1 Royal Treatment
+1 Rustler Rampage
+1 Seedship Impact
+1 Selesnya Charm
+1 Sheltering Landscape
+1 Single Combat
+1 Spawn-Gang Commander
+1 Stump Stomp
+1 Sunder the Gateway
+1 Sungrass Prairie
+1 Tend the Sprigs
+1 Thriving Bluff
+1 Thriving Grove
+1 Thriving Heath
+1 True Ancestry
+1 Uncharted Haven
+1 Wayfarer's Bauble
+1 Wear Down
+1 Witch's Mark
+1 You're Confronted by Robbers
+1 Your Temple Is Under Attack
+
+1 Baylen, the Haymaker
