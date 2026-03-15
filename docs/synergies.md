@@ -315,12 +315,14 @@ All three patterns for a tribe share the same producer pool — creature cards o
 
 A separate pipeline stage (`compute_tribal_typeline_synergy`) generates edges based purely on the `type_line` column — no oracle text involved. This is the critical signal for tribal commanders like Wilhelt whose synergy partners are identified entirely by creature type, not by what their abilities say.
 
+**Changeling support:** Cards with `'Changeling' = ANY(keywords)` are every creature type simultaneously, so they are included in every tribe's member pool. This ensures cards like Mothdust Changeling and Graveshifter appear as Zombie members (and Dragon members, Elf members, etc.) even though their `type_line` only shows "Creature — Shapeshifter". The same changeling extension applies to the PRODUCER_MAP tribal entries used in `compute_synergy`.
+
 Two edge classes per tribe, both stored as `score_type = 'ability_trigger'`:
 
 | Class | card_a | card_b | Cap |
 |---|---|---|---|
-| `commander_member` | Legendary creature of that tribe | Any creature of that tribe | Uncapped |
-| `member_member` | Any creature of that tribe | Any creature of that tribe | `TRIBAL_MEMBER_LIMIT` (default 50 000) |
+| `commander_member` | Legendary creature of that tribe | Any creature of that tribe (+ changelings) | Uncapped |
+| `member_member` | Any creature of that tribe (+ changelings) | Any creature of that tribe (+ changelings) | `TRIBAL_MEMBER_LIMIT` (default 50 000) |
 
 `TRIBAL_MEMBER_LIMIT` env var controls the member→member cap. Increase it (or set to 0 to disable) per tribe if needed. Commander→member edges are always inserted in full because those sets are small.
 

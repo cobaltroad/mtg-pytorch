@@ -777,17 +777,19 @@ PRODUCER_MAP: dict[str, str] = {
 }
 
 # Tribal producers: cards of each creature type generate both cast and ETB tribal events.
-# Add entries for both trigger sub-types so the consumer query finds them.
+# Changelings ('Changeling' = ANY(keywords)) are every creature type, so they count as
+# producers for all tribes — e.g. Mothdust Changeling is a valid Zombie producer.
+_CHANGELING = "'Changeling' = ANY(keywords)"
 for _tribe in TRIBES:
     _t = _tribe.lower()
-    _where = f"lower(type_line) LIKE '%{_t}%'"
+    _where = f"(lower(type_line) LIKE '%{_t}%' OR {_CHANGELING})"
     PRODUCER_MAP[f"tribal_{_t}_cast"] = _where
     PRODUCER_MAP[f"tribal_{_t}_etb"] = _where
     PRODUCER_MAP[f"tribal_{_t}_lord"] = _where  # lord consumers pair with tribe members
 
 # Cross-synergy: Zombies naturally pair with reanimation effects (graveyard recursion)
 _zombie_reanimation = (
-    "lower(type_line) LIKE '%zombie%'"
+    f"(lower(type_line) LIKE '%zombie%' OR {_CHANGELING})"
     " OR lower(oracle_text) LIKE '%return target%creature%graveyard%battlefield%'"
     " OR lower(oracle_text) LIKE '%creature card from%graveyard%battlefield%'"
     " OR lower(oracle_text) LIKE '%put target%creature%graveyard%battlefield%'"
@@ -799,7 +801,7 @@ PRODUCER_MAP["tribal_zombie_lord"] = _zombie_reanimation
 
 # Cross-synergy: Angels naturally pair with lifegain effects
 _angel_lifegain = (
-    "lower(type_line) LIKE '%angel%'"
+    f"(lower(type_line) LIKE '%angel%' OR {_CHANGELING})"
     " OR lower(oracle_text) LIKE '%you gain%life%'"
     " OR lower(oracle_text) LIKE '%lifelink%'"
     " OR lower(oracle_text) LIKE '%life equal to%'"
@@ -828,6 +830,10 @@ async def compute_tribal_typeline_synergy() -> None:
        All non-legendary tribe members paired with each other, so intra-tribal
        co-occurrence is reflected in the embedding space.
 
+    Changelings ('Changeling' = ANY(keywords)) are included in every tribe's
+    member pool because they are every creature type simultaneously — e.g.
+    Mothdust Changeling and Graveshifter count as Zombies for Wilhelt edges.
+
     Both use score_type='ability_trigger' so Phase 2 training picks them up
     without any changes to train.py.
     """
@@ -837,10 +843,14 @@ async def compute_tribal_typeline_synergy() -> None:
         t = tribe.lower()
 
         async with Session() as db:
+            # Changelings ('Changeling' = ANY(keywords)) are every creature type, so
+            # they belong to every tribe's member pool regardless of type_line.
             all_members = (await db.execute(text(f"""
                 SELECT id::text FROM cards
-                WHERE lower(type_line) LIKE '%{t}%'
-                  AND lower(type_line) LIKE '%creature%'
+                WHERE (
+                    (lower(type_line) LIKE '%{t}%' AND lower(type_line) LIKE '%creature%')
+                    OR 'Changeling' = ANY(keywords)
+                )
             """))).fetchall()
             commanders = (await db.execute(text(f"""
                 SELECT id::text FROM cards

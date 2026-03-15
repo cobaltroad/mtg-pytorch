@@ -157,12 +157,13 @@ def parse_moxfield_txt(text: str) -> tuple[list[str], list[str]]:
             # Headerless format: accumulate everything; we'll split after
             maindeck.extend([name] * qty)
 
-    # ── Headerless fallback ───────────────────────────────────────────────────
-    # If no section headers were ever seen, the commander is conventionally
-    # the last blank-line-separated group of cards at the end of the file.
-    # Split on the final blank line: everything before → maindeck,
-    # everything after → commanders.
-    if not found_section_header and maindeck and not commanders:
+    # ── Trailing-commander fallback ───────────────────────────────────────────
+    # If no commander was found yet, check whether the file ends with a
+    # blank-line-separated group that names the commander.  This handles:
+    #   - Fully headerless files (no section headers at all)
+    #   - Files with non-Commander section headers (e.g. SIDEBOARD:) whose
+    #     commander is still listed last after a blank line
+    if not commanders and maindeck:
         lines = [l.strip() for l in text.splitlines()]
         # Find the last blank line
         last_blank = -1
@@ -197,9 +198,30 @@ def _asyncpg_dsn(url: str) -> str:
 
 
 async def build_name_index(conn) -> dict[str, str]:
-    """Return {lower(name): card_id (str)} for every card in our DB."""
+    """Return {lower(name): card_id (str)} for every card in our DB.
+
+    DFC cards are stored as "Front // Back" (the MTGJSON key format).  Decklist
+    files always use just the front-face name, so we also index the front face
+    alone so lookups like "Poppet Stitcher" resolve to "Poppet Stitcher // Poppet
+    Factory" correctly.  The full " // " name takes precedence if it appears in
+    a decklist verbatim.
+    """
     rows = await conn.fetch("SELECT id::text, name FROM cards")
-    return {row["name"].lower(): row["id"] for row in rows}
+    index: dict[str, str] = {}
+    for row in rows:
+        full = row["name"]
+        cid  = row["id"]
+        index[full.lower()] = cid
+        # Also index front face alone and slash variants for DFC / Room cards.
+        # DB stores: "Poppet Stitcher // Poppet Factory" (MTGJSON key format)
+        # Decklists use any of: "Poppet Stitcher", "Front / Back", "Front/Back"
+        if " // " in full:
+            front = full.split(" // ")[0].strip()
+            back  = full.split(" // ")[1].strip()
+            index.setdefault(front.lower(), cid)
+            index.setdefault(f"{front.lower()} / {back.lower()}", cid)
+            index.setdefault(f"{front.lower()}/{back.lower()}", cid)
+    return index
 
 
 async def import_file(
