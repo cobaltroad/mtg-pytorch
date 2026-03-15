@@ -70,6 +70,34 @@ Wilhelt, the Rotcleaver cares almost exclusively about the **Zombie creature typ
 
 ---
 
+## Color Identity Constraint
+
+**This is a hard rule in Commander, not a learned preference.** Every card in a deck must be within the commander's color identity (all mana symbols in cost + rules text). Infernal Plunge ({R}) is mechanically perfect for Aristocrats strategies but is illegal in the most common Aristocrats commanders (Teysa Karlov {W}{B}, Meren of Clan Nel Toth {B}{G}, Karador {W}{B}{G}).
+
+### Why this matters for the model
+
+1. **synergy_edges are color-blind** — a red sacrifice outlet is marked synergistic with cards that will appear in WB decks. The Phase 2 training signal is polluted with cross-color false positives.
+
+2. **Phase 3/4 negative sampling is color-blind** — random negatives are drawn from all 33k cards. Many "hard" negatives are simply off-color and trivially wrong, making the learning task easier than it should be. The model learns partial color separation as a proxy for synergy, rather than learning synergy directly.
+
+3. **Inference produces illegal decks** — without a color identity filter, the DeckConstructor can recommend red cards for a WB commander.
+
+### What color identity means in practice
+
+The typical Aristocrats palette (W/B/G subsets) never touches red, so:
+- Goblin Bombardment, Infernal Plunge, Viscera Seer (R) → always excluded from Teysa lists
+- Phyrexian Altar (colorless) → legal in any deck
+- Blood Artist (B) → legal in any deck with black
+
+### Required fixes (in priority order)
+
+- [ ] **Store color_identity per card** in the `cards` table. MTGJSON provides this as an array (`colorIdentity: ["W","B"]`). Currently only `colors` (casting cost) is stored; identity also includes mana symbols in oracle text.
+- [ ] **Filter synergy edges at compute time**: when inserting edges, skip card pairs that share no plausible color identity overlap. This is approximate (edges are card-to-card, not commander-specific) but removes the worst cross-color noise.
+- [ ] **Filter Phase 3/4 negative pool per commander**: in `train_deck_phase()` and `train_deck_constructor_phase()`, restrict the negative candidate pool to cards whose color identity is a subset of the commander's color identity. This makes the learning task honest.
+- [ ] **Hard filter at inference**: before DeckConstructor scores candidates, exclude any card whose color identity is not a subset of the commander's. This is non-negotiable for producing legal decks.
+
+---
+
 ## Phase 4 / DeckConstructor
 
 - [ ] Evaluate phase4_best with `eval_synergy.py` — compare against phase3_best for Skullclamp, Wilhelt, Giada

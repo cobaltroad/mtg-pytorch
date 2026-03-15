@@ -291,7 +291,7 @@ class DeckDataset(Dataset):
             for c in deck["card_ids"]
             if c in self.embeddings
         ])
-        return cmd_emb, card_embs
+        return cmd_emb, card_embs, deck["legal_neg_indices"]
 
 
 # ── Training loops ────────────────────────────────────────────────────────────
@@ -430,8 +430,37 @@ def train_synergy_phase(
 
 # ── Phase 3: Deck co-occurrence ───────────────────────────────────────────────
 
+def load_color_identities(embeddings: dict[str, np.ndarray]) -> dict[str, frozenset]:
+    """Return {card_id: frozenset of color letters} for every embedded card.
+
+    Colorless cards (empty identity) return frozenset(), which is a subset of
+    every commander's identity — legal in any deck.
+    """
+    ids = list(embeddings.keys())
+    result: dict[str, frozenset] = {}
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id::text, color_identity FROM cards WHERE id::text = ANY(%s)",
+                (ids,),
+            )
+            for row in cur.fetchall():
+                result[row["id"]] = frozenset(row["color_identity"] or [])
+    # Any embedded card without a DB row (shouldn't happen) gets colorless
+    for card_id in ids:
+        result.setdefault(card_id, frozenset())
+    return result
+
+
 def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
-    """Load decks from DB, filtering to cards that have embeddings."""
+    """Load decks from DB, filtering to cards that have embeddings.
+
+    Each deck dict includes `legal_neg_indices`: a numpy int array of indices
+    into `list(embeddings.keys())` whose color identity is a subset of the
+    commander's color identity.  Phase 3/4 trainers sample negatives from this
+    array instead of the full pool, so illegal off-color cards are never used
+    as negatives (which would make the learning task trivially easy).
+    """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("""
@@ -442,6 +471,24 @@ def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
             """)
             rows = cur.fetchall()
 
+    color_ids = load_color_identities(embeddings)
+    all_ids   = list(embeddings.keys())
+
+    # Pre-build index arrays per unique commander color identity to avoid
+    # recomputing for commanders that share the same identity.
+    _legal_cache: dict[frozenset, np.ndarray] = {}
+
+    def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
+        if cmd_ci not in _legal_cache:
+            idx = np.array(
+                [i for i, cid in enumerate(all_ids)
+                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                dtype=np.int64,
+            )
+            # Fallback: if identity is somehow empty, allow all cards
+            _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(len(all_ids), dtype=np.int64)
+        return _legal_cache[cmd_ci]
+
     decks = []
     for row in rows:
         cmd_id = row["commander_id"]
@@ -450,7 +497,13 @@ def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
         card_ids = [str(c) for c in (row["card_ids"] or []) if str(c) in embeddings]
         if len(card_ids) < 10:
             continue
-        decks.append({"commander_id": cmd_id, "card_ids": card_ids})
+        cmd_ci = color_ids.get(cmd_id, frozenset())
+        decks.append({
+            "commander_id":      cmd_id,
+            "card_ids":          card_ids,
+            "color_identity":    cmd_ci,
+            "legal_neg_indices": _legal_indices(cmd_ci),
+        })
 
     log.info("Loaded %d decks (%d skipped — commander or cards not embedded)",
              len(decks), len(rows) - len(decks))
@@ -493,7 +546,7 @@ def train_deck_phase(
         total_loss = 0.0
         n_batches = 0
 
-        for cmd_emb, card_embs in loader:
+        for cmd_emb, card_embs, legal_neg_idx in loader:
             cmd_emb  = cmd_emb.to(device)   # (D,)
             card_embs = card_embs.to(device)  # (K, D)
 
@@ -504,8 +557,11 @@ def train_deck_phase(
             z_cmd  = model(cmd_emb.unsqueeze(0))            # (1, D')
             z_pos  = model(card_embs)                       # (K, D')
 
-            # Sample K random negatives from the full card pool
-            neg_idx = torch.randint(0, all_embs.size(0), (card_embs.size(0),), device=device)
+            # Sample K random negatives restricted to the commander's color identity
+            K = card_embs.size(0)
+            neg_pool = legal_neg_idx.numpy() if hasattr(legal_neg_idx, "numpy") else legal_neg_idx
+            chosen = np.random.choice(neg_pool, size=K, replace=True)
+            neg_idx = torch.from_numpy(chosen).to(device)
             z_neg  = model(all_embs[neg_idx])               # (K, D')
 
             # BPR: cosine similarity between commander and pos/neg cards
@@ -589,7 +645,7 @@ def train_deck_constructor_phase(
         random.shuffle(deck_indices)
 
         for idx in deck_indices:
-            cmd_raw, card_raw = dataset[idx]   # (384,), (K, 384) — raw sentence-T embeddings
+            cmd_raw, card_raw, legal_neg_idx = dataset[idx]  # (384,), (K, 384), int array
             card_raw = card_raw.to(device)
             cmd_raw  = cmd_raw.to(device)
             K = card_raw.size(0)
@@ -600,6 +656,9 @@ def train_deck_constructor_phase(
             n_pos = min(positions_per_deck, K - 1)
             positions = random.sample(range(1, K), n_pos)
 
+            # Legal negative pool: indices into all_proj restricted to commander's color identity
+            legal_pool = legal_neg_idx if isinstance(legal_neg_idx, np.ndarray) else legal_neg_idx.numpy()
+
             deck_loss = torch.tensor(0.0, device=device)
             for pos in positions:
                 # Project context + target through encoder (gradients flow)
@@ -607,8 +666,9 @@ def train_deck_constructor_phase(
                 z_context = model.card_encoder(card_raw[:pos])                # (pos, 256)
                 z_target  = model.card_encoder(card_raw[pos].unsqueeze(0))   # (1, 256)
 
-                # Random negatives from the pre-projected pool (detached — no grads)
-                neg_idx = torch.randint(0, all_proj.size(0), (n_neg,), device=device)
+                # Random negatives from the pre-projected pool, color-identity filtered
+                chosen  = np.random.choice(legal_pool, size=n_neg, replace=True)
+                neg_idx = torch.from_numpy(chosen).to(device)
                 z_neg   = all_proj[neg_idx].detach()                          # (n_neg, 256)
 
                 # Candidate set: [positive, neg_0, ..., neg_{n_neg-1}]
