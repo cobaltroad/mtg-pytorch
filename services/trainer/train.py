@@ -538,6 +538,116 @@ def train_deck_phase(
     save_checkpoint(model, f"phase3_epoch{epochs}")
 
 
+# ── Phase 4: Autoregressive deck construction ─────────────────────────────────
+
+def train_deck_constructor_phase(
+    model: DeckConstructor,
+    dataset: DeckDataset,
+    embeddings: dict[str, np.ndarray],
+    epochs: int,
+    lr: float,
+    n_neg: int = 64,
+    positions_per_deck: int = 10,
+    temperature: float = 0.1,
+):
+    """Phase 4: autoregressive deck construction via transformer decoder + InfoNCE.
+
+    For each deck, randomly sample `positions_per_deck` positions K (1 ≤ K < deck_len).
+    At each position the model sees [commander, cards[0:K]] and must rank cards[K]
+    above n_neg random cards drawn from the full 33k pool.
+
+    InfoNCE loss (temperature=0.1) over (1 + n_neg) candidates — sharper than BPR,
+    better suited to the multi-candidate ranking setting.
+
+    The full card pool is pre-projected at the start of each epoch so negative
+    sampling is O(1); projections are refreshed each epoch as encoder weights update.
+    """
+    all_ids = list(embeddings.keys())
+    all_raw = torch.from_numpy(
+        np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
+    )
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    device = next(model.parameters()).device
+    all_raw = all_raw.to(device)
+
+    best_loss = float("inf")
+    for epoch in range(epochs):
+        # ── Pre-project the full card pool for fast negative sampling ──────────
+        model.eval()
+        with torch.no_grad():
+            all_proj = torch.cat([
+                model.card_encoder(all_raw[i: i + 512])
+                for i in range(0, all_raw.size(0), 512)
+            ], dim=0)  # (N, 256), L2-normalised, no grad
+        model.train()
+
+        total_loss = 0.0
+        n_steps = 0
+        deck_indices = list(range(len(dataset)))
+        random.shuffle(deck_indices)
+
+        for idx in deck_indices:
+            cmd_raw, card_raw = dataset[idx]   # (384,), (K, 384) — raw sentence-T embeddings
+            card_raw = card_raw.to(device)
+            cmd_raw  = cmd_raw.to(device)
+            K = card_raw.size(0)
+            if K < 2:
+                continue
+
+            # Sample positions: always K ≥ 1 so there is at least one card in context
+            n_pos = min(positions_per_deck, K - 1)
+            positions = random.sample(range(1, K), n_pos)
+
+            deck_loss = torch.tensor(0.0, device=device)
+            for pos in positions:
+                # Project context + target through encoder (gradients flow)
+                z_cmd     = model.card_encoder(cmd_raw.unsqueeze(0))          # (1, 256)
+                z_context = model.card_encoder(card_raw[:pos])                # (pos, 256)
+                z_target  = model.card_encoder(card_raw[pos].unsqueeze(0))   # (1, 256)
+
+                # Random negatives from the pre-projected pool (detached — no grads)
+                neg_idx = torch.randint(0, all_proj.size(0), (n_neg,), device=device)
+                z_neg   = all_proj[neg_idx].detach()                          # (n_neg, 256)
+
+                # Candidate set: [positive, neg_0, ..., neg_{n_neg-1}]
+                candidates = torch.cat([z_target, z_neg], dim=0)             # (1+n_neg, 256)
+
+                # Score via transformer decoder
+                scores = model(
+                    z_cmd,                        # (1, 256)
+                    z_context.unsqueeze(0),       # (1, pos, 256)
+                    candidates.unsqueeze(0),      # (1, 1+n_neg, 256)
+                ).squeeze(0)                      # (1+n_neg,)
+
+                # InfoNCE: positive is always index 0
+                deck_loss = deck_loss + (-F.log_softmax(scores / temperature, dim=0)[0])
+
+            avg_deck_loss = deck_loss / n_pos
+            optimizer.zero_grad()
+            avg_deck_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            total_loss += avg_deck_loss.item()
+            n_steps += 1
+
+        scheduler.step()
+        avg = total_loss / max(n_steps, 1)
+        log.info("Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+
+        if WANDB_ENABLED:
+            wandb.log({"phase": 4, "epoch": epoch + 1, "loss": avg,
+                       "lr": scheduler.get_last_lr()[0]})
+
+        if avg < best_loss:
+            best_loss = avg
+            save_checkpoint(model, "phase4_best")
+
+    save_checkpoint(model, f"phase4_epoch{epochs}")
+
+
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
 
 def save_checkpoint(model: nn.Module, name: str):
@@ -670,6 +780,38 @@ def main():
 
         train_deck_phase(
             model, dataset, embeddings, args.epochs, args.lr, args.batch_size,
+        )
+
+    elif args.phase == 4:
+        embeddings = load_embeddings()
+        if not embeddings:
+            log.error("No embeddings found — run the ingest pipeline first.")
+            return
+
+        decks = load_decks(embeddings)
+        if not decks:
+            log.error("No decks found — run import_decklists.py first.")
+            return
+
+        dataset = DeckDataset(decks, embeddings)
+        log.info("Dataset: %d decks", len(dataset))
+
+        model = DeckConstructor().to(device)
+        if args.resume and (CHECKPOINT_DIR / "phase4_best.pt").exists():
+            load_checkpoint(model, "phase4_best", device)
+        else:
+            # Warm-start the card_encoder from Phase 3 weights
+            phase3_encoder = CardEncoder().to(device)
+            if (CHECKPOINT_DIR / "phase3_best.pt").exists():
+                load_checkpoint(phase3_encoder, "phase3_best", device)
+                model.card_encoder.load_state_dict(phase3_encoder.state_dict())
+                log.info("Warm-started card_encoder from phase3_best")
+            else:
+                log.warning("No phase3_best found — card_encoder starts from scratch")
+
+        train_deck_constructor_phase(
+            model, dataset, embeddings, args.epochs, args.lr,
+            n_neg=64, positions_per_deck=10, temperature=args.temperature,
         )
 
     else:

@@ -86,8 +86,10 @@ The model is trained in four phases, each building on the last:
 - **XMage (`mage/`)** — Java reference implementation; 31 k+ files, 246 keyword
   abilities, 269 common ability patterns, full game-state engine.  Use it to
   extract structured ability information that MTGJSON keywords don't cover.
-- **EDHREC** — human deck co-occurrence data (manual download; cache in
-  `ingest_cache` volume under `/data/edhrec/`).
+- **Moxfield** — user-curated Commander decklists exported as `.txt` files.
+  Drop exports into a folder and run `import_moxfield.py` (see below).
+- **cardtrak** — internal collection tracker; decklists exported via
+  `ml_decklists` view and imported with `import_decklists.py`.
 
 ## Database schema (key tables)
 
@@ -114,11 +116,54 @@ The model is trained in four phases, each building on the last:
   `docker-compose.yml`.  Do not add TLS config inside containers.
 - Never commit `.env`; only commit `.env.example`.
 
-## Phase 2 training — findings (2026-03-14)
+## Decklist import
+
+Two import scripts live in `services/ingest/`:
+
+### `import_moxfield.py` — batch Moxfield `.txt` exports
+
+Drop Moxfield deck exports (one `.txt` per deck) into a folder, then:
+
+```bash
+docker compose run --rm \
+    -v /path/to/exports:/data/moxfield:ro \
+    ingest python import_moxfield.py
+
+# Dry-run (parse only, no DB writes):
+MOXFIELD_DRY_RUN=1 docker compose run --rm \
+    -v /path/to/exports:/data/moxfield:ro \
+    ingest python import_moxfield.py
+```
+
+- Commander identified from the `Commander` section header (reliable).
+- Partner commanders: first resolving name wins as `commander_id`.
+- Set/collector annotations (`(MH2) 123`) stripped automatically.
+- `source = 'moxfield'`; re-importing the same file is safe (ON CONFLICT DO NOTHING).
+- Default folder: `/data/moxfield`; override with `MOXFIELD_DIR` env var.
+
+### `import_decklists.py` — cardtrak JSON export
+
+```bash
+# Export from cardtrak DB:
+docker exec cardtrak_db psql -U cardtrak -d cardtrak_production \
+    -t -c "SELECT json_agg(row_to_json(d)) FROM ml_decklists d \
+           WHERE deck_format IN ('EDH','cedh')" > /tmp/ml_decklists.json
+
+# Import:
+docker compose run --rm \
+    -v /tmp/ml_decklists.json:/data/ml_decklists.json:ro \
+    ingest python import_decklists.py
+```
+
+---
+
+## Training history
+
+### Phase 2 — ability-trigger synergy (2026-03-14)
 
 **Run ID:** `671fpop8` (wandb project `edh-builder`, run name `lemon-spaceship-7`)
 
-### Loss benchmarks
+#### Loss benchmarks
 
 | Outcome | Final loss |
 |---------|-----------|
@@ -129,7 +174,7 @@ The model is trained in four phases, each building on the last:
 
 Epoch 1 baseline: **0.6610** (random baseline ≈ 0.693 — model is learning from batch 1).
 
-### Infrastructure lessons learned
+#### Infrastructure lessons learned
 
 - **synergy_edges table size** — naïve Python cartesian product (7 609 producers ×
   5 841 consumers = 44 M rows) OOM'd silently.  Fixed by rewriting `compute_synergy`
@@ -152,14 +197,19 @@ Epoch 1 baseline: **0.6610** (random baseline ≈ 0.693 — model is learning fr
   `phase`, `epoch`, `loss`, and `lr` per epoch.  If charts are missing, confirm
   `WANDB_API_KEY` is set and the run finished at least one epoch.
 
-### Next steps after Phase 2
+### Phase 3 — deck co-occurrence BPR ranking (2026-03-14)
 
-1. Evaluate final loss (epoch 20) against benchmarks above.
-2. If loss > 0.65, re-run with more synergy data (increase `SYNERGY_LIMIT`) and/or
-   more epochs.
-3. Rebuild `synergy_edges` with a larger cap once disk space allows, then re-train.
-4. Implement Phase 3 (deck co-occurrence): populate `decks` table from EDHREC data
-   and train `DeckConstructor` on commander → card-set ranking.
+BPR loss on (commander, positive card, random negative) triples.  Warm-started
+from phase2_best.  **Final loss: 0.5432** (94 decks from cardtrak import).
+
+- UUID[] psycopg2 bug: `card_ids` column returned as raw PG string.
+  Fixed with `ARRAY(SELECT unnest(card_ids)::text)` in `load_decks()`.
+
+### Phase 4 — DeckConstructor transformer decoder (2026-03-15, in progress)
+
+InfoNCE loss; transformer decoder cross-attends to commander embedding; 64
+random negatives per position; temperature=0.1.  Warm-started from phase3_best
+CardEncoder weights.  50 epochs, lr=1e-4.  Epoch 9 loss: **0.4684**.
 
 ---
 
