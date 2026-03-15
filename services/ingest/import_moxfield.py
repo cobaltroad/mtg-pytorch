@@ -52,6 +52,7 @@ import asyncio
 import json
 import logging
 import os
+import csv
 import re
 import sys
 from pathlib import Path
@@ -64,6 +65,28 @@ log = logging.getLogger(__name__)
 DATABASE_URL  = os.environ.get("DATABASE_URL", "")
 MOXFIELD_DIR  = Path(os.environ.get("MOXFIELD_DIR", "/data/moxfield"))
 DRY_RUN       = os.environ.get("MOXFIELD_DRY_RUN", "").strip() not in ("", "0")
+
+# ── Universe-beyond / alternate-name alias table ──────────────────────────────
+# Maps non-oracle card names (Secret Lair flavour names, LotR variants,
+# crossover products, etc.) to their canonical oracle names so decklists
+# using alternate names resolve without manual edits.
+_ALIAS_FILE = Path(__file__).parent / "card_name_aliases.csv"
+
+def _load_aliases() -> dict[str, str]:
+    """Return {lower(alternate_name): oracle_name} from card_name_aliases.csv."""
+    aliases: dict[str, str] = {}
+    if not _ALIAS_FILE.exists():
+        return aliases
+    with _ALIAS_FILE.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            alt = row["alternate_name"].strip()
+            oracle = row["oracle_name"].strip()
+            if alt and oracle:
+                aliases[alt.lower()] = oracle
+    return aliases
+
+NAME_ALIASES: dict[str, str] = _load_aliases()
+log.debug("Loaded %d card name aliases", len(NAME_ALIASES))
 
 # Sections whose card lines go into the maindeck
 MAIN_SECTIONS = {"mainboard", "deck"}
@@ -86,6 +109,8 @@ def _parse_card_line(raw_line: str) -> tuple[str, int] | None:
     name = _QTY_RE.sub("", line).strip()
     # Strip set/collector annotations Moxfield sometimes appends: " (MH2) 123"
     name = re.sub(r"\s+\([A-Z0-9]{2,6}\)\s*\d*$", "", name).strip()
+    # Translate universe-beyond / alternate names to oracle names
+    name = NAME_ALIASES.get(name.lower(), name)
     return (name, qty) if name else None
 
 

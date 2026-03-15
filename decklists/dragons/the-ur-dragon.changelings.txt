@@ -1,0 +1,107 @@
+1 Abundant Countryside
+1 Amoeboid Changeling
+1 Ancient Amphitheater
+1 Auntie's Hovel
+1 Black Market Connections
+1 Cateran Summons
+1 Changeling Outcast
+1 Changeling Wayfinder
+1 Choco, Seeker of Paradise
+1 Chomping Changeling
+1 City of Brass
+1 Cloudshredder Sliver
+1 Command Tower
+1 Concerted Defense
+1 Coveted Prize
+1 Crib Swap
+1 Eagle Vision
+1 Exotic Orchard
+1 Feisty Spikeling
+1 Firdoch Core
+1 Flamekin Village
+1 Flock Impostor
+1 Forbidden Orchard
+1 Forest
+1 Fortified Area
+1 Fortified Beachhead
+1 Gallifrey Council Chamber
+1 Gilt-Leaf Palace
+1 Greymond, Avacyn's Stalwart
+1 Griffin Canyon
+1 Hakoda, Selfless Commander
+1 Harabaz Druid
+1 Hidden Hideout
+1 Island
+1 Kibo, Uktabi Prince
+1 Liliana's Contract
+1 Magda, Brazen Outlaw
+1 Mana Confluence
+1 Masked Vandal
+1 Maskwood Nexus
+1 Merrow Reejerey
+1 Mirror Entity
+1 Mischievous Sneakling
+1 Morophon, the Boundless
+1 Mountain
+1 Mox Jasper
+1 Muerra, Trash Tactician
+1 Murmuring Bosk
+1 Mutable Explorer
+1 Mutavault
+1 Nimble Trapfinder
+1 Notorious Throng
+1 Oko, Lorwyn Liege
+1 Omni-Changeling
+1 Path of Ancestry
+1 Peer Pressure
+1 Plains
+1 Possibility Technician
+1 Priest of Titania
+1 Pyrogoyf
+1 Realmwalker
+1 Reaper King
+1 Reflecting Pool
+1 Rejuvenating Springs
+1 Risen Reef
+1 Rivaz of the Claw
+1 Sea of Clouds
+1 Secluded Courtyard
+1 Secluded Glen
+1 Shapesharer
+1 Silumgar, the Drifting Death
+1 Spectator Seating
+1 Spellstutter Sprite
+1 Stalactite Dagger
+1 Starting Town
+1 Summon: Leviathan
+1 Swamp
+1 Swarmyard
+1 Taurean Mauler
+1 The Bears of Littjara
+1 The World Tree
+1 Three Tree Mascot
+1 Throne of the Grim Captain
+1 Thrumming Hivepool
+1 Tiamat
+1 Torgal, A Fine Hound
+1 Tovolar, Dire Overlord
+1 Training Center
+1 Unclaimed Territory
+1 Undergrowth Stadium
+1 Universal Automaton
+1 Unsettled Mariner
+1 Urban Retreat
+1 Valiant Changeling
+1 Vault of Champions
+1 Viewpoint Synchronization
+1 Voja, Jaws of the Conclave
+1 Wanderwine Hub
+1 Yuriko, the Tiger's Shadow
+
+SIDEBOARD:
+1 Be'lakor, the Dark Master
+1 Call the Spirit Dragons
+1 Gornog, the Red Reaper
+1 Seraph Sanctuary
+
+1 The Ur-Dragon
