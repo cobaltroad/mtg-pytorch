@@ -1,0 +1,130 @@
+1 Allosaurus Shepherd
+1 Ancient Tomb
+1 Angel's Grace
+1 Arcane Signet
+1 Archdruid's Charm
+1 Archivist of Oghma
+1 Arid Mesa
+1 Aven Mindcensor
+1 Basking Broodscale
+1 Benevolent Bodyguard
+1 Birds of Paradise
+1 Blind Obedience
+1 Bloodstained Mire
+1 Boseiju, Who Endures
+1 Bountiful Promenade
+1 Bristly Bill, Spine Sower
+1 Chord of Calling
+1 Chrome Mox
+1 City of Brass
+1 Cliffside Rescuer
+1 Command Tower
+1 Dauntless Dismantler
+1 Deflecting Swat
+1 Delighted Halfling
+1 Destiny Spinner
+1 Drannith Magistrate
+1 Eladamri's Call
+1 Eldritch Evolution
+1 Elvish Spirit Guide
+1 Enduring Vitality
+1 Enlightened Tutor
+1 Esper Sentinel
+1 Exotic Orchard
+1 Finale of Devastation
+1 Flare of Fortitude
+1 Flooded Strand
+1 Forest
+1 Gaea's Cradle
+1 Galadriel's Dismissal
+1 Gamble
+1 Gemstone Caverns
+1 Giver of Runes
+1 Grand Abolisher
+1 Heliod, Sun-Crowned
+1 Invasion of Ikoria
+1 Karn, the Great Creator
+1 Kutzil, Malamet Exemplar
+1 Legolas's Quick Reflexes
+1 Linvala, Keeper of Silence
+1 Lotus Petal
+1 Mana Confluence
+1 Mana Vault
+1 Manglehorn
+1 Marsh Flats
+1 Misty Rainforest
+1 Mox Diamond
+1 Mox Opal
+1 Nature's Rhythm
+1 Path to Exile
+1 Plains
+1 Plateau
+1 Pyroblast
+1 Ragavan, Nimble Pilferer
+1 Ranger-Captain of Eos
+1 Rhythm of the Wild
+1 Rosie Cotton of South Lane
+1 Sacred Foundry
+1 Savage Summoning
+1 Savannah
+1 Scalding Tarn
+1 Shalai, Voice of Plenty
+1 Sigarda, Font of Blessings
+1 Silence
+1 Simian Spirit Guide
+1 Skrelv, Defector Mite
+1 Smothering Tithe
+1 Sol Ring
+1 Soulless Jailer
+1 Stomping Ground
+1 Survival of the Fittest
+1 Swords to Plowshares
+1 Sylvan Safekeeper
+1 Taiga
+1 Talisman of Conviction
+1 Talisman of Unity
+1 Tarnished Citadel
+1 Temple Garden
+1 The One Ring
+1 The Red Terror
+1 Time of Need
+1 Tinder Wall
+1 Touch the Spirit Realm
+1 Turntimber Symbiosis
+1 Verdant Catacombs
+1 Voice of Victory
+1 Walking Ballista
+1 Windswept Heath
+1 Wooded Foothills
+1 Worldly Tutor
+
+SIDEBOARD:
+1 Altar of Bone
+1 Aven Interrupter
+1 Bloom Tender
+1 Boromir, Warden of the Tower
+1 Bridgeworks Battle
+1 Deafening Silence
+1 Delney, Streetwise Lookout
+1 Earthcraft
+1 Endurance
+1 Eternal Witness
+1 Flawless Maneuver
+1 Formidable Speaker
+1 Managorger Hydra
+1 Monologue Tax
+1 Mother of Runes
+1 Orim's Chant
+1 Red Elemental Blast
+1 Redirect Lightning
+1 Rest in Peace
+1 Saffi Eriksdotter
+1 Scythecat Cub
+1 Solitude
+1 Spectacular Tactics
+1 Talisman of Impulse
+1 Tamiyo's Safekeeping
+1 The Cabbage Merchant
+1 War Elemental
+
+1 Shalai and Hallar

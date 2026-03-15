@@ -1,0 +1,97 @@
+1 Anguished Unmaking
+1 Arcane Signet
+1 Assassin's Trophy
+1 Biophagus
+1 Birds of Paradise
+1 Blighted Agent
+1 Bloated Contaminator
+1 Bountiful Promenade
+1 Breeding Pool
+1 Cankerbloom
+1 Champion of Lambholt
+1 Command Tower
+1 Contagion Clasp
+1 Contaminant Grafter
+1 Damn
+1 Deathcap Glade
+1 Dreamroot Cascade
+1 Elves of Deep Shadow
+1 Evolution Sage
+1 Ezuri, Stalker of Spheres
+1 Farseek
+1 Flensing Raptor
+1 Flesh-Eater Imp
+1 Flooded Strand
+4 Forest
+1 Giver of Runes
+1 Guardian Project
+1 Herald's Horn
+1 Hinterland Harbor
+1 Ichor Rats
+1 Indatha Triome
+1 Inexorable Tide
+1 Infectious Inquiry
+1 Inkmoth Nexus
+1 Innkeeper's Talent
+1 Island
+1 Ixhel, Scion of Atraxa
+1 Karn's Bastion
+1 Marsh Flats
+1 Metastatic Evangel
+1 Misty Rainforest
+1 Mother of Runes
+1 Nature's Lore
+1 Necrogen Rotpriest
+1 Noble Hierarch
+1 Nurturing Peatland
+1 Overgrown Farmland
+1 Overgrown Tomb
+1 Path of Ancestry
+1 Path to Exile
+1 Pestilent Syphoner
+1 Phyresis Outbreak
+1 Phyrexian Censor
+1 Phyrexian Crusader
+1 Phyrexian Swarmlord
+1 Plague Myr
+1 Plague Nurse
+1 Plague Stinger
+1 Plains
+1 Raffine's Tower
+1 Rampant Growth
+1 Rejuvenating Springs
+1 Silent Clearing
+1 Skithiryx, the Blight Dragon
+1 Skrelv, Defector Mite
+1 Sol Ring
+1 Spara's Headquarters
+1 Sunpetal Grove
+2 Swamp
+1 Swamp Mosquito
+1 Swords to Plowshares
+1 Tainted Observer
+1 Talisman of Curiosity
+1 Talisman of Resilience
+1 Talisman of Unity
+1 Tamiyo, Field Researcher
+1 Tear Asunder
+1 Temple Garden
+1 Three Visits
+1 Thrummingbird
+1 Tyrranax Rex
+1 Undergrowth Stadium
+1 Urborg, Tomb of Yawgmoth
+1 Venerated Rotpriest
+1 Verdant Catacombs
+1 Viral Drake
+1 Vishgraz, the Doomhive
+1 Voidwing Hybrid
+1 Vraska, Betrayal's Sting
+1 Vraska's Fall
+1 Whispering Specter
+1 Windswept Heath
+1 Woodland Cemetery
+1 Yavimaya, Cradle of Growth
+1 Zagoth Triome
+
+1 Atraxa, Praetors' Voice
