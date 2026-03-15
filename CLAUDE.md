@@ -205,6 +205,18 @@ from phase2_best.  **Final loss: 0.5432** (94 decks from cardtrak import).
 - UUID[] psycopg2 bug: `card_ids` column returned as raw PG string.
   Fixed with `ARRAY(SELECT unnest(card_ids)::text)` in `load_decks()`.
 
+### Phase 3 — rerun (2026-03-15)
+
+**Run ID:** `neat-donkey-26` (wandb project `edh-builder`)
+
+120 decks (94 cardtrak + 8 zombies + 9 tokens + 9 +1/+1 counters).  Also
+incorporated changeling-aware tribal synergy edges from the pipeline fix.
+30 epochs.  **Final loss: ~0.43** (stabilised).
+
+Previous run: 0.5432 on 94 decks → 0.43 on 120 decks — meaningful improvement
+from additional co-occurrence data.  Score compression remains (0.894–0.999
+cosine range across card pool); more decks needed to further separate embeddings.
+
 ### Phase 4 — DeckConstructor transformer decoder (2026-03-15, in progress)
 
 InfoNCE loss; transformer decoder cross-attends to commander embedding; 64
