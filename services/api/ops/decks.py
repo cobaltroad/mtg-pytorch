@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from uuid import UUID
 
 from sqlalchemy import text
@@ -13,6 +14,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+# ── Land budget constants ─────────────────────────────────────────────────────
+# Hypergeometric: with 36 lands in 99 cards, E[lands in opening 7] ≈ 2.55
+LAND_TARGET = 36
+SPELL_SLOTS = 99 - LAND_TARGET       # 63 model-scored non-land cards
+NONBASIC_LAND_CAP = 20               # max non-basic lands drawn from model scoring
+
+COLOR_TO_BASIC = {
+    "W": "Plains",
+    "U": "Island",
+    "B": "Swamp",
+    "R": "Mountain",
+    "G": "Forest",
+    "C": "Wastes",   # colorless commanders
+}
+
+
+def _count_pips(mana_cost: str | None) -> dict[str, int]:
+    """Count color pips in a mana cost string like {2}{W}{W}{B}."""
+    pips: dict[str, int] = {}
+    for ch in re.findall(r"\{([WUBRG])\}", mana_cost or ""):
+        pips[ch] = pips.get(ch, 0) + 1
+    return pips
 
 
 def _sync_db_url(db_url: str) -> str:
@@ -81,10 +105,35 @@ async def generate(
                 )
 
                 if scored:
-                    top_ids = [cid for cid, _ in scored[:99]]
-                    top_scores = {cid: sc for cid, sc in scored[:99]}
+                    # ── Land/spell partitioning ───────────────────────────────
+                    type_lines = await loop.run_in_executor(
+                        None, inference.get_type_lines, db_url
+                    )
 
-                    # Fetch card metadata for top 99
+                    def _is_land(cid: str) -> bool:
+                        return "Land" in type_lines.get(cid, "")
+
+                    def _is_basic(cid: str) -> bool:
+                        tl = type_lines.get(cid, "")
+                        return "Basic" in tl and "Land" in tl
+
+                    nonbasic_scored = [
+                        (cid, sc) for cid, sc in scored
+                        if _is_land(cid) and not _is_basic(cid)
+                    ]
+                    spell_scored = [
+                        (cid, sc) for cid, sc in scored if not _is_land(cid)
+                    ]
+
+                    selected_spells = spell_scored[:SPELL_SLOTS]
+                    selected_nonbasics = nonbasic_scored[:NONBASIC_LAND_CAP]
+                    basic_needed = LAND_TARGET - len(selected_nonbasics)
+
+                    # Fetch metadata for spells + non-basic lands
+                    fetch_ids = (
+                        [cid for cid, _ in selected_spells]
+                        + [cid for cid, _ in selected_nonbasics]
+                    )
                     card_result = await db.execute(
                         text("""
                             SELECT id::text, oracle_id, name, type_line, oracle_text,
@@ -92,27 +141,95 @@ async def generate(
                             FROM cards
                             WHERE id::text = ANY(:ids)
                         """),
-                        {"ids": top_ids},
+                        {"ids": fetch_ids},
                     )
-                    card_rows = card_result.fetchall()
-                    card_map = {str(r[0]): r for r in card_rows}
+                    card_map = {str(r[0]): r for r in card_result.fetchall()}
 
-                    # Preserve score ordering
+                    # ── Basic land distribution by mana pip ratios ────────────
+                    commander_colors = [c for c in color_identity if c in COLOR_TO_BASIC]
+                    if not commander_colors:
+                        # Colorless commander — fill with Wastes
+                        commander_colors = ["C"]
+                    pip_totals: dict[str, int] = {}
+                    for cid, _ in selected_spells:
+                        if cid in card_map:
+                            for color, cnt in _count_pips(card_map[cid][6]).items():
+                                pip_totals[color] = pip_totals.get(color, 0) + cnt
+
+                    relevant_pips = {c: pip_totals.get(c, 1) for c in commander_colors}
+                    total_pips = sum(relevant_pips.values()) or 1
+
+                    basic_counts: dict[str, int] = {}
+                    if commander_colors and basic_needed > 0:
+                        allocated = 0
+                        for color in commander_colors:
+                            cnt = int((relevant_pips[color] / total_pips) * basic_needed)
+                            basic_counts[color] = cnt
+                            allocated += cnt
+                        remainder = basic_needed - allocated
+                        for color in sorted(commander_colors, key=lambda c: relevant_pips[c], reverse=True):
+                            if remainder <= 0:
+                                break
+                            basic_counts[color] += 1
+                            remainder -= 1
+
+                    # Fetch one representative row per basic land type needed
+                    basic_names = [
+                        COLOR_TO_BASIC[c] for c in commander_colors
+                        if basic_counts.get(c, 0) > 0
+                    ]
+                    basic_rows: dict[str, tuple] = {}
+                    if basic_names:
+                        basic_result = await db.execute(
+                            text("""
+                                SELECT DISTINCT ON (name)
+                                    name, id::text, oracle_id, type_line, oracle_text,
+                                    color_identity, mana_cost, cmc
+                                FROM cards
+                                WHERE name = ANY(:names)
+                                ORDER BY name, id
+                            """),
+                            {"names": basic_names},
+                        )
+                        basic_rows = {r[0]: r for r in basic_result.fetchall()}
+
+                    # ── Assemble final deck ───────────────────────────────────
                     cards = []
                     scores = []
-                    for cid in top_ids:
+
+                    for cid, sc in selected_spells:
                         if cid in card_map:
                             r = card_map[cid]
                             cards.append({
-                                "oracle_id": r[1],
-                                "name": r[2],
-                                "type_line": r[3],
-                                "oracle_text": r[4],
-                                "color_identity": r[5] or [],
-                                "mana_cost": r[6],
-                                "cmc": r[7],
+                                "oracle_id": r[1], "name": r[2], "type_line": r[3],
+                                "oracle_text": r[4], "color_identity": r[5] or [],
+                                "mana_cost": r[6], "cmc": r[7], "count": 1,
                             })
-                            scores.append(float(top_scores[cid]))
+                            scores.append(float(sc))
+
+                    for cid, sc in selected_nonbasics:
+                        if cid in card_map:
+                            r = card_map[cid]
+                            cards.append({
+                                "oracle_id": r[1], "name": r[2], "type_line": r[3],
+                                "oracle_text": r[4], "color_identity": r[5] or [],
+                                "mana_cost": r[6], "cmc": r[7], "count": 1,
+                            })
+                            scores.append(float(sc))
+
+                    for color in commander_colors:
+                        cnt = basic_counts.get(color, 0)
+                        if cnt <= 0:
+                            continue
+                        name = COLOR_TO_BASIC[color]
+                        if name in basic_rows:
+                            r = basic_rows[name]
+                            cards.append({
+                                "oracle_id": r[2], "name": r[0], "type_line": r[3],
+                                "oracle_text": r[4], "color_identity": r[5] or [],
+                                "mana_cost": r[6], "cmc": r[7], "count": cnt,
+                            })
+                            scores.append(0.0)
 
                     # Resolve context card names for the response
                     context_names: list[str] = []

@@ -31,6 +31,7 @@ CHECKPOINT_DIR = Path(os.environ.get("MODEL_CHECKPOINT_DIR", "/app/checkpoints")
 _model_cache: dict[str, DeckConstructor] = {}
 _embeddings_cache: dict[str, dict[str, np.ndarray]] = {}   # keyed by db_url
 _color_cache: dict[str, dict[str, frozenset]] = {}          # keyed by db_url
+_type_line_cache: dict[str, dict[str, str]] = {}            # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
 
 
@@ -157,6 +158,23 @@ def get_color_identities(db_url: str) -> dict[str, frozenset]:
 
     log.info("Loaded color identities for %d cards", len(result))
     _color_cache[db_url] = result
+    return result
+
+
+def get_type_lines(db_url: str) -> dict[str, str]:
+    """Return {card_id: type_line} for all cards. Cached."""
+    if db_url in _type_line_cache:
+        return _type_line_cache[db_url]
+
+    log.info("Loading type lines from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id::text, type_line FROM cards")
+            rows = cur.fetchall()
+
+    result: dict[str, str] = {card_id: (type_line or "") for card_id, type_line in rows}
+    log.info("Loaded type lines for %d cards", len(result))
+    _type_line_cache[db_url] = result
     return result
 
 

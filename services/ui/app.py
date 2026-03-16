@@ -147,9 +147,20 @@ with tab_deck:
                         "Add decklists in the **Import Decklist** tab to improve accuracy."
                     )
 
+                # ── Deck summary stats ────────────────────────────────────────
+                land_count = sum(
+                    c.get("count", 1) for c in deck["cards"]
+                    if "Land" in c.get("type_line", "")
+                )
+                total_count = sum(c.get("count", 1) for c in deck["cards"])
+                col1, col2 = st.columns(2)
+                col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
+                col2.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
+
                 # ── Deck table sorted by score ────────────────────────────────
                 rows = [
                     {
+                        "count": c.get("count", 1),
                         "name": c["name"],
                         "type_line": c.get("type_line", ""),
                         "mana_cost": c.get("mana_cost", ""),
@@ -158,12 +169,15 @@ with tab_deck:
                     }
                     for c, s in zip(deck["cards"], deck["scores"])
                 ]
-                df = pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
+                df = pd.DataFrame(rows).sort_values(
+                    ["score"], ascending=False
+                ).reset_index(drop=True)
                 st.dataframe(
                     df,
                     use_container_width=True,
                     height=600,
                     column_config={
+                        "count": st.column_config.NumberColumn("#", width="small"),
                         "score": st.column_config.NumberColumn("Score", format="%.4f"),
                     },
                 )
