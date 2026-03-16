@@ -31,6 +31,7 @@ services:
     volumes:
       - ./services/api:/app:cached
       - model_checkpoints:/app/checkpoints:ro
+      - ./services/ingest/card_name_aliases.csv:/app/card_name_aliases.csv:ro
     depends_on:
       db:
         condition: service_healthy
