@@ -10,7 +10,8 @@ Sub-modules, each covering one broad theme:
                         ``lifegain_total``) and their producer SQL fragments.
 * :mod:`deckbuilding` — cross-archetype deckbuilding themes (equipment,
                         legendary, graveyard, +1/+1 counters, artifacts,
-                        modified, aura, proliferate, skullclamp).
+                        modified, aura, proliferate, skullclamp,
+                        play_from_exile).
 * :mod:`tribal`      — dynamically generated tribal patterns for all tribes
                         in :data:`TRIBES`, including Zombie/Angel cross-synergy
                         overrides.

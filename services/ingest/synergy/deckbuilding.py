@@ -108,6 +108,22 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         "Proliferate matters",
         "proliferate_matters",
     ),
+
+    # Play-from-exile / impulse-draw payoffs
+    # Covers: cast-from-exile triggers (Laelia, Birgi/Harnfel), the paradox keyword and
+    # its explicit wording ("from anywhere other than your hand") used in the Dr Who set
+    # (e.g. The Thirteenth Doctor), cascade/discover payoffs (Faldorn Dread Wolf Herald,
+    # Abaddon the Despoiler), and any card that explicitly rewards casting from exile.
+    (
+        r"when(ever)?\s+(you )?cast .{0,60}from exile"
+        r"|when(ever)?\s+(you )?cast .{0,60}exiled (this way|with )"
+        r"|\bparadox\b"
+        r"|when(ever)?\s+(you )?cast .{0,70}from anywhere other than your hand"
+        r"|when(ever)?\s+(you )?cast .{0,60}(a spell with cascade|a cascading spell)"
+        r"|when(ever)?\s+(you )?cast .{0,60}\bwith cascade\b",
+        "Play from exile / cascade payoff",
+        "play_from_exile",
+    ),
 ]
 
 # ── Producer map ──────────────────────────────────────────────────────────────
@@ -238,5 +254,26 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%poison counter%'"
         " OR lower(oracle_text) LIKE '%-1/-1 counter%'"
         " OR lower(type_line) LIKE '%planeswalker%'"
+    ),
+
+    # Play-from-exile producers: cards that create windows to cast from exile.
+    # Includes impulse-draw effects (exile top of library + "you may play this turn"),
+    # cascade (exile until a lower-CMC card is found and cast it), discover (similar
+    # to cascade), and any other "exile and cast/play" mechanics.
+    "play_from_exile": (
+        # Impulse draw: exile top of library with a timed "you may play/cast" window
+        "lower(oracle_text) LIKE '%exile the top%you may%play%'"
+        " OR lower(oracle_text) LIKE '%exile the top%you may%cast%'"
+        " OR lower(oracle_text) LIKE '%exile%top%card%you may%play%'"
+        " OR lower(oracle_text) LIKE '%exile%top%card%you may%cast%'"
+        # Timed windows expressed as "until end of turn" or "this turn"
+        " OR lower(oracle_text) LIKE '%exile%you may play%this turn%'"
+        " OR lower(oracle_text) LIKE '%exile%you may play%until%'"
+        " OR lower(oracle_text) LIKE '%exile%you may cast%this turn%'"
+        " OR lower(oracle_text) LIKE '%exile%you may cast%until%'"
+        # Cascade keyword (exiles until lower-CMC card found, then casts it for free)
+        " OR 'Cascade' = ANY(keywords)"
+        # Discover keyword (similar to cascade; exile until you find CMC ≤ N, cast for free)
+        " OR 'Discover' = ANY(keywords)"
     ),
 }
