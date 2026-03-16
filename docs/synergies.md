@@ -98,6 +98,72 @@ Both consumer patterns map to the **same** `spell_cast` trigger event.
 
 ---
 
+## Lifegain Threshold (`lifegain_threshold`)
+
+End-step payoffs that check **cumulative life gained this turn** rather than reacting to individual gain events.
+
+| Consumer regex | Producer SQL |
+|---|---|
+| "if you gained \d+ or more life this turn" | `you gain % life`, `gain life`, `gains life`, `lifelink`, `life equal to`, `create % food %`, `food token` |
+
+**Example consumers:** Resplendent Angel ("if you gained 5 or more life this turn, create a 4/4 Angel"), Angelic Accord ("if you gained 4 or more life this turn, create a 4/4 Angel"), Valkyrie Harbinger, Dawn of Hope.
+
+**Producer pool:** All direct lifegain sources (same as `lifegain`) **plus Food token creators**. Each Food token has the intrinsic ability "Sacrifice this artifact: You gain 3 life." — it is the *token* that gains the life, not the creator card directly. Creator cards are matched because the tokens they produce are what ultimately enable the 3-life gain. Two Food tokens clear every standard threshold (4 for Angelic Accord / Valkyrie Harbinger, 5 for Resplendent Angel); a single Food already satisfies any "if you gained 3 or more life" payoff. Food creators (Gilded Goose, Trail of Crumbs, etc.) are therefore first-class producers for this event even though they do not gain life directly.
+
+**Lifegain cascade chain:** The real power of `lifegain_threshold` is a multi-step feedback loop driven by token generators, Soul Sisters, and Angel-ETB payoffs:
+
+```
+[token generator]       --creature_etb-->   Soul Warden / Soul's Attendant
+                                              (creature_etb consumer → gains 1 life per ETB)
+
+Soul Warden             --lifegain_threshold-->  Angelic Accord / Resplendent Angel
+                                              (lifegain_threshold consumer → creates Angel token)
+
+[Angel token ETB]       --tribal_angel_etb-->  Bishop of Wings / Righteous Valkyrie
+                                              (tribal_angel_etb consumer → gains 2 life)
+
+Bishop of Wings         --lifegain_threshold-->  Angelic Accord / Resplendent Angel
+                                              (loop: more Angels → more life → more Angels)
+```
+
+- **Soul Warden / Soul's Attendant**: tagged as `creature_etb` **consumers** ("Whenever another creature enters the battlefield, you gain 1 life") and `lifegain` **producers** (the gained life accumulates toward the threshold). They pair directly with a deck's own token-generating abilities — every token that enters triggers a lifegain event.
+- **Angelic Accord / Resplendent Angel**: tagged as `lifegain_threshold` **consumers**. When the cumulative threshold is met at end step, they create Angel tokens with lifelink, re-feeding the loop.
+- **Bishop of Wings / Righteous Valkyrie**: tagged as `tribal_angel_etb` **consumers** and `lifegain` **producers** — each Angel token entering triggers 2 more life, which can re-satisfy the threshold for another token next turn.
+
+**Tuning notes:** The threshold condition is evaluated at the end step; the consumer pattern fires at tagging time regardless of the actual cumulative total. This is intentional — whether a deck regularly gains 4+ life per turn is a deck-construction question, not an individual-card question.
+
+---
+
+## Lifegain Replacement (`lifegain_replacement`)
+
+Replacement effects that intercept a lifegain event and modify its amount — distinct from triggered responses (which fire *after* the gain) and threshold checks (which fire *once per turn at end step*).
+
+| Consumer regex | Producer SQL |
+|---|---|
+| "if you would gain life" | `you gain % life`, `gain life`, `gains life`, `lifelink`, `life equal to` |
+
+**Example consumers:** Angel of Vitality ("If you would gain life, you gain that much life plus 1 instead"), Boon Reflection ("If you would gain life, you gain twice that much life instead"), Rhox Faithmender (same doubling template).
+
+**Producer pool:** Any direct lifegain source — the replacement fires whenever *any* life is gained, so all `_LIFEGAIN_PRODUCER_SQL` cards are valid producers.
+
+---
+
+## Life Total Threshold (`lifegain_total`)
+
+Static or end-step abilities that check your **current life total** (rather than life gained since last turn) against an absolute number or your starting life total.
+
+| Consumer regex | Producer SQL |
+|---|---|
+| "if you have \d+ or more life" / "more than your starting life total" / "greater than your starting life total" | `you gain % life`, `gain life`, `gains life`, `lifelink`, `life equal to` |
+
+**Example consumers:**
+- Serra Ascendant ("As long as you have 30 or more life, Serra Ascendant gets +5/+5 and has flying.")
+- Angel of Destiny ("At the beginning of each end step, if your life total is greater than your starting life total, each opponent with life equal to or less than that much life loses the game.")
+
+**Producer pool:** Any direct lifegain source that raises the life total — same as `lifegain`. The higher your total, the more likely a threshold or comparison resolves in your favour.
+
+---
+
 ## Landfall (`landfall`)
 
 | Consumer regex | Producer SQL |
