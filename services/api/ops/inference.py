@@ -33,6 +33,7 @@ _embeddings_cache: dict[str, dict[str, np.ndarray]] = {}   # keyed by db_url
 _color_cache: dict[str, dict[str, frozenset]] = {}          # keyed by db_url
 _type_line_cache: dict[str, dict[str, str]] = {}            # keyed by db_url
 _cmc_cache: dict[str, dict[str, float]] = {}                # keyed by db_url
+_ramp_cache: dict[str, tuple[frozenset, dict]] = {}         # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
 
 
@@ -193,6 +194,44 @@ def get_cmc_map(db_url: str) -> dict[str, float]:
     result: dict[str, float] = {card_id: float(cmc or 0) for card_id, cmc in rows}
     log.info("Loaded CMC for %d cards", len(result))
     _cmc_cache[db_url] = result
+    return result
+
+
+def get_ramp_info(db_url: str) -> tuple[frozenset, dict[str, str]]:
+    """Return (ramp_ids, guaranteed) for non-land mana-producing cards.
+
+    ramp_ids: frozenset of card_ids whose oracle text contains '{T}: Add'
+              (permanent mana sources — rocks, dorks, mana-producing lands
+              are excluded via the type_line filter).
+    guaranteed: {name: card_id} for Sol Ring and Arcane Signet specifically,
+                used to force-include them regardless of model score.
+    """
+    if db_url in _ramp_cache:
+        return _ramp_cache[db_url]
+
+    log.info("Loading ramp card IDs from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id::text, name
+                FROM cards
+                WHERE type_line NOT ILIKE '%Land%'
+                  AND oracle_text ILIKE '%{T}: Add%'
+                  AND legalities->>'commander' = 'legal'
+                """
+            )
+            rows = cur.fetchall()
+
+    ramp_ids: frozenset = frozenset(card_id for card_id, _ in rows)
+    guaranteed: dict[str, str] = {}
+    for card_id, name in rows:
+        if name in ("Sol Ring", "Arcane Signet") and name not in guaranteed:
+            guaranteed[name] = card_id
+
+    log.info("Found %d ramp cards (%d guaranteed)", len(ramp_ids), len(guaranteed))
+    result = (ramp_ids, guaranteed)
+    _ramp_cache[db_url] = result
     return result
 
 

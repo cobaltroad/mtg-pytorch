@@ -31,6 +31,10 @@ COLOR_TO_BASIC = {
 }
 
 
+# ── Ramp budget ──────────────────────────────────────────────────────────────
+RAMP_TARGET = 10                              # guaranteed non-land mana sources
+GUARANTEED_RAMP = ("Sol Ring", "Arcane Signet")  # always include when available
+
 # ── Mana curve targets ────────────────────────────────────────────────────────
 # Each entry is (cmc_upper_bound_inclusive, target_slot_count).
 # Bounds are checked in order; the last bucket is a catch-all for CMC 6+.
@@ -128,11 +132,15 @@ async def generate(
                 )
 
                 if scored:
-                    # ── Land/spell partitioning ───────────────────────────────
-                    type_lines, cmc_map = await asyncio.gather(
-                        loop.run_in_executor(None, inference.get_type_lines, db_url),
-                        loop.run_in_executor(None, inference.get_cmc_map, db_url),
-                    )
+                    # ── Lookup tables (fetched in parallel) ───────────────────
+                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp) = \
+                        await asyncio.gather(
+                            asyncio.gather(
+                                loop.run_in_executor(None, inference.get_type_lines, db_url),
+                                loop.run_in_executor(None, inference.get_cmc_map, db_url),
+                            ),
+                            loop.run_in_executor(None, inference.get_ramp_info, db_url),
+                        )
 
                     def _is_land(cid: str) -> bool:
                         return "Land" in type_lines.get(cid, "")
@@ -149,30 +157,59 @@ async def generate(
                         (cid, sc) for cid, sc in scored if not _is_land(cid)
                     ]
 
-                    # ── Mana curve enforcement ────────────────────────────────
-                    # Partition spell candidates into CMC buckets (score-ordered),
-                    # fill each to its target, then distribute any deficit slots
-                    # to the highest-scoring cards that didn't fit their own bucket.
+                    # ── Ramp selection ────────────────────────────────────────
+                    # Force Sol Ring + Arcane Signet in first, then fill to
+                    # RAMP_TARGET from top-scored ramp candidates.
+                    score_lookup = {cid: sc for cid, sc in spell_scored}
+
+                    selected_ramp: list[tuple[str, float]] = []
+                    for name in GUARANTEED_RAMP:
+                        cid = guaranteed_ramp.get(name)
+                        if cid and cid in score_lookup:
+                            selected_ramp.append((cid, score_lookup[cid]))
+
+                    preselected_ids = {cid for cid, _ in selected_ramp}
+                    ramp_candidates = [
+                        (cid, sc) for cid, sc in spell_scored
+                        if cid in ramp_ids and cid not in preselected_ids
+                    ]
+                    remaining = RAMP_TARGET - len(selected_ramp)
+                    selected_ramp.extend(ramp_candidates[:remaining])
+                    selected_ramp_ids = {cid for cid, _ in selected_ramp}
+
+                    # ── Mana curve enforcement (ramp-aware) ───────────────────
+                    # Ramp cards consume slots in their natural CMC bucket;
+                    # non-ramp spells fill the remainder of each bucket target.
+                    ramp_bucket_fill: dict[int, int] = {}
+                    for cid, _ in selected_ramp:
+                        b = _curve_bucket(cmc_map.get(cid, 0.0))
+                        ramp_bucket_fill[b] = ramp_bucket_fill.get(b, 0) + 1
+
+                    non_ramp_scored = [
+                        (cid, sc) for cid, sc in spell_scored
+                        if cid not in ramp_ids
+                    ]
                     buckets: list[list[tuple[str, float]]] = [
                         [] for _ in CURVE_BUCKETS
                     ]
-                    for cid, sc in spell_scored:
+                    for cid, sc in non_ramp_scored:
                         b = _curve_bucket(cmc_map.get(cid, 0.0))
                         buckets[b].append((cid, sc))
 
-                    selected_spells: list[tuple[str, float]] = []
+                    selected_non_ramp: list[tuple[str, float]] = []
                     overflow: list[tuple[str, float]] = []
                     deficit = 0
                     for b, (_, target) in enumerate(CURVE_BUCKETS):
-                        selected_spells.extend(buckets[b][:target])
-                        overflow.extend(buckets[b][target:])
-                        if len(buckets[b]) < target:
-                            deficit += target - len(buckets[b])
+                        adjusted = max(0, target - ramp_bucket_fill.get(b, 0))
+                        selected_non_ramp.extend(buckets[b][:adjusted])
+                        overflow.extend(buckets[b][adjusted:])
+                        if len(buckets[b]) < adjusted:
+                            deficit += adjusted - len(buckets[b])
 
-                    # Fill deficit with best-scoring cards from other buckets
                     overflow.sort(key=lambda x: x[1], reverse=True)
-                    selected_spells.extend(overflow[:deficit])
-                    selected_spells = selected_spells[:SPELL_SLOTS]
+                    selected_non_ramp.extend(overflow[:deficit])
+
+                    selected_spells = (selected_ramp + selected_non_ramp)[:SPELL_SLOTS]
 
                     selected_nonbasics = nonbasic_scored[:NONBASIC_LAND_CAP]
                     basic_needed = LAND_TARGET - len(selected_nonbasics)
@@ -252,6 +289,7 @@ async def generate(
                                 "oracle_id": r[1], "name": r[2], "type_line": r[3],
                                 "oracle_text": r[4], "color_identity": r[5] or [],
                                 "mana_cost": r[6], "cmc": r[7], "count": 1,
+                                "is_ramp": cid in selected_ramp_ids,
                             })
                             scores.append(float(sc))
 

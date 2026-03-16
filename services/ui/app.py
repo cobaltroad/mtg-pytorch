@@ -153,9 +153,14 @@ with tab_deck:
                     if "Land" in c.get("type_line", "")
                 )
                 total_count = sum(c.get("count", 1) for c in deck["cards"])
-                col1, col2 = st.columns(2)
+                ramp_count = sum(
+                    c.get("count", 1) for c in deck["cards"]
+                    if c.get("is_ramp", False)
+                )
+                col1, col2, col3 = st.columns(3)
                 col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
-                col2.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
+                col2.metric("Ramp", str(ramp_count))
+                col3.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
 
                 # ── Mana curve bar chart ──────────────────────────────────────
                 spells = [
