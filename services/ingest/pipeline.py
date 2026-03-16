@@ -348,6 +348,8 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     (r"when(ever)?\s+(you )?sacrifice", "Sacrifice trigger", "sacrifice"),
 
     # ── Deckbuilding themes ────────────────────────────────────────────────────
+    # Skullclamp proxy: equipment that drains toughness to zero on a 1/1 → dies, draw 2
+    (r"equipped creature gets \+\S+/-1", "Skullclamp toughness-drain", "skullclamp_target"),
     # Equipment: payoffs, cost-reducers, and auto-attachers
     (r"equipped creature (gets?|gains?|has|deals?)"
      r"|when(ever)?\s+(an )?equipment.{0,30}enters"
@@ -653,6 +655,14 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%sacrifice a permanent%'"
         " OR lower(oracle_text) LIKE '%sacrifice target%'"
         " OR lower(oracle_text) LIKE '%sacrifice:%'"
+    ),
+    # 1-toughness token generators — natural Skullclamp targets (proxy/indirect synergy edge)
+    # Only toughness matters: any X/1 token dies immediately when Skullclamp's -1 toughness is applied.
+    "skullclamp_target": (
+        "lower(oracle_text) LIKE '%create%/1 %token%'"
+        " OR lower(oracle_text) LIKE '%creates%/1 %token%'"
+        " OR lower(oracle_text) LIKE '%put a%/1 %token%'"
+        " OR lower(oracle_text) LIKE '%put%/1%creature token%'"
     ),
 
     # ── Deckbuilding themes ────────────────────────────────────────────────────

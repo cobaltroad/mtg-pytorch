@@ -54,7 +54,9 @@ This means Skullclamp's *real* synergy partners are:
 
 **The problem**: No regex pattern can capture "this card wants cheap creatures to die". The synergy is emergent — it requires the model to see Skullclamp co-piloted with token generators and sacrifice effects across many decklists.
 
-**Fix**: Add 50+ Aristocrats/Token decks that include Skullclamp. The model will then learn that Skullclamp clusters with those archetypes rather than vanilla equipment payoffs.
+- [ ] **Data**: Add 50+ Aristocrats/Token decklists (Teysa Karlov, Meren, Rhys the Redeemed, Adeline, etc.) that include Skullclamp so the model sees it clustering with token generators.
+- [x] **Synergy edge (proxy)**: Added `skullclamp_target` event — producer = 1/1 token generators; consumer = Skullclamp (`equipped creature gets +\S+/-1`). See `services/ingest/pipeline.py` and [Issue #2](https://github.com/cobaltroad/mtg-pytorch/issues/2).
+- [ ] **Eval**: After adding decks, run `eval_synergy.py` for Skullclamp and verify nearest neighbours include token generators (Raise the Alarm, Krenko, etc.) not generic equipment payoffs.
 
 ### Wilhelt: Type Line Tribal Signal
 
