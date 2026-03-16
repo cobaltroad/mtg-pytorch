@@ -134,6 +134,36 @@ Bishop of Wings         --lifegain_threshold-->  Angelic Accord / Resplendent An
 
 ---
 
+## Lifegain Replacement (`lifegain_replacement`)
+
+Replacement effects that intercept a lifegain event and modify its amount — distinct from triggered responses (which fire *after* the gain) and threshold checks (which fire *once per turn at end step*).
+
+| Consumer regex | Producer SQL |
+|---|---|
+| "if you would gain life" | `you gain % life`, `gain life`, `gains life`, `lifelink`, `life equal to` |
+
+**Example consumers:** Angel of Vitality ("If you would gain life, you gain that much life plus 1 instead"), Boon Reflection ("If you would gain life, you gain twice that much life instead"), Rhox Faithmender (same doubling template).
+
+**Producer pool:** Any direct lifegain source — the replacement fires whenever *any* life is gained, so all `_LIFEGAIN_PRODUCER_SQL` cards are valid producers.
+
+---
+
+## Life Total Threshold (`lifegain_total`)
+
+Static or end-step abilities that check your **current life total** (rather than life gained since last turn) against an absolute number or your starting life total.
+
+| Consumer regex | Producer SQL |
+|---|---|
+| "if you have \d+ or more life" / "more than your starting life total" / "greater than your starting life total" | `you gain % life`, `gain life`, `gains life`, `lifelink`, `life equal to` |
+
+**Example consumers:**
+- Serra Ascendant ("As long as you have 30 or more life, Serra Ascendant gets +5/+5 and has flying.")
+- Angel of Destiny ("At the beginning of each end step, if your life total is greater than your starting life total, each opponent with life equal to or less than that much life loses the game.")
+
+**Producer pool:** Any direct lifegain source that raises the life total — same as `lifegain`. The higher your total, the more likely a threshold or comparison resolves in your favour.
+
+---
+
 ## Landfall (`landfall`)
 
 | Consumer regex | Producer SQL |

@@ -343,6 +343,12 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     # Lifegain threshold: end-step payoffs that check cumulative life gained this turn
     # (Resplendent Angel, Angelic Accord, Valkyrie Harbinger, Dawn of Hope, etc.)
     (r"if you gained \d+ or more life this turn", "Lifegain threshold trigger", "lifegain_threshold"),
+    # Lifegain replacement effects: "If you would gain life" doublers/modifiers
+    # (Angel of Vitality, Boon Reflection, Rhox Faithmender, etc.)
+    (r"if you would gain life", "Lifegain replacement effect", "lifegain_replacement"),
+    # Life total threshold: static or end-step checks against current life total
+    # "if you have 30 or more life" (Serra Ascendant) or "more than your starting life total" (Angel of Destiny)
+    (r"if you have \d+ or more life|more than your starting life total|greater than your starting life total", "Life total threshold", "lifegain_total"),
     (r"when(ever)?\s+a land enters", "Landfall trigger", "landfall"),
     (r"when(ever)?\s+(you |a player |an opponent )discard", "Discard trigger", "discard"),
     (r"when(ever)?\s+(you )?create.{0,30}token", "Token creation trigger", "token_creation"),
@@ -635,6 +641,14 @@ PRODUCER_MAP: dict[str, str] = {
     # Consumers: Resplendent Angel, Angelic Accord, Valkyrie Harbinger, and similar
     # "if you gained N or more life this turn" end-step payoffs.
     "lifegain_threshold": _LIFEGAIN_THRESHOLD_PRODUCER_SQL,
+    # Lifegain replacement effects: cards that modify how much life is gained.
+    # Consumers: Angel of Vitality, Boon Reflection, Rhox Faithmender, and similar
+    # "if you would gain life, you gain that much life plus N instead" effects.
+    "lifegain_replacement": _LIFEGAIN_PRODUCER_SQL,
+    # Life total threshold: cards that check current life total rather than life gained.
+    # Consumers: Serra Ascendant ("if you have 30 or more life"), Angel of Destiny
+    # ("more than your starting life total"), and similar static or end-step checks.
+    "lifegain_total": _LIFEGAIN_PRODUCER_SQL,
     # Cards that put lands into play (fetch effects, ramp spells)
     "landfall": (
         "lower(oracle_text) LIKE '%search your library for a%land%'"
