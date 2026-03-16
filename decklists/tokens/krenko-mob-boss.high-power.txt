@@ -1,0 +1,75 @@
+1 Andúril, Narsil Reforged
+1 Anger
+1 Arcane Signet
+1 Arena of Glory
+1 Ashnod's Altar
+1 Battle Hymn
+1 Blood Moon
+1 Brash Taunter
+1 Brightstone Ritual
+1 Broadside Bombardiers
+1 Coat of Arms
+1 Commander's Plate
+1 Conspicuous Snoop
+1 Cow-tapult
+1 Enterprising Scallywag
+1 Fable of the Mirror-Breaker
+1 Faithless Looting
+1 Gamble
+1 Goblin Bushwhacker
+1 Goblin Charbelcher
+1 Goblin Chieftain
+1 Goblin King
+1 Goblin Lackey
+1 Goblin Matron
+1 Goblin Recruiter
+1 Goblin Ringleader
+1 Goblin Sharpshooter
+1 Goblin Trashmaster
+1 Goblin War Strike
+1 Goblin Welder
+1 Grenzo, Havoc Raiser
+1 Hanweir Battlements
+1 Herald's Horn
+1 Hobgoblin Bandit Lord
+1 Idol of Oblivion
+1 Illusionist's Bracers
+1 Impact Tremors
+1 Imperial Recruiter
+1 Kiki-Jiki, Mirror Breaker
+1 Kindred Charge
+1 Krenko, Tin Street Kingpin
+1 Legion Warboss
+1 Lightning Greaves
+1 Metallic Mimic
+1 Mind Stone
+30 Mountain
+1 Muxus, Goblin Grandee
+1 Purphoros, God of the Forge
+1 Ragavan, Nimble Pilferer
+1 Return the Favor
+1 Rising of the Day
+1 Ruby Medallion
+1 Searslicer Goblin
+1 Shared Animosity
+1 Shatterskull Smashing
+1 Siege-Gang Commander
+1 Simian Spirit Guide
+1 Skirk Prospector
+1 Skullclamp
+1 Sol Ring
+1 Squee, the Immortal
+1 Staff of Domination
+1 Sting, the Glinting Dagger
+1 Swiftfoot Boots
+1 Three Tree City
+1 Throne of Eldraine
+1 Treasure Nabber
+1 Twisted Fealty
+1 Vandalblast
+1 Zealous Conscripts
+
+SIDEBOARD:
+1 Eldrazi Monument
+
+1 Krenko, Mob Boss
