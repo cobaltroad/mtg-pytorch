@@ -1,0 +1,119 @@
+1 Adeline, Resplendent Cathar
+1 Anointed Procession
+1 Arcane Signet
+1 Ashnod's Altar
+1 Astarion's Thirst
+1 Banner of Kinship
+1 Bartolomé del Presidio
+1 Bastion of Remembrance
+1 Bitterbloom Bearer
+1 Bitterblossom
+1 Black Market Connections
+1 Blackblade Reforged
+1 Blade of the Bloodchief
+1 Blood Artist
+1 Bloodline Keeper
+1 Cabal Coffers
+1 Call the Coppercoats
+1 Castle Ardenvale
+1 Champion of Dusk
+1 Charismatic Conqueror
+1 Command Tower
+1 Cordial Vampire
+1 Corpse Knight
+1 Cruel Celebrant
+1 Dalkovan Encampment
+1 Elenda's Hierophant
+1 Fallen Ideal
+1 Feign Death
+1 Fell the Profane
+1 Fetid Heath
+1 Funeral Room/Awakening Hall
+1 Generous Gift
+1 Gift of Immortality
+1 Godless Shrine
+1 Great Arashin City
+1 High Market
+1 High-Society Hunter
+1 Isolated Chapel
+1 Jet Medallion
+1 Kaya's Ghostform
+1 Luminous Broodmoth
+1 Malakir Rebirth
+1 Marsh Flats
+1 Massacre Girl
+1 Master of Dark Rites
+1 Mavren Fein, Dusk Apostle
+1 Mirkwood Bats
+1 Morbid Opportunist
+1 Mortuary Mire
+1 New Blood
+1 Olivia's Wrath
+1 Ophiomancer
+1 Orzhov Signet
+1 Pact of the Serpent
+1 Path to Exile
+1 Phyrexian Altar
+1 Phyrexian Arena
+1 Phyrexian Tower
+1 Pitiless Plunderer
+8 Plains
+1 Plumb the Forbidden
+1 Preacher of the Schism
+1 Skullclamp
+1 Sol Ring
+1 Sorin, Lord of Innistrad
+1 Supernatural Stamina
+1 Susur Secundi, Void Altar
+11 Swamp
+1 Swiftfoot Boots
+1 Swords to Plowshares
+1 Talisman of Hierarchy
+1 Teysa Karlov
+1 Twilight Prophet
+1 Vault of the Archangel
+1 Vengeful Bloodwitch
+1 Viscera Seer
+1 Warren Soultrader
+1 Welcoming Vampire
+1 Winnowing
+1 Witch Enchanter
+1 Witch's Cottage
+1 Zulaport Cutthroat
+
+SIDEBOARD:
+1 Bloodline Bidding
+1 Captivating Vampire
+1 Carmen, Cruel Skymarcher
+1 Clavileño, First of the Blessed
+1 Dark Prophecy
+1 Divine Visitation
+1 Dockside Chef
+1 Dusk Legion Sergeant
+1 Edgar, Charmed Groom
+1 Feast of the Victorious Dead
+1 Flare of Fortitude
+1 Flare of Malice
+1 Forerunner of the Legion
+1 Ghost Lantern
+1 Grave Pact
+1 Halvar, God of Battle
+1 Kambal, Profiteering Mayor
+1 Legion Lieutenant
+1 March of the Canonized
+1 Midgar, City of Mako
+1 Oketra's Monument
+1 Pawn of Ulamog
+1 Priest of Forgotten Gods
+1 Redemption Choir
+1 Roaming Throne
+1 Sanctum Seeker
+1 Species Specialist
+1 Tarrian's Journal
+1 Thought Vessel
+1 Tragic Slip
+1 Victimize
+1 Vito, Thorn of the Dusk Rose
+1 Yahenni, Undying Partisan
+
+1 Elenda, the Dusk Rose
