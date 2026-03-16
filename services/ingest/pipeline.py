@@ -523,12 +523,14 @@ _LIFEGAIN_PRODUCER_SQL = (
 )
 
 # Extended producer SQL for lifegain_threshold: includes all direct lifegain sources PLUS
-# Food token creators.  Sacrificing a Food artifact gains exactly 3 life, directly enabling
-# any "if you gained 3 or more life this turn" threshold payoff (Resplendent Angel needs 5,
-# Angelic Accord / Valkyrie Harbinger need 4 — two Foods clear all common thresholds).
+# Food token creators.  Every Food token has the intrinsic ability
+# "Sacrifice this artifact: You gain 3 life." — it is the token itself that gains the life,
+# not the creator card directly.  We match Food creators here because the tokens they produce
+# are what ultimately enable the 3-life gain; two Food tokens clear every standard threshold
+# (4 for Angelic Accord / Valkyrie Harbinger, 5 for Resplendent Angel).
 _LIFEGAIN_THRESHOLD_PRODUCER_SQL = (
     _LIFEGAIN_PRODUCER_SQL
-    # Food token creators: sacrificing a Food gains 3 life, hitting the lowest common threshold
+    # Cards that create Food tokens (whose sacrifice ability yields 3 life each)
     " OR lower(oracle_text) LIKE '%create%food%'"
     " OR lower(oracle_text) LIKE '%food token%'"
 )

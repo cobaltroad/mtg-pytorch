@@ -108,18 +108,27 @@ End-step payoffs that check **cumulative life gained this turn** rather than rea
 
 **Example consumers:** Resplendent Angel ("if you gained 5 or more life this turn, create a 4/4 Angel"), Angelic Accord ("if you gained 4 or more life this turn, create a 4/4 Angel"), Valkyrie Harbinger, Dawn of Hope.
 
-**Producer pool:** All direct lifegain sources (same as `lifegain`) **plus Food token creators**. Sacrificing a Food artifact gains exactly 3 life, which is the smallest discrete lifegain increment that multiple payoff cards key off. Two Food tokens clear every standard threshold (4 for Angelic Accord / Valkyrie Harbinger, 5 for Resplendent Angel); a single Food already satisfies any "if you gained 3 or more life" payoff.  Food creators (Gilded Goose, Trail of Crumbs, Acorn Harvest, etc.) are therefore first-class producers for this event even though they do not gain life directly.
+**Producer pool:** All direct lifegain sources (same as `lifegain`) **plus Food token creators**. Each Food token has the intrinsic ability "Sacrifice this artifact: You gain 3 life." — it is the *token* that gains the life, not the creator card directly. Creator cards are matched because the tokens they produce are what ultimately enable the 3-life gain. Two Food tokens clear every standard threshold (4 for Angelic Accord / Valkyrie Harbinger, 5 for Resplendent Angel); a single Food already satisfies any "if you gained 3 or more life" payoff. Food creators (Gilded Goose, Trail of Crumbs, etc.) are therefore first-class producers for this event even though they do not gain life directly.
 
-**Soul Sister cascade chain:** The interaction between Soul Warden / Soul's Attendant and threshold payoffs forms a multi-step chain representable in the synergy graph:
+**Lifegain cascade chain:** The real power of `lifegain_threshold` is a multi-step feedback loop driven by token generators, Soul Sisters, and Angel-ETB payoffs:
 
 ```
-[creature token generator]  --creature_etb-->  Soul Warden (consumer + lifegain producer)
-Soul Warden                 --lifegain_threshold-->  Resplendent Angel (consumer + token producer)
-Resplendent Angel token     --creature_etb-->  Soul Warden  (cycle continues)
+[token generator]       --creature_etb-->   Soul Warden / Soul's Attendant
+                                              (creature_etb consumer → gains 1 life per ETB)
+
+Soul Warden             --lifegain_threshold-->  Angelic Accord / Resplendent Angel
+                                              (lifegain_threshold consumer → creates Angel token)
+
+[Angel token ETB]       --tribal_angel_etb-->  Bishop of Wings / Righteous Valkyrie
+                                              (tribal_angel_etb consumer → gains 2 life)
+
+Bishop of Wings         --lifegain_threshold-->  Angelic Accord / Resplendent Angel
+                                              (loop: more Angels → more life → more Angels)
 ```
 
-- Soul Warden / Soul's Attendant: tagged as `creature_etb` **consumers** ("Whenever another creature enters the battlefield…") and `lifegain` **producers** ("…you gain 1 life").
-- Resplendent Angel / Angelic Accord: tagged as `lifegain_threshold` **consumers** and, because they create Angel tokens with lifelink, also `lifegain` **producers**.
+- **Soul Warden / Soul's Attendant**: tagged as `creature_etb` **consumers** ("Whenever another creature enters the battlefield, you gain 1 life") and `lifegain` **producers** (the gained life accumulates toward the threshold). They pair directly with a deck's own token-generating abilities — every token that enters triggers a lifegain event.
+- **Angelic Accord / Resplendent Angel**: tagged as `lifegain_threshold` **consumers**. When the cumulative threshold is met at end step, they create Angel tokens with lifelink, re-feeding the loop.
+- **Bishop of Wings / Righteous Valkyrie**: tagged as `tribal_angel_etb` **consumers** and `lifegain` **producers** — each Angel token entering triggers 2 more life, which can re-satisfy the threshold for another token next turn.
 
 **Tuning notes:** The threshold condition is evaluated at the end step; the consumer pattern fires at tagging time regardless of the actual cumulative total. This is intentional — whether a deck regularly gains 4+ life per turn is a deck-construction question, not an individual-card question.
 
