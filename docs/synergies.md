@@ -383,14 +383,17 @@ Super-type covering **counters + auras + equipment** as a unified "modified crea
 
 ### Play from Exile / Cascade Payoffs (`play_from_exile`)
 
-Covers cards that reward or react to spells being cast from exile, including impulse-draw payoffs, cascade/discover payoffs, and the *paradox* keyword introduced in the Dr Who set.
+Covers cards that reward or react to spells being cast from exile, including impulse-draw payoffs, cascade/discover payoffs, the *paradox* keyword introduced in the Dr Who set, and indirect cascade payoffs that scale with the number of spells cast or creatures that entered this turn.
 
 **Consumer regex matches:**
 - `whenever (you) cast ~ from exile` — cast-from-exile triggers (Laelia the Blade Reforged, Birgi/Harnfel back face)
+- `whenever (you) cast ~ exiled (this way|with X)` — Laelia's alternate phrasing
 - `paradox` keyword — The Thirteenth Doctor and other Dr Who cards; "whenever you cast a spell from anywhere other than your hand"
 - `whenever (you) cast ~ from anywhere other than your hand` — explicit paradox wording
 - `whenever (you) cast (a spell with cascade | a cascading spell)` — cascade payoffs (Faldorn Dread Wolf Herald, Abaddon the Despoiler)
 - `whenever (you) cast ~ with cascade` — broader cascade trigger phrasing
+- `number of (instant|sorcery|spells) ~ cast this turn` — indirect cascade payoffs that scale with spell count (Noise Marine)
+- `creatures ~ entered the battlefield this turn` — indirect cascade payoffs that count ETBs triggered by cascade chains (Let The Galaxy Burn)
 
 **Producer SQL:**
 - Impulse draw — exile top of library with a timed "you may play/cast" window (Light Up the Stage, Commune with Lava, Rocco Street Chef, Jeska's Will)
@@ -399,12 +402,14 @@ Covers cards that reward or react to spells being cast from exile, including imp
   - `exile % you may play/cast % this turn` / `until`
 - `cascade` keyword — matched via `'Cascade' = ANY(keywords)` for precision (avoids flavor text false positives)
 - `discover` keyword — matched via `'Discover' = ANY(keywords)` for precision
+- `airbend` keyword (TLA set) — matched via `'Airbend' = ANY(keywords)`; exiles a card or permanent from the battlefield/stack, owner may cast it while exiled
+- Hand-exile with optional recast — `exile % from % hand % may cast` (Elite Spellbinder style)
 
 **Tuning notes:**
 - Cascade is already included in the `spell_cast` producer pool (it generates an extra cast). Its presence here as a `play_from_exile` producer creates a second, complementary edge class: cascade cards pair with cards that specifically reward casting *from exile* (Faldorn, Laelia) rather than just casting any spell.
 - Impulse draw patterns use double-clause matching (`exile % you may % play/cast`) to avoid matching blink effects, which never include the "you may play" language.
 - Cascade and discover are matched using `'Cascade' = ANY(keywords)` / `'Discover' = ANY(keywords)` (keyword array column populated from MTGJSON) rather than oracle text LIKE patterns, which avoids false positives from flavor text or card names.
-- This event has natural conceptual overlap with `graveyard_return` (both are alternative casting zones). A future `alternate_zone_cast` unified event could merge them, but keeping them separate preserves the precision of the graveyard-reanimation signal.
+- This event has natural overlap with spellslinger (`spell_cast`) and storm strategies: cascade and impulse draw both generate additional spell casts, making `play_from_exile` a natural companion archetype for those strategies. The `play_from_exile` producer pool and `spell_cast` producer pool intentionally overlap — cascade cards and impulse draw spells benefit both consumer types.
 
 ---
 

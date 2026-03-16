@@ -113,14 +113,19 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     # Covers: cast-from-exile triggers (Laelia, Birgi/Harnfel), the paradox keyword and
     # its explicit wording ("from anywhere other than your hand") used in the Dr Who set
     # (e.g. The Thirteenth Doctor), cascade/discover payoffs (Faldorn Dread Wolf Herald,
-    # Abaddon the Despoiler), and any card that explicitly rewards casting from exile.
+    # Abaddon the Despoiler), indirect cascade payoffs that count spells or ETBs this turn
+    # (Noise Marine, Let The Galaxy Burn), and any card that explicitly rewards casting
+    # from exile.
     (
         r"when(ever)?\s+(you )?cast .{0,60}from exile"
         r"|when(ever)?\s+(you )?cast .{0,60}exiled (this way|with )"
         r"|\bparadox\b"
         r"|when(ever)?\s+(you )?cast .{0,70}from anywhere other than your hand"
         r"|when(ever)?\s+(you )?cast .{0,60}(a spell with cascade|a cascading spell)"
-        r"|when(ever)?\s+(you )?cast .{0,60}\bwith cascade\b",
+        r"|when(ever)?\s+(you )?cast .{0,60}\bwith cascade\b"
+        # Indirect cascade/impulse payoffs: count-based triggers driven by casting many spells
+        r"|number of (instant|sorcery|spells?).{0,40}(you've |you have )?cast this turn"
+        r"|creatures?.{0,60}entered the battlefield this turn",
         "Play from exile / cascade payoff",
         "play_from_exile",
     ),
@@ -259,7 +264,8 @@ PRODUCER_MAP: dict[str, str] = {
     # Play-from-exile producers: cards that create windows to cast from exile.
     # Includes impulse-draw effects (exile top of library + "you may play this turn"),
     # cascade (exile until a lower-CMC card is found and cast it), discover (similar
-    # to cascade), and any other "exile and cast/play" mechanics.
+    # to cascade), the airbend mechanic (exiles a card or permanent from play/stack
+    # for re-casting), and any other "exile and cast/play" mechanics.
     "play_from_exile": (
         # Impulse draw: exile top of library with a timed "you may play/cast" window
         "lower(oracle_text) LIKE '%exile the top%you may%play%'"
@@ -275,5 +281,14 @@ PRODUCER_MAP: dict[str, str] = {
         " OR 'Cascade' = ANY(keywords)"
         # Discover keyword (similar to cascade; exile until you find CMC ≤ N, cast for free)
         " OR 'Discover' = ANY(keywords)"
+        # Airbend mechanic (TLA set): exiles a card from the battlefield/stack;
+        # owner may cast it for as long as it remains exiled
+        " OR 'Airbend' = ANY(keywords)"
+        # Hand-exile with optional recast: "exile target card from a player's hand...
+        # that card's owner may cast it" (Elite Spellbinder style).
+        # Requires 'that card' after the exile/hand clause to ensure both clauses
+        # refer to the same exiled card (avoids false positives where 'exile' and
+        # 'may cast' appear in unrelated ability sentences).
+        " OR (lower(oracle_text) LIKE '%exile%from%hand%that card%' AND lower(oracle_text) LIKE '%may cast%')"
     ),
 }
