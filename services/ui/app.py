@@ -51,7 +51,7 @@ def get_metrics() -> dict | None:
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-tab_search, tab_deck, tab_import = st.tabs(["Card Search & Similarity", "Deck Builder", "Import Decklist"])
+tab_search, tab_deck, tab_import, tab_train = st.tabs(["Card Search & Similarity", "Deck Builder", "Import Decklist", "Re-Train"])
 
 with tab_search:
     st.subheader("Search cards")
@@ -223,3 +223,98 @@ with tab_import:
 
             except httpx.HTTPError as e:
                 st.error(f"Import failed: {e}")
+
+with tab_train:
+    st.subheader("Re-Train")
+    st.markdown(
+        "Launch training runs against the current deck database. "
+        "Phase 3 first, then Phase 4 once Phase 3 stabilises."
+    )
+
+    # ── Phase 3 ───────────────────────────────────────────────────────────────
+    st.markdown("### Phase 3 — Deck co-occurrence (BPR)")
+    p3col1, p3col2, p3col3 = st.columns(3)
+    p3_epochs = p3col1.number_input("Epochs", value=50, min_value=1, max_value=200, key="p3_epochs")
+    p3_lr     = p3col2.number_input("Learning rate", value=1e-4, format="%.0e", key="p3_lr")
+    p3_resume = p3col3.checkbox("Resume from phase3_best", value=True, key="p3_resume")
+
+    if st.button("Start Phase 3", type="primary", key="start_p3"):
+        with st.spinner("Launching Phase 3 trainer…"):
+            try:
+                r = httpx.post(f"{API_URL}/train/start", json={
+                    "phase": 3, "epochs": int(p3_epochs), "lr": p3_lr, "resume": p3_resume,
+                }, timeout=15)
+                r.raise_for_status()
+                info = r.json()
+                st.success(f"Phase 3 started — container `{info['short_id']}` ({info['name']})")
+                st.caption(f"Command: `{info['command']}`")
+            except httpx.HTTPError as e:
+                st.error(f"Failed to start Phase 3: {e}")
+
+    st.divider()
+
+    # ── Phase 4 ───────────────────────────────────────────────────────────────
+    st.markdown("### Phase 4 — Deck construction (InfoNCE)")
+    p4col1, p4col2 = st.columns(2)
+    p4_epochs       = p4col1.number_input("Epochs", value=50, min_value=1, max_value=200, key="p4_epochs")
+    p4_lr           = p4col2.number_input("Learning rate", value=1e-4, format="%.0e", key="p4_lr")
+    p4col3, p4col4  = st.columns(2)
+    p4_freeze       = p4col3.checkbox("Freeze encoder", value=False, key="p4_freeze")
+    p4_enc_scale    = p4col4.number_input("Encoder LR scale", value=0.1, min_value=0.01, max_value=1.0, key="p4_enc_scale", disabled=p4_freeze)
+    p4col5, p4col6, p4col7 = st.columns(3)
+    p4_resume       = p4col5.checkbox("Resume from phase4_best", value=False, key="p4_resume")
+    p4_temp_start   = p4col6.number_input("Temp start", value=0.5, min_value=0.05, max_value=2.0, key="p4_ts")
+    p4_temp_end     = p4col7.number_input("Temp end", value=0.05, min_value=0.01, max_value=1.0, key="p4_te")
+
+    if st.button("Start Phase 4", type="primary", key="start_p4"):
+        with st.spinner("Launching Phase 4 trainer…"):
+            try:
+                r = httpx.post(f"{API_URL}/train/start", json={
+                    "phase": 4, "epochs": int(p4_epochs), "lr": p4_lr, "resume": p4_resume,
+                    "freeze_encoder": p4_freeze, "encoder_lr_scale": p4_enc_scale,
+                    "temp_start": p4_temp_start, "temp_end": p4_temp_end,
+                }, timeout=15)
+                r.raise_for_status()
+                info = r.json()
+                st.success(f"Phase 4 started — container `{info['short_id']}` ({info['name']})")
+                st.caption(f"Command: `{info['command']}`")
+            except httpx.HTTPError as e:
+                st.error(f"Failed to start Phase 4: {e}")
+
+    st.divider()
+
+    # ── Active / recent runs ───────────────────────────────────────────────────
+    st.markdown("### Recent runs")
+    if st.button("Refresh", key="refresh_runs"):
+        st.rerun()
+
+    try:
+        runs_r = httpx.get(f"{API_URL}/train/runs", timeout=10)
+        runs_r.raise_for_status()
+        runs = runs_r.json()
+    except Exception:
+        runs = []
+
+    if not runs or (len(runs) == 1 and "error" in runs[0]):
+        st.info("No training runs found (or Docker socket unavailable).")
+    else:
+        for run in runs:
+            if "error" in run:
+                st.error(run["error"])
+                continue
+            status_icon = "🟢" if run["status"] == "running" else ("✅" if run.get("exit_code") == 0 else "⬜")
+            with st.expander(f"{status_icon} Phase {run['phase']} — `{run['short_id']}` — {run['status']}"):
+                st.caption(f"Started: {run.get('started', '—')}  |  Finished: {run.get('finished', '—')}")
+                if run["status"] == "running":
+                    if st.button("Stop", key=f"stop_{run['container_id']}"):
+                        try:
+                            httpx.post(f"{API_URL}/train/stop/{run['container_id']}", timeout=15).raise_for_status()
+                            st.warning("Stop signal sent.")
+                        except httpx.HTTPError as e:
+                            st.error(f"Stop failed: {e}")
+                try:
+                    logs_r = httpx.get(f"{API_URL}/train/logs/{run['container_id']}", params={"tail": 50}, timeout=10)
+                    logs_r.raise_for_status()
+                    st.code(logs_r.json()["logs"], language=None)
+                except Exception:
+                    st.caption("(logs unavailable)")

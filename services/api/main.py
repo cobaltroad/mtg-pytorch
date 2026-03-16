@@ -12,7 +12,7 @@ from fastapi import FastAPI, Query, HTTPException, Depends
 from pydantic import BaseModel
 
 from db import get_db, AsyncSession
-from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops
+from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
 
 log = logging.getLogger(__name__)
 
@@ -184,3 +184,67 @@ async def deck_metrics():
     except Exception as exc:
         log.error("Failed to compute deck metrics: %s", exc)
         raise HTTPException(500, f"Metrics computation failed: {exc}")
+
+
+# ── Training ──────────────────────────────────────────────────────────────────
+
+class TrainRequest(BaseModel):
+    phase: int
+    epochs: int = 50
+    lr: float = 1e-4
+    resume: bool = True
+    freeze_encoder: bool = True
+    encoder_lr_scale: float = 0.1
+    temp_start: float = 0.5
+    temp_end: float = 0.05
+
+
+@app.post("/train/start")
+async def start_training(req: TrainRequest):
+    """Launch a trainer container for the requested phase."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: training_ops.start_training(
+            phase=req.phase,
+            epochs=req.epochs,
+            lr=req.lr,
+            resume=req.resume,
+            freeze_encoder=req.freeze_encoder,
+            encoder_lr_scale=req.encoder_lr_scale,
+            temp_start=req.temp_start,
+            temp_end=req.temp_end,
+        ),
+    )
+    if "error" in result:
+        raise HTTPException(500, result["error"])
+    return result
+
+
+@app.get("/train/runs")
+async def list_runs():
+    """List recent trainer containers."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, training_ops.list_training_runs)
+
+
+@app.get("/train/logs/{container_id}")
+async def get_logs(container_id: str, tail: int = 100):
+    """Fetch recent log lines from a trainer container."""
+    loop = asyncio.get_event_loop()
+    logs = await loop.run_in_executor(
+        None, lambda: training_ops.get_logs(container_id, tail)
+    )
+    return {"logs": logs}
+
+
+@app.post("/train/stop/{container_id}")
+async def stop_training(container_id: str):
+    """Stop a running trainer container."""
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, lambda: training_ops.stop_training(container_id)
+    )
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "Unknown error"))
+    return result
