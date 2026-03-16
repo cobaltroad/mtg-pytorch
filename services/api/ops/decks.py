@@ -65,11 +65,19 @@ async def generate(
                 )
 
                 all_ids = list(embeddings.keys())
-                # Score all cards
+
+                # Load color identities (lazy, cached) and filter to legal pool
+                color_identities = await loop.run_in_executor(
+                    None, inference.get_color_identities, db_url
+                )
+
+                # Score only color-legal cards
                 scored = await loop.run_in_executor(
                     None,
-                    inference.score_cards,
-                    commander_id, context_ids, embeddings, model, all_ids,
+                    lambda: inference.score_cards(
+                        commander_id, context_ids, embeddings, model, all_ids,
+                        color_identities=color_identities,
+                    ),
                 )
 
                 if scored:

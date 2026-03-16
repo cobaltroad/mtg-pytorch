@@ -30,6 +30,7 @@ CHECKPOINT_DIR = Path(os.environ.get("MODEL_CHECKPOINT_DIR", "/app/checkpoints")
 
 _model_cache: dict[str, DeckConstructor] = {}
 _embeddings_cache: dict[str, dict[str, np.ndarray]] = {}   # keyed by db_url
+_color_cache: dict[str, dict[str, frozenset]] = {}          # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
 
 
@@ -137,6 +138,41 @@ def get_embeddings(
     return embeddings
 
 
+# ── Color identity ────────────────────────────────────────────────────────────
+
+def get_color_identities(db_url: str) -> dict[str, frozenset]:
+    """Return {card_id: frozenset of color letters} for all cards. Cached."""
+    if db_url in _color_cache:
+        return _color_cache[db_url]
+
+    log.info("Loading color identities from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id::text, color_identity FROM cards")
+            rows = cur.fetchall()
+
+    result: dict[str, frozenset] = {}
+    for card_id, ci in rows:
+        result[card_id] = frozenset(ci or [])
+
+    log.info("Loaded color identities for %d cards", len(result))
+    _color_cache[db_url] = result
+    return result
+
+
+def legal_card_ids(
+    commander_id: str,
+    all_ids: list[str],
+    color_identities: dict[str, frozenset],
+) -> list[str]:
+    """Return card IDs whose color identity is a subset of the commander's."""
+    cmd_ci = color_identities.get(commander_id, frozenset())
+    return [
+        cid for cid in all_ids
+        if color_identities.get(cid, frozenset()) <= cmd_ci
+    ]
+
+
 # ── Context seed from existing decklists ─────────────────────────────────────
 
 def get_common_context(
@@ -188,16 +224,28 @@ def score_cards(
     embeddings: dict[str, np.ndarray],
     model: DeckConstructor,
     all_ids: list[str],
+    color_identities: dict[str, frozenset] | None = None,
     batch_size: int = 512,
 ) -> list[tuple[str, float]]:
-    """Score all cards given commander + context, return sorted (card_id, score).
+    """Score color-legal cards given commander + context, return sorted (card_id, score).
 
+    Strictly filters to cards whose color identity is a subset of the commander's.
     Excludes the commander itself and any cards already in context_ids.
     If context is empty, uses the commander embedding as the single context token
     (the DeckConstructor requires at least 1 token in the sequence).
     """
     exclude = {commander_id} | set(context_ids)
-    candidate_ids = [cid for cid in all_ids if cid not in exclude and cid in embeddings]
+
+    if color_identities:
+        cmd_ci = color_identities.get(commander_id, frozenset())
+        candidate_ids = [
+            cid for cid in all_ids
+            if cid not in exclude
+            and cid in embeddings
+            and color_identities.get(cid, frozenset()) <= cmd_ci
+        ]
+    else:
+        candidate_ids = [cid for cid in all_ids if cid not in exclude and cid in embeddings]
 
     if not candidate_ids:
         return []
