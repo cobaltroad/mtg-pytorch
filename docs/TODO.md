@@ -102,7 +102,7 @@ The typical Aristocrats palette (W/B/G subsets) never touches red, so:
 
 - [ ] Evaluate phase4_best with `eval_synergy.py` — compare against phase3_best for Skullclamp, Wilhelt, Giada
 - [ ] Consider a Phase 5: fine-tune on commander-stratified batches (one batch per commander archetype) to prevent majority-class commanders (e.g. generic goodstuff) from drowning out minority themes
-- [ ] Explore temperature annealing in InfoNCE (start 0.5 → end 0.05) rather than fixed 0.1
+- [x] Explore temperature annealing in InfoNCE (start 0.5 → end 0.05) rather than fixed 0.1 — implemented as cosine schedule via `--temp-start` / `--temp-end` in Phase 2 and Phase 4
 
 ---
 

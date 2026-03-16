@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import random
 from pathlib import Path
@@ -296,6 +297,18 @@ class DeckDataset(Dataset):
 
 # ── Training loops ────────────────────────────────────────────────────────────
 
+def cosine_temperature(epoch: int, n_epochs: int, t_start: float, t_end: float) -> float:
+    """Cosine annealing schedule for InfoNCE temperature.
+
+    Returns t_start at epoch 0 and t_end at epoch n_epochs-1.
+    High temperature early: soft distribution, easier gradients.
+    Low temperature late: sharp distribution, tight positive clustering.
+    """
+    if n_epochs <= 1:
+        return t_end
+    return t_end + 0.5 * (t_start - t_end) * (1 + math.cos(math.pi * epoch / (n_epochs - 1)))
+
+
 def nt_xent_loss(z_i: torch.Tensor, z_j: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
     """NT-Xent (InfoNCE) loss for a batch of positive pairs.
 
@@ -377,11 +390,17 @@ def train_synergy_phase(
     lr: float,
     batch_size: int = 256,
     label_smoothing: float = 0.1,
+    temp_start: float = 0.5,
+    temp_end: float = 0.05,
 ):
     """Phase 2: binary cross-entropy on ability-trigger synergy pairs.
 
     label_smoothing: ε applied as smooth = label*(1-ε) + ε/2
     (pos → 1-ε/2, neg → ε/2).  Handles noisy regex-derived positive labels.
+
+    temp_start / temp_end: cosine-annealed temperature applied to the cosine
+    similarity logit before BCE.  High temperature early smooths the signal;
+    low temperature late sharpens the decision boundary.
     """
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -390,6 +409,7 @@ def train_synergy_phase(
 
     best_loss = float("inf")
     for epoch in range(epochs):
+        temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
         model.train()
         total_loss = 0.0
         for emb_a, emb_b, labels in loader:
@@ -403,7 +423,8 @@ def train_synergy_phase(
 
             proj_a = model(emb_a)
             proj_b = model(emb_b)
-            similarity = (proj_a * proj_b).sum(dim=-1)
+            # Scale cosine similarity by temperature before BCE
+            similarity = (proj_a * proj_b).sum(dim=-1) / temperature
             loss = F.binary_cross_entropy_with_logits(similarity, labels)
 
             optimizer.zero_grad()
@@ -414,12 +435,12 @@ def train_synergy_phase(
 
         scheduler.step()
         avg = total_loss / len(loader)
-        log.info("Phase 2  epoch %d/%d  loss=%.4f  lr=%.2e",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+        log.info("Phase 2  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0], temperature)
 
         if WANDB_ENABLED:
             wandb.log({"phase": 2, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0]})
+                       "lr": scheduler.get_last_lr()[0], "temperature": temperature})
 
         if avg < best_loss:
             best_loss = avg
@@ -604,7 +625,8 @@ def train_deck_constructor_phase(
     lr: float,
     n_neg: int = 64,
     positions_per_deck: int = 10,
-    temperature: float = 0.1,
+    temp_start: float = 0.5,
+    temp_end: float = 0.05,
     freeze_encoder: bool = True,
     encoder_lr_scale: float = 0.1,
 ):
@@ -614,8 +636,12 @@ def train_deck_constructor_phase(
     At each position the model sees [commander, cards[0:K]] and must rank cards[K]
     above n_neg random cards drawn from the full 33k pool.
 
-    InfoNCE loss (temperature=0.1) over (1 + n_neg) candidates — sharper than BPR,
-    better suited to the multi-candidate ranking setting.
+    InfoNCE loss over (1 + n_neg) candidates — sharper than BPR, better suited to
+    the multi-candidate ranking setting.
+
+    Temperature is cosine-annealed from temp_start (epoch 1) to temp_end (final epoch).
+    Starting high softens the distribution early to prevent mode collapse; ending low
+    sharpens the geometry for precise nearest-neighbour retrieval at inference time.
 
     The full card pool is pre-projected at the start of each epoch so negative
     sampling is O(1); projections are refreshed each epoch as encoder weights update.
@@ -651,6 +677,8 @@ def train_deck_constructor_phase(
 
     best_loss = float("inf")
     for epoch in range(epochs):
+        temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
+
         # ── Pre-project the full card pool for fast negative sampling ──────────
         model.eval()
         with torch.no_grad():
@@ -715,12 +743,12 @@ def train_deck_constructor_phase(
 
         scheduler.step()
         avg = total_loss / max(n_steps, 1)
-        log.info("Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+        log.info("Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0], temperature)
 
         if WANDB_ENABLED:
             wandb.log({"phase": 4, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0]})
+                       "lr": scheduler.get_last_lr()[0], "temperature": temperature})
 
         if avg < best_loss:
             best_loss = avg
@@ -785,6 +813,12 @@ def main():
                         help="Phase 1: std of Gaussian noise added to create augmented views")
     parser.add_argument("--temperature", type=float, default=0.07,
                         help="Phase 1: NT-Xent temperature (lower=sharper contrast)")
+    parser.add_argument("--temp-start", type=float, default=0.5,
+                        help="Phase 2/4: initial InfoNCE temperature at epoch 1 "
+                             "(high = soft distribution, easier early gradients)")
+    parser.add_argument("--temp-end", type=float, default=0.05,
+                        help="Phase 2/4: final InfoNCE temperature at last epoch "
+                             "(low = sharp distribution, tight positive clustering)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint (phase2→phase2_best, "
                              "phase1→phase1_best; falls back to previous phase if not found)")
@@ -857,6 +891,8 @@ def main():
         train_synergy_phase(
             model, dataset, args.epochs, args.lr, args.batch_size,
             label_smoothing=args.label_smoothing,
+            temp_start=args.temp_start,
+            temp_end=args.temp_end,
         )
 
     elif args.phase == 3:
@@ -914,7 +950,9 @@ def main():
 
         train_deck_constructor_phase(
             model, dataset, embeddings, args.epochs, args.lr,
-            n_neg=64, positions_per_deck=10, temperature=args.temperature,
+            n_neg=64, positions_per_deck=10,
+            temp_start=args.temp_start,
+            temp_end=args.temp_end,
             freeze_encoder=args.freeze_encoder,
             encoder_lr_scale=args.encoder_lr_scale,
         )
