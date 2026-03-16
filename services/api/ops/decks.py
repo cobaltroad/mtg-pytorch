@@ -21,6 +21,10 @@ LAND_TARGET = 36
 SPELL_SLOTS = 99 - LAND_TARGET       # 63 model-scored non-land cards
 NONBASIC_LAND_CAP = 20               # max non-basic lands drawn from model scoring
 
+# Auto-includes: present in virtually every Commander deck regardless of model score.
+# Exclusion requires a strong contrary signal (future work).
+GUARANTEED_NONBASICS = ("Command Tower", "Exotic Orchard")
+
 COLOR_TO_BASIC = {
     "W": "Plains",
     "U": "Island",
@@ -133,13 +137,14 @@ async def generate(
 
                 if scored:
                     # ── Lookup tables (fetched in parallel) ───────────────────
-                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp) = \
+                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp), land_staples = \
                         await asyncio.gather(
                             asyncio.gather(
                                 loop.run_in_executor(None, inference.get_type_lines, db_url),
                                 loop.run_in_executor(None, inference.get_cmc_map, db_url),
                             ),
                             loop.run_in_executor(None, inference.get_ramp_info, db_url),
+                            loop.run_in_executor(None, inference.get_land_staple_ids, db_url),
                         )
 
                     def _is_land(cid: str) -> bool:
@@ -211,7 +216,28 @@ async def generate(
 
                     selected_spells = (selected_ramp + selected_non_ramp)[:SPELL_SLOTS]
 
-                    selected_nonbasics = nonbasic_scored[:NONBASIC_LAND_CAP]
+                    # ── Non-basic land selection ──────────────────────────────
+                    # Force Command Tower + Exotic Orchard first (preserving their
+                    # model scores), then fill remaining slots from scored pool.
+                    nonbasic_score_map = {cid: sc for cid, sc in nonbasic_scored}
+                    guaranteed_nb: list[tuple[str, float]] = []
+                    for name in GUARANTEED_NONBASICS:
+                        cid = land_staples.get(name)
+                        if cid and cid in nonbasic_score_map:
+                            guaranteed_nb.append((cid, nonbasic_score_map[cid]))
+                        elif cid and _is_land(cid) and not _is_basic(cid):
+                            # In DB but not scored (missing embedding) — include anyway
+                            guaranteed_nb.append((cid, 0.0))
+
+                    guaranteed_nb_ids = {cid for cid, _ in guaranteed_nb}
+                    remaining_nonbasics = [
+                        (cid, sc) for cid, sc in nonbasic_scored
+                        if cid not in guaranteed_nb_ids
+                    ]
+                    selected_nonbasics = (
+                        guaranteed_nb
+                        + remaining_nonbasics[:NONBASIC_LAND_CAP - len(guaranteed_nb)]
+                    )
                     basic_needed = LAND_TARGET - len(selected_nonbasics)
 
                     # Fetch metadata for spells + non-basic lands

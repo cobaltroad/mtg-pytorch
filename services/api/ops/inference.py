@@ -34,6 +34,7 @@ _color_cache: dict[str, dict[str, frozenset]] = {}          # keyed by db_url
 _type_line_cache: dict[str, dict[str, str]] = {}            # keyed by db_url
 _cmc_cache: dict[str, dict[str, float]] = {}                # keyed by db_url
 _ramp_cache: dict[str, tuple[frozenset, dict]] = {}         # keyed by db_url
+_land_staple_cache: dict[str, dict[str, str]] = {}          # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
 
 
@@ -239,6 +240,37 @@ def get_ramp_info(db_url: str) -> tuple[frozenset, dict[str, str]]:
     log.info("Found %d ramp cards (%d guaranteed)", len(ramp_ids), len(guaranteed))
     result = (ramp_ids, guaranteed)
     _ramp_cache[db_url] = result
+    return result
+
+
+_LAND_STAPLE_NAMES = ("Command Tower", "Exotic Orchard")
+
+
+def get_land_staple_ids(db_url: str) -> dict[str, str]:
+    """Return {name: card_id} for auto-include non-basic land staples.
+
+    Command Tower and Exotic Orchard are near-universal inclusions.
+    Both have colorless color identity and are legal in every Commander deck.
+    """
+    if db_url in _land_staple_cache:
+        return _land_staple_cache[db_url]
+
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (name) name, id::text
+                FROM cards
+                WHERE name = ANY(%s)
+                ORDER BY name, id
+                """,
+                (list(_LAND_STAPLE_NAMES),),
+            )
+            rows = cur.fetchall()
+
+    result: dict[str, str] = {name: card_id for name, card_id in rows}
+    log.info("Loaded %d land staple IDs", len(result))
+    _land_staple_cache[db_url] = result
     return result
 
 
