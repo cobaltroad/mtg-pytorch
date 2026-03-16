@@ -225,6 +225,14 @@ lr=1e-4.  **Best loss: 0.3922**.
 
 0.43 → 0.3922 — continued improvement; more data is the primary driver.
 
+### Phase 3 — rerun 3 (2026-03-16)
+
+**Run ID:** `glorious-pond-36` (wandb project `edh-builder`)
+
+344 decks.  Warm-started from phase3_best (rerun 2).  **Best loss: 0.2750**.
+
+0.3922 → 0.2750 — consistent improvement with each data addition.
+
 ### Phase 4 — DeckConstructor transformer decoder (2026-03-15)
 
 InfoNCE loss; transformer decoder cross-attends to commander embedding; 64
