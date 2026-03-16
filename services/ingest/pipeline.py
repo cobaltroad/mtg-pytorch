@@ -340,6 +340,9 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
 
     # ── New trigger types ─────────────────────────────────────────────────────
     (r"when(ever)?\s+(you |a player )?gain(s)? life", "Lifegain trigger", "lifegain"),
+    # Lifegain threshold: end-step payoffs that check cumulative life gained this turn
+    # (Resplendent Angel, Angelic Accord, Valkyrie Harbinger, Dawn of Hope, etc.)
+    (r"if you gained \d+ or more life this turn", "Lifegain threshold trigger", "lifegain_threshold"),
     (r"when(ever)?\s+a land enters", "Landfall trigger", "landfall"),
     (r"when(ever)?\s+(you |a player |an opponent )discard", "Discard trigger", "discard"),
     (r"when(ever)?\s+(you )?create.{0,30}token", "Token creation trigger", "token_creation"),
@@ -508,6 +511,28 @@ SYNERGY_LIMIT = int(os.environ.get("SYNERGY_LIMIT", "500000"))  # max edges per 
 # PRODUCER_MAP: trigger_event → raw SQL WHERE fragment identifying PRODUCER cards.
 # Producers are cards that GENERATE the event; consumers (from card_abilities) REACT to it.
 # Values are raw SQL so we can use both oracle_text and type_line for precision.
+
+# Shared SQL fragment for lifegain producers (used by `lifegain` and as the base for
+# `lifegain_threshold`).
+_LIFEGAIN_PRODUCER_SQL = (
+    "lower(oracle_text) LIKE '%you gain%life%'"
+    " OR lower(oracle_text) LIKE '%gain life%'"
+    " OR lower(oracle_text) LIKE '%gains life%'"
+    " OR lower(oracle_text) LIKE '%lifelink%'"
+    " OR lower(oracle_text) LIKE '%life equal to%'"
+)
+
+# Extended producer SQL for lifegain_threshold: includes all direct lifegain sources PLUS
+# Food token creators.  Sacrificing a Food artifact gains exactly 3 life, directly enabling
+# any "if you gained 3 or more life this turn" threshold payoff (Resplendent Angel needs 5,
+# Angelic Accord / Valkyrie Harbinger need 4 — two Foods clear all common thresholds).
+_LIFEGAIN_THRESHOLD_PRODUCER_SQL = (
+    _LIFEGAIN_PRODUCER_SQL
+    # Food token creators: sacrificing a Food gains 3 life, hitting the lowest common threshold
+    " OR lower(oracle_text) LIKE '%create%food%'"
+    " OR lower(oracle_text) LIKE '%food token%'"
+)
+
 PRODUCER_MAP: dict[str, str] = {
     # Cards that put NONTOKEN creatures onto the battlefield:
     #   reanimation (from graveyard), library cheating, blink
@@ -600,13 +625,14 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%each upkeep%'"
     ),
     # Cards that gain life or grant lifelink
-    "lifegain": (
-        "lower(oracle_text) LIKE '%you gain%life%'"
-        " OR lower(oracle_text) LIKE '%gain life%'"
-        " OR lower(oracle_text) LIKE '%gains life%'"
-        " OR lower(oracle_text) LIKE '%lifelink%'"
-        " OR lower(oracle_text) LIKE '%life equal to%'"
-    ),
+    "lifegain": _LIFEGAIN_PRODUCER_SQL,
+    # Lifegain threshold payoffs: any direct lifegain source PLUS Food token creators.
+    # Sacrificing a Food artifact gains exactly 3 life, clearing the lowest common
+    # threshold ("if you gained 3 or more life this turn") and, with two Foods, all
+    # standard thresholds (4 for Angelic Accord / Valkyrie Harbinger, 5 for Resplendent Angel).
+    # Consumers: Resplendent Angel, Angelic Accord, Valkyrie Harbinger, and similar
+    # "if you gained N or more life this turn" end-step payoffs.
+    "lifegain_threshold": _LIFEGAIN_THRESHOLD_PRODUCER_SQL,
     # Cards that put lands into play (fetch effects, ramp spells)
     "landfall": (
         "lower(oracle_text) LIKE '%search your library for a%land%'"

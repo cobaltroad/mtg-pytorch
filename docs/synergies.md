@@ -98,6 +98,33 @@ Both consumer patterns map to the **same** `spell_cast` trigger event.
 
 ---
 
+## Lifegain Threshold (`lifegain_threshold`)
+
+End-step payoffs that check **cumulative life gained this turn** rather than reacting to individual gain events.
+
+| Consumer regex | Producer SQL |
+|---|---|
+| "if you gained \d+ or more life this turn" | `you gain % life`, `gain life`, `gains life`, `lifelink`, `life equal to`, `create % food %`, `food token` |
+
+**Example consumers:** Resplendent Angel ("if you gained 5 or more life this turn, create a 4/4 Angel"), Angelic Accord ("if you gained 4 or more life this turn, create a 4/4 Angel"), Valkyrie Harbinger, Dawn of Hope.
+
+**Producer pool:** All direct lifegain sources (same as `lifegain`) **plus Food token creators**. Sacrificing a Food artifact gains exactly 3 life, which is the smallest discrete lifegain increment that multiple payoff cards key off. Two Food tokens clear every standard threshold (4 for Angelic Accord / Valkyrie Harbinger, 5 for Resplendent Angel); a single Food already satisfies any "if you gained 3 or more life" payoff.  Food creators (Gilded Goose, Trail of Crumbs, Acorn Harvest, etc.) are therefore first-class producers for this event even though they do not gain life directly.
+
+**Soul Sister cascade chain:** The interaction between Soul Warden / Soul's Attendant and threshold payoffs forms a multi-step chain representable in the synergy graph:
+
+```
+[creature token generator]  --creature_etb-->  Soul Warden (consumer + lifegain producer)
+Soul Warden                 --lifegain_threshold-->  Resplendent Angel (consumer + token producer)
+Resplendent Angel token     --creature_etb-->  Soul Warden  (cycle continues)
+```
+
+- Soul Warden / Soul's Attendant: tagged as `creature_etb` **consumers** ("Whenever another creature enters the battlefield…") and `lifegain` **producers** ("…you gain 1 life").
+- Resplendent Angel / Angelic Accord: tagged as `lifegain_threshold` **consumers** and, because they create Angel tokens with lifelink, also `lifegain` **producers**.
+
+**Tuning notes:** The threshold condition is evaluated at the end step; the consumer pattern fires at tagging time regardless of the actual cumulative total. This is intentional — whether a deck regularly gains 4+ life per turn is a deck-construction question, not an individual-card question.
+
+---
+
 ## Landfall (`landfall`)
 
 | Consumer regex | Producer SQL |
