@@ -156,21 +156,22 @@ Generic counter trigger — any counter type on any permanent.
 
 ### Skullclamp Target (`skullclamp_target`)
 
-**Why this exists:** Skullclamp's optimal play pattern — equip to a 1/1 token, the token immediately becomes a 1/0 and dies, drawing 2 cards for {1} — is an *emergent* synergy between Skullclamp and 1/1 token generators. No direct regex on either card's oracle text can capture it: Skullclamp doesn't mention tokens, and token generators don't mention Skullclamp. A direct ability-trigger match would never link the two.
+**Why this exists:** Skullclamp's optimal play pattern — equip to a 1-toughness token, the token immediately becomes a 0-toughness creature and dies, drawing 2 cards for {1} — is an *emergent* synergy between Skullclamp and token generators. Only the toughness matters: a 0/1 Plant token, a 2/1 Goblin token, or a 3/1 Elemental token all die just as cleanly as a 1/1 Soldier. No direct regex on either card's oracle text can capture this: Skullclamp doesn't mention tokens, and token generators don't mention Skullclamp. A direct ability-trigger match would never link the two.
 
-This event is a **proxy synergy edge**: Skullclamp is tagged as a consumer via its toughness-drain text (`equipped creature gets +\S+/-1`), and 1/1 token producers are tagged as producers. The result is a synergy edge from each 1/1 token generator to Skullclamp.
+This event is a **proxy synergy edge**: Skullclamp is tagged as a consumer via its toughness-drain text (`equipped creature gets +\S+/-1`), and any 1-toughness token producers are tagged as producers. The result is a synergy edge from each such token generator to Skullclamp.
 
-**Consumer regex:** `equipped creature gets \+\S+/-1` — matches Skullclamp's characteristic "+1/-1" static bonus on the equipped creature, which reduces a 1/1 to 0 toughness.
+**Consumer regex:** `equipped creature gets \+\S+/-1` — matches Skullclamp's characteristic "+1/-1" static bonus on the equipped creature, which reduces any 1-toughness creature to 0 toughness.
 
-**Producer SQL:** Cards that explicitly create or put 1/1 creature tokens onto the battlefield:
-- `create a 1/1` / `creates a 1/1` (Raise the Alarm, Ophiomancer, Bitterblossom, …)
-- `% 1/1 % token%` (Krenko, Monastery Mentor, Endrek Sahr, …)
-- `put a 1/1 % token%` (Lingering Souls, …)
-- `create% 1/1 %creature token%` (Adeline, Rhys the Redeemed, …)
+**Producer SQL:** Cards that explicitly create or put X/1 creature tokens onto the battlefield (any power, toughness 1):
+- `create%/1 %token%` / `creates%/1 %token%` (Raise the Alarm, Ophiomancer, Bitterblossom, Monastery Mentor, Endrek Sahr, …)
+- `put a%/1 %token%` (Lingering Souls, Adeline, Rhys the Redeemed, …)
+- `put%/1%creature token%` (broader put-onto-battlefield phrasing)
+
+This captures 0/1 Plants/Saprolings, 1/1 Soldiers/Spirits, 2/1 Goblins, 3/1 Elementals, and any other token with toughness 1.
 
 **Cross-references:** [Issue #2](https://github.com/cobaltroad/mtg-pytorch/issues/2) · [TODO.md — Skullclamp: Emergent / Indirect Synergy](TODO.md)
 
-**Tuning notes:** Skullclamp is colorless (`color_identity = '{}'`), so the existing `OR pc.color_identity = '{}'` branch in `compute_synergy()` ensures its edges link correctly to any colored 1/1 token producer without special-casing.
+**Tuning notes:** Skullclamp is colorless (`color_identity = '{}'`), so the existing `OR pc.color_identity = '{}'` branch in `compute_synergy()` ensures its edges link correctly to any colored 1-toughness token producer without special-casing.
 
 ---
 
@@ -408,4 +409,4 @@ These tag cards that have on-board activated abilities, creating edges with card
 | Monarch / initiative / dungeons | Game-state-dependent mechanics not modeled. |
 | Morbid precision | `morbid` is currently grouped with `graveyard_fill`; it's really closer to `nontoken_dies`. |
 | Self-discard vs. group-discard | `discard` event mixes Nekusar (opponents discard) and Madness (self-discard) strategies. |
-| Skullclamp indirect synergy | **Resolved** via `skullclamp_target` proxy edge — 1/1 token producers tagged as producers; Skullclamp tagged as consumer. See [Issue #2](https://github.com/cobaltroad/mtg-pytorch/issues/2). Eval step (confirm nearest neighbours) remains as future manual verification. |
+| Skullclamp indirect synergy | **Resolved** via `skullclamp_target` proxy edge — any 1-toughness token producers tagged as producers; Skullclamp tagged as consumer. See [Issue #2](https://github.com/cobaltroad/mtg-pytorch/issues/2). Eval step (confirm nearest neighbours) remains as future manual verification. |

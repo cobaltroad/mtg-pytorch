@@ -656,13 +656,13 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%sacrifice target%'"
         " OR lower(oracle_text) LIKE '%sacrifice:%'"
     ),
-    # 1/1 token generators — natural Skullclamp targets (proxy/indirect synergy edge)
+    # 1-toughness token generators — natural Skullclamp targets (proxy/indirect synergy edge)
+    # Only toughness matters: any X/1 token dies immediately when Skullclamp's -1 toughness is applied.
     "skullclamp_target": (
-        "lower(oracle_text) LIKE '%create a 1/1%'"
-        " OR lower(oracle_text) LIKE '%creates a 1/1%'"
-        " OR lower(oracle_text) LIKE '% 1/1 % token%'"
-        " OR lower(oracle_text) LIKE '%put a 1/1%token%'"
-        " OR lower(oracle_text) LIKE '%create% 1/1 %creature token%'"
+        "lower(oracle_text) LIKE '%create%/1 %token%'"
+        " OR lower(oracle_text) LIKE '%creates%/1 %token%'"
+        " OR lower(oracle_text) LIKE '%put a%/1 %token%'"
+        " OR lower(oracle_text) LIKE '%put%/1%creature token%'"
     ),
 
     # ── Deckbuilding themes ────────────────────────────────────────────────────
