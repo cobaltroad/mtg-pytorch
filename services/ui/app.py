@@ -157,6 +157,23 @@ with tab_deck:
                 col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
                 col2.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
 
+                # ── Mana curve bar chart ──────────────────────────────────────
+                spells = [
+                    c for c in deck["cards"]
+                    if "Land" not in c.get("type_line", "")
+                ]
+                curve: dict[str, int] = {}
+                for c in spells:
+                    cmc = c.get("cmc") or 0
+                    label = f"{int(cmc)}+" if cmc >= 6 else str(int(cmc))
+                    curve[label] = curve.get(label, 0) + c.get("count", 1)
+                if curve:
+                    curve_df = pd.DataFrame(
+                        sorted(curve.items(), key=lambda x: int(x[0].rstrip("+"))),
+                        columns=["CMC", "Cards"],
+                    )
+                    st.bar_chart(curve_df.set_index("CMC"))
+
                 # ── Deck table sorted by score ────────────────────────────────
                 rows = [
                     {

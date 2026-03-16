@@ -31,6 +31,29 @@ COLOR_TO_BASIC = {
 }
 
 
+# ── Mana curve targets ────────────────────────────────────────────────────────
+# Each entry is (cmc_upper_bound_inclusive, target_slot_count).
+# Bounds are checked in order; the last bucket is a catch-all for CMC 6+.
+# Total must equal SPELL_SLOTS (63).
+CURVE_BUCKETS: list[tuple[int, int]] = [
+    (1,   8),   # CMC 0–1  — ramp, interaction, cheap rocks
+    (2,  16),   # CMC 2    — two-drops, signets, removal
+    (3,  14),   # CMC 3    — three-drops, value engines
+    (4,  12),   # CMC 4    — midrange threats, board wipes
+    (5,   7),   # CMC 5    — big threats
+    (999, 6),   # CMC 6+   — finishers / haymakers
+]
+assert sum(t for _, t in CURVE_BUCKETS) == SPELL_SLOTS, "CURVE_BUCKETS must sum to SPELL_SLOTS"
+
+
+def _curve_bucket(cmc: float) -> int:
+    """Return the CURVE_BUCKETS index for a given CMC value."""
+    for i, (cap, _) in enumerate(CURVE_BUCKETS):
+        if cmc <= cap:
+            return i
+    return len(CURVE_BUCKETS) - 1
+
+
 def _count_pips(mana_cost: str | None) -> dict[str, int]:
     """Count color pips in a mana cost string like {2}{W}{W}{B}."""
     pips: dict[str, int] = {}
@@ -106,8 +129,9 @@ async def generate(
 
                 if scored:
                     # ── Land/spell partitioning ───────────────────────────────
-                    type_lines = await loop.run_in_executor(
-                        None, inference.get_type_lines, db_url
+                    type_lines, cmc_map = await asyncio.gather(
+                        loop.run_in_executor(None, inference.get_type_lines, db_url),
+                        loop.run_in_executor(None, inference.get_cmc_map, db_url),
                     )
 
                     def _is_land(cid: str) -> bool:
@@ -125,7 +149,31 @@ async def generate(
                         (cid, sc) for cid, sc in scored if not _is_land(cid)
                     ]
 
-                    selected_spells = spell_scored[:SPELL_SLOTS]
+                    # ── Mana curve enforcement ────────────────────────────────
+                    # Partition spell candidates into CMC buckets (score-ordered),
+                    # fill each to its target, then distribute any deficit slots
+                    # to the highest-scoring cards that didn't fit their own bucket.
+                    buckets: list[list[tuple[str, float]]] = [
+                        [] for _ in CURVE_BUCKETS
+                    ]
+                    for cid, sc in spell_scored:
+                        b = _curve_bucket(cmc_map.get(cid, 0.0))
+                        buckets[b].append((cid, sc))
+
+                    selected_spells: list[tuple[str, float]] = []
+                    overflow: list[tuple[str, float]] = []
+                    deficit = 0
+                    for b, (_, target) in enumerate(CURVE_BUCKETS):
+                        selected_spells.extend(buckets[b][:target])
+                        overflow.extend(buckets[b][target:])
+                        if len(buckets[b]) < target:
+                            deficit += target - len(buckets[b])
+
+                    # Fill deficit with best-scoring cards from other buckets
+                    overflow.sort(key=lambda x: x[1], reverse=True)
+                    selected_spells.extend(overflow[:deficit])
+                    selected_spells = selected_spells[:SPELL_SLOTS]
+
                     selected_nonbasics = nonbasic_scored[:NONBASIC_LAND_CAP]
                     basic_needed = LAND_TARGET - len(selected_nonbasics)
 

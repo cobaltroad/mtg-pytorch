@@ -32,6 +32,7 @@ _model_cache: dict[str, DeckConstructor] = {}
 _embeddings_cache: dict[str, dict[str, np.ndarray]] = {}   # keyed by db_url
 _color_cache: dict[str, dict[str, frozenset]] = {}          # keyed by db_url
 _type_line_cache: dict[str, dict[str, str]] = {}            # keyed by db_url
+_cmc_cache: dict[str, dict[str, float]] = {}                # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
 
 
@@ -175,6 +176,23 @@ def get_type_lines(db_url: str) -> dict[str, str]:
     result: dict[str, str] = {card_id: (type_line or "") for card_id, type_line in rows}
     log.info("Loaded type lines for %d cards", len(result))
     _type_line_cache[db_url] = result
+    return result
+
+
+def get_cmc_map(db_url: str) -> dict[str, float]:
+    """Return {card_id: cmc} for all cards. Cached."""
+    if db_url in _cmc_cache:
+        return _cmc_cache[db_url]
+
+    log.info("Loading CMC values from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id::text, cmc FROM cards")
+            rows = cur.fetchall()
+
+    result: dict[str, float] = {card_id: float(cmc or 0) for card_id, cmc in rows}
+    log.info("Loaded CMC for %d cards", len(result))
+    _cmc_cache[db_url] = result
     return result
 
 
