@@ -217,8 +217,15 @@ def get_ramp_info(db_url: str) -> tuple[frozenset, dict[str, str]]:
                 SELECT id::text, name
                 FROM cards
                 WHERE type_line NOT ILIKE '%Land%'
-                  AND oracle_text ILIKE '%{T}: Add%'
                   AND legalities->>'commander' = 'legal'
+                  AND (
+                    -- Permanent mana sources: rocks, mana dorks, etc.
+                    oracle_text ILIKE '%{T}: Add%'
+                    -- Land tutors: "search ... land ... battlefield"
+                    OR oracle_text ~* 'search[^\n]*land[^\n]*battlefield'
+                    -- Basic land-type tutors (Nature''s Lore, Farseek, Skyshroud Claim, etc.)
+                    OR oracle_text ~* 'search[^\n]*(forest|plains|island|swamp|mountain|wastes)[^\n]*battlefield'
+                  )
                 """
             )
             rows = cur.fetchall()
