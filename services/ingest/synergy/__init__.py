@@ -20,8 +20,10 @@ Sub-modules, each covering one broad theme:
                         ``wheel``), removal (``targeted_removal``, ``burn``,
                         ``wither``, ``bounce``, ``sweeper``), tutors
                         (``tutor_creature``, ``tutor_artifact``, ``tutor_any``),
-                        interaction (``counterspell``, ``protection``), and
-                        combat tricks (``combat_tricks``).
+                        interaction (``counterspell_hard``,
+                        ``counterspell_conditional``, ``counterspell_redirect``,
+                        ``protection``), and combat tricks (``evasion_grant``,
+                        ``combat_tricks``).
 
 ``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`, and
 :data:`TRIBES` from this package — no other changes to the pipeline are needed

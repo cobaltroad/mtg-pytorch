@@ -37,14 +37,24 @@ Tutor
                       (Demonic Tutor, Vampiric Tutor, Imperial Seal)
 
 Interaction
-    counterspell    — counter a spell or ability on the stack
-                      (Counterspell, Negate, Swan Song, Fierce Guardianship)
-    protection      — grant indestructible, hexproof, or phasing at instant speed
-                      (Heroic Intervention, Teferi's Protection, Flawless Maneuver)
+    counterspell_hard        — unconditional counter (any spell, no type restriction)
+                               (Counterspell, Force of Will, Mana Drain, Pact of Negation)
+    counterspell_conditional — counter restricted to a specific spell type, color, or
+                               CMC, or subject to a payment condition
+                               (Negate, Swan Song, Dispel, Spell Pierce, Mental Misstep)
+    counterspell_redirect    — change the target of a spell or ability on the stack,
+                               functionally acting as a counter
+                               (Deflecting Swat, Bolt Bend, Shunt)
+    protection               — grant indestructible, hexproof, or phasing at instant speed
+                               (Heroic Intervention, Teferi's Protection, Flawless Maneuver)
 
 Combat tricks
-    combat_tricks   — temporarily grant evasion, power/toughness, or combat keywords
-                      (Giant Growth, Slip Through Space, Temur Battle Rage)
+    evasion_grant  — temporarily grant flying, menace, or "can't be blocked" to
+                     enable unimpeded attackers
+                     (Slip Through Space, Shadow Rift, Distortion Strike)
+    combat_tricks  — temporarily pump power/toughness (+X/+X) or grant damage-order
+                     and lethality keywords (trample, deathtouch, first strike)
+                     (Giant Growth, Temur Battle Rage, Berserk, Titanic Boon)
 """
 
 from __future__ import annotations
@@ -178,17 +188,41 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
 
     # ── Interaction ───────────────────────────────────────────────────────────
 
-    # counterspell: effects that counter a spell or ability on the stack.
-    # Counterspell, Negate, Swan Song, Fierce Guardianship, Force of Will, etc.
-    # The catch-all `counter target.{0,60}\bspell\b` handles cards like Swan Song
-    # that name multiple spell types before the word "spell".
+    # counterspell_hard: unconditional counter that can target any spell on the
+    # stack regardless of type, color, or mana value.  A counterspell can itself
+    # be countered by another counterspell, so no type restriction applies.
+    # Counterspell, Force of Will, Mana Drain, Pact of Negation,
+    # Memory Lapse, Desertion, etc.
     (
-        r"counter target (spell|ability|activated ability|triggered ability"
-        r"|instant|sorcery|creature spell|noncreature spell)"
-        r"|counter target.{0,60}\bspell\b"
-        r"|counter(s)? (that|the) (spell|ability)",
-        "Counter target spell / ability",
-        "counterspell",
+        r"counter target spell\b",
+        "Hard counterspell (any spell)",
+        "counterspell_hard",
+    ),
+
+    # counterspell_conditional: counter restricted to a specific spell type
+    # (noncreature, instant, sorcery, enchantment, artifact, legendary), a
+    # specific mana value / CMC, or conditioned on an opponent paying mana
+    # ("unless its controller pays").  Also covers list-of-types wording used
+    # on cards like Swan Song ("enchantment, instant, or sorcery spell").
+    # Negate, Swan Song, Dispel, Force of Negation, Spell Pierce,
+    # Mental Misstep, Arcane Denial, etc.
+    (
+        r"counter target (noncreature|creature|instant|sorcery|enchantment|artifact|legendary)"
+        r".{0,30}\bspell\b"
+        r"|counter target spell.{0,80}unless"
+        r"|counter target spell with (mana value|converted mana cost)",
+        "Conditional counterspell",
+        "counterspell_conditional",
+    ),
+
+    # counterspell_redirect: change the target of a spell or ability on the
+    # stack, functionally countering it by redirecting it to a new (often
+    # harmless) target.  Deflecting Swat, Bolt Bend, Shunt, etc.
+    (
+        r"change the target.{0,40}target (spell|ability)"
+        r"|choose new targets for target (spell|ability)",
+        "Redirect / change-target effect",
+        "counterspell_redirect",
     ),
 
     # protection: instant-speed effects that grant indestructible, hexproof, or
@@ -209,18 +243,33 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
 
     # ── Combat tricks ─────────────────────────────────────────────────────────
 
-    # combat_tricks: instant-speed effects that grant evasion, power/toughness
-    # boosts, or relevant combat keywords until end of turn.
-    # Giant Growth, Slip Through Space, Temur Battle Rage, Titanic Boon, etc.
-    # Matches both "until end of turn" (standard) and "this turn" (some cards)
-    # for the unblockable / keyword-grant templates.
+    # evasion_grant: instant-speed effects that grant evasive keywords (flying,
+    # menace, shadow, fear, intimidate, skulk, horsemanship) or make a creature
+    # unable to be blocked.  Covers both the modern "can't be blocked" template
+    # and the legacy "is unblockable" / "gains unblockable" wording.
+    # Slip Through Space, Shadow Rift, Distortion Strike, etc.
     (
         r"(gain(s)?|get(s)?|has|have).{0,50}"
-        r"(flying|menace|trample|deathtouch|first strike|double strike|lifelink|vigilance)"
+        r"(flying|menace|shadow|fear|intimidate|skulk|horsemanship|unblockable)"
         r".{0,30}until end of turn"
-        r"|(get(s)?|gain(s)?).{0,20}\+\d+/\+\d+.{0,20}until end of turn"
-        r"|can't be blocked.{0,20}(until end of turn|this turn)",
-        "Combat trick / evasion or power grant",
+        r"|can't be blocked.{0,20}(until end of turn|this turn)"
+        r"|\bis unblockable\b",
+        "Evasion keyword grant",
+        "evasion_grant",
+    ),
+
+    # combat_tricks: instant-speed pump effects (+X/+X) and damage-order /
+    # lethality keywords — trample (excess damage carries over), deathtouch
+    # (any amount of damage is lethal), first strike / double strike (deal
+    # damage before blockers, or twice).
+    # Giant Growth, Temur Battle Rage, Berserk, Titanic Boon, etc.
+    # Matches both "until end of turn" (standard) and "this turn" variants.
+    (
+        r"(gain(s)?|get(s)?|has|have).{0,50}"
+        r"(trample|deathtouch|first strike|double strike|lifelink|vigilance|haste)"
+        r".{0,30}until end of turn"
+        r"|(get(s)?|gain(s)?).{0,20}\+\d+/\+\d+.{0,20}until end of turn",
+        "Combat trick / pump or damage-order keyword",
         "combat_tricks",
     ),
 ]
@@ -348,22 +397,57 @@ PRODUCER_MAP: dict[str, str] = {
         "     AND lower(oracle_text) LIKE '%win the game%')"
     ),
 
-    # The most powerful cards worth spending a generic tutor slot on: legendary
-    # permanents, alternate win conditions, and high-value finishers.
+    # Generic tutors fetch the most impactful card for the situation — not only
+    # legendary permanents and win conditions, but also high-value draw engines
+    # (Rhystic Study, Necropotence, Sylvan Library) and interaction spells
+    # (Counterspell, Swan Song) that are key to a combo or control game plan.
     "tutor_any": (
         "lower(type_line) LIKE '%legendary%'"
         " OR lower(oracle_text) LIKE '%win the game%'"
         " OR lower(oracle_text) LIKE '%each opponent loses%'"
         " OR lower(oracle_text) LIKE '%you win the game%'"
+        # High-value draw engines: triggered draw abilities (Rhystic Study,
+        # Consecrated Sphinx) and life-pay / replacement draw (Necropotence,
+        # Sylvan Library).
+        " OR (lower(oracle_text) LIKE '%whenever%' AND lower(oracle_text) LIKE '%draw%')"
+        " OR lower(oracle_text) LIKE '%draw two additional%'"
+        # Interaction worth tutoring: any counterspell or targeted removal
+        " OR lower(oracle_text) LIKE '%counter target%'"
     ),
 
-    # Instants and sorceries are what counterspells protect against (or protect
-    # in hand); cards that explicitly state they "can't be countered" are also
-    # relevant as they co-exist with counter-magic in control builds.
-    "counterspell": (
+    # Hard counters can target any spell on the stack.  They are justified by
+    # having high-value spells of any type that need to resolve — combo pieces,
+    # ETB creatures, win-condition enchantments, etc.
+    "counterspell_hard": (
         "lower(type_line) LIKE '%instant%'"
         " OR lower(type_line) LIKE '%sorcery%'"
-        " OR lower(oracle_text) LIKE '%can''t be countered%'"
+        " OR lower(type_line) LIKE '%enchantment%'"
+        " OR lower(type_line) LIKE '%artifact%'"
+        " OR (lower(type_line) LIKE '%creature%'"
+        "     AND lower(oracle_text) LIKE '%when%enters the battlefield%')"
+        # Win-condition targets worth protecting all the way through
+        " OR lower(oracle_text) LIKE '%win the game%'"
+        " OR lower(oracle_text) LIKE '%each opponent loses%'"
+    ),
+
+    # Type-conditional counters (Negate, Swan Song) are run alongside decks
+    # that cast many spells of the type they can counter, or against opponents
+    # who rely on specific spell types.
+    "counterspell_conditional": (
+        "lower(type_line) LIKE '%instant%'"
+        " OR lower(type_line) LIKE '%sorcery%'"
+        " OR lower(type_line) LIKE '%enchantment%'"
+        " OR lower(type_line) LIKE '%artifact%'"
+    ),
+
+    # Redirect effects are most powerful against single-target removal or
+    # damage spells — turning an opponent's Swords to Plowshares back on
+    # them, or redirecting burn off your commander.
+    "counterspell_redirect": (
+        "lower(oracle_text) LIKE '%destroy target%'"
+        " OR lower(oracle_text) LIKE '%exile target%'"
+        " OR lower(oracle_text) LIKE '%deals%damage to target%'"
+        " OR lower(oracle_text) LIKE '%counter target%'"
     ),
 
     # High-value creatures, planeswalkers, and legendary permanents are the
@@ -375,8 +459,18 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%when%dies%'"
     ),
 
+    # Creatures with combat-damage-triggered abilities need to get past blockers
+    # to fire; evasion grants are the natural enabler for these strategies.
+    "evasion_grant": (
+        "lower(oracle_text) LIKE '%deals combat damage%'"
+        " OR lower(oracle_text) LIKE '%whenever%attacks%'"
+        " OR lower(oracle_text) LIKE '%whenever%deals damage%'"
+        " OR lower(oracle_text) LIKE '%can''t be blocked%'"
+        " OR lower(oracle_text) LIKE '%flying%'"
+    ),
+
     # Creatures that deal combat damage or that have combat-triggered abilities
-    # benefit most from evasion grants and power/toughness boosts.
+    # benefit most from pump effects and damage-order keywords.
     "combat_tricks": (
         "lower(oracle_text) LIKE '%deals combat damage%'"
         " OR lower(oracle_text) LIKE '%whenever%attacks%'"
