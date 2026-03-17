@@ -39,6 +39,8 @@ from pathlib import Path
 
 import asyncpg
 
+from import_utils import detect_archetype, fetch_card_details
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -121,6 +123,10 @@ async def import_decks(decklists: list[dict], name_index: dict[str, str], conn) 
         source = "moxfield" if "moxfield" in deck_url else \
                  "edhrec"   if "edhrec"   in deck_url else "unknown"
 
+        # Detect archetype from card composition
+        card_details = await fetch_card_details(conn, card_ids)
+        arch_meta = detect_archetype(card_details)
+
         try:
             result = await conn.execute("""
                 INSERT INTO decks (commander_id, source, source_url, card_ids, metadata)
@@ -136,6 +142,7 @@ async def import_decks(decklists: list[dict], name_index: dict[str, str], conn) 
                     "deck_format": deck.get("deck_format"),
                     "format_rank": deck.get("format_rank"),
                     "unresolved_cards": unresolved,
+                    **arch_meta,
                 }),
             )
             count = int(result.split()[-1])
