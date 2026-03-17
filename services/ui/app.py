@@ -302,6 +302,21 @@ with tab_deck:
                         "Add decklists in the **Import Decklist** tab to improve accuracy."
                     )
 
+                # ── Role breakdown (mirrors decklist browser) ─────────────────
+                archetype = deck.get("archetype", "")
+                win_conditions = deck.get("win_conditions", [])
+                if archetype:
+                    arch_label = archetype
+                    if win_conditions:
+                        arch_label += "  —  win cons: " + ", ".join(f"`{w}`" for w in win_conditions)
+                    st.markdown(f"**Archetype:** `{arch_label}`")
+
+                role_counts = deck.get("role_counts", {})
+                if role_counts:
+                    rc_cols = st.columns(len(role_counts))
+                    for col, (role, cnt) in zip(rc_cols, sorted(role_counts.items())):
+                        col.metric(role, cnt)
+
                 # ── Deck summary stats ────────────────────────────────────────
                 land_count = sum(
                     c.get("count", 1) for c in deck["cards"]
@@ -342,6 +357,12 @@ with tab_deck:
                         "type_line": c.get("type_line", ""),
                         "mana_cost": c.get("mana_cost", ""),
                         "cmc": c.get("cmc", ""),
+                        "roles": " | ".join(
+                            r["role"] for r in c.get("roles", [])
+                        ) or "—",
+                        "effects": " | ".join(
+                            r["effect_class"] for r in c.get("roles", [])
+                        ) or "—",
                         "score": round(s, 4),
                     }
                     for c, s in zip(deck["cards"], deck["scores"])
@@ -355,6 +376,8 @@ with tab_deck:
                     height=600,
                     column_config={
                         "count": st.column_config.NumberColumn("#", width="small"),
+                        "roles": st.column_config.TextColumn("roles", width="medium"),
+                        "effects": st.column_config.TextColumn("effect tags", width="medium"),
                         "score": st.column_config.NumberColumn("Score", format="%.4f"),
                     },
                 )

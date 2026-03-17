@@ -60,12 +60,58 @@ CURVE_BUCKETS: list[tuple[int, int]] = [
 assert sum(t for _, t in CURVE_BUCKETS) == SPELL_SLOTS, "CURVE_BUCKETS must sum to SPELL_SLOTS"
 
 
+TRIBAL_BOOST = 1.5   # score multiplier for cards belonging to the commander's referenced tribe(s)
+
+# Irregular plural → singular mappings for MTG creature types
+_PLURAL_IRREGULARS: dict[str, str] = {
+    "elves": "elf",
+    "wolves": "wolf",
+}
+
+
 def _curve_bucket(cmc: float) -> int:
     """Return the CURVE_BUCKETS index for a given CMC value."""
     for i, (cap, _) in enumerate(CURVE_BUCKETS):
         if cmc <= cap:
             return i
     return len(CURVE_BUCKETS) - 1
+
+
+def _card_subtypes(type_line: str) -> frozenset[str]:
+    """Return the creature subtypes of a card (text after the em dash in type_line)."""
+    if "\u2014" in type_line:
+        return frozenset(type_line.split("\u2014", 1)[1].split())
+    return frozenset()
+
+
+def _commander_tribal_types(oracle_text: str, known_subtypes: frozenset[str]) -> frozenset[str]:
+    """Return creature type names that the commander's oracle text explicitly references.
+
+    Reads the commander's oracle text (e.g. "tap ten untapped Elves you control")
+    and returns the canonical singular subtype(s) mentioned.  Only returns types that
+    actually exist in the card pool so we don't match arbitrary capitalised words.
+
+    Examples:
+      "Elves you control" + known={"Elf", ...} → frozenset({"Elf"})
+      "create 1/1 Elf Warrior tokens" + known   → frozenset({"Elf", "Warrior"})
+    """
+    known_lower: dict[str, str] = {s.lower(): s for s in known_subtypes}
+    found: set[str] = set()
+    for word in re.findall(r"\b[A-Z][a-z]+\b", oracle_text or ""):
+        lower = word.lower()
+        # Direct match (singular form already in pool)
+        if lower in known_lower:
+            found.add(known_lower[lower])
+            continue
+        # Try irregular plural → singular
+        singular = _PLURAL_IRREGULARS.get(lower)
+        if singular and singular in known_lower:
+            found.add(known_lower[singular])
+            continue
+        # Generic plural: strip trailing 's'
+        if lower.endswith("s") and lower[:-1] in known_lower:
+            found.add(known_lower[lower[:-1]])
+    return frozenset(found)
 
 
 def _count_pips(mana_cost: str | None) -> dict[str, int]:
@@ -120,6 +166,8 @@ async def generate(
     # ── Attempt real model inference ─────────────────────────────────────────
     try:
         from ops import inference
+        from ops.card_roles import detect_roles
+        from ops.import_utils import detect_archetype
 
         loop = asyncio.get_event_loop()
 
@@ -205,6 +253,31 @@ async def generate(
                     def _is_basic(cid: str) -> bool:
                         tl = type_lines.get(cid, "")
                         return "Basic" in tl and "Land" in tl
+
+                    # ── Tribal boost ──────────────────────────────────────────
+                    # Read the commander's oracle text to detect which creature
+                    # types it explicitly references (e.g. "Elves you control").
+                    # Boost cards of those types — this catches tribal commanders
+                    # even when training co-occurrence data is thin.
+                    all_subtypes: frozenset[str] = frozenset(
+                        subtype
+                        for tl in type_lines.values()
+                        if "\u2014" in tl
+                        for subtype in tl.split("\u2014", 1)[1].split()
+                    )
+                    cmd_oracle_text: str = commander_row[4] or ""
+                    cmd_tribal_types = _commander_tribal_types(cmd_oracle_text, all_subtypes)
+                    if cmd_tribal_types:
+                        scored = [
+                            (
+                                cid,
+                                sc * TRIBAL_BOOST
+                                if _card_subtypes(type_lines.get(cid, "")) & cmd_tribal_types
+                                else sc,
+                            )
+                            for cid, sc in scored
+                        ]
+                        scored.sort(key=lambda x: x[1], reverse=True)
 
                     nonbasic_scored = [
                         (cid, sc) for cid, sc in scored
@@ -395,6 +468,22 @@ async def generate(
                             })
                             scores.append(0.0)
 
+                    # ── Role annotation ───────────────────────────────────────
+                    for card in cards:
+                        role_hits = detect_roles(
+                            card.get("oracle_text") or "",
+                            card.get("type_line") or "",
+                        )
+                        card["roles"] = [
+                            {"role": role, "effect_class": ec}
+                            for role, ec in role_hits
+                        ]
+
+                    non_land_cards = [
+                        c for c in cards if "Land" not in c.get("type_line", "")
+                    ]
+                    archetype_info = detect_archetype(non_land_cards)
+
                     # Resolve context card names for the response
                     context_names: list[str] = []
                     if context_ids:
@@ -416,6 +505,9 @@ async def generate(
                         "scores": scores,
                         "checkpoint": ckpt_name,
                         "context_cards": context_names,
+                        "role_counts": archetype_info.get("role_counts", {}),
+                        "archetype": archetype_info.get("archetype", ""),
+                        "win_conditions": archetype_info.get("win_conditions", []),
                     }
 
     except Exception as exc:
