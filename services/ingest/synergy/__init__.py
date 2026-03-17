@@ -24,15 +24,23 @@ Sub-modules, each covering one broad theme:
                         ``counterspell_conditional``, ``counterspell_redirect``,
                         ``protection``), and combat tricks (``evasion_grant``,
                         ``combat_tricks``).
+* :mod:`roles`       — functional deck-role patterns (``ramp``, ``draw_one``,
+                        ``draw_engine``, ``removal``, ``sweeper``, ``tutor``,
+                        ``protection``, ``win_condition``, ``anthem``,
+                        ``token_generator``, ``recursion``, ``interaction``,
+                        ``combat_trick``, ``mana_land``, ``utility_land``).
+                        Stored as ``ability_type = 'role'`` rows in
+                        ``card_abilities``.
 
-``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`, and
-:data:`TRIBES` from this package — no other changes to the pipeline are needed
-when a sub-module is extended.
+``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`,
+:data:`TRIBES`, :data:`ROLE_PATTERNS`, and :data:`LAND_ROLE_PATTERNS` from
+this package — no other changes to the pipeline are needed when a sub-module
+is extended.
 """
 
 from __future__ import annotations
 
-from . import deckbuilding, events, lifegain, tribal, utility
+from . import deckbuilding, events, lifegain, roles, tribal, utility
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
@@ -53,4 +61,8 @@ PRODUCER_MAP: dict[str, str] = {
     **utility.PRODUCER_MAP,
 }
 
-__all__ = ["TRIGGER_PATTERNS", "PRODUCER_MAP", "TRIBES"]
+ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
+LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
+is_land_card = roles.is_land_card
+
+__all__ = ["TRIGGER_PATTERNS", "PRODUCER_MAP", "TRIBES", "ROLE_PATTERNS", "LAND_ROLE_PATTERNS", "is_land_card"]
