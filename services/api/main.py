@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from db import get_db, AsyncSession
 from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
 from ops import deck_browser as browser_ops
+from ops.commander_analysis import analyze_commander_oracle_text, CommanderAnalysis, SignalResult
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,36 @@ async def similar_cards(
     return results
 
 
+# ── Commander analysis ───────────────────────────────────────────────────────
+
+@app.get("/commanders/{oracle_id}/analyze", response_model=CommanderAnalysis)
+async def analyze_commander(oracle_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Parse a commander's oracle text and return structured deckbuilding signals.
+
+    Returns detected signals (tribal, combat, counters, MTG rules terms, etc.),
+    gaps the parser couldn't interpret, an archetype hint, and a generation
+    confidence label.  Pure heuristics — no model inference involved.
+    """
+    result = await db.execute(
+        text("""
+            SELECT name, oracle_text, color_identity, keywords
+            FROM cards WHERE oracle_id = :oid
+        """),
+        {"oid": str(oracle_id)},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(404, "Card not found")
+
+    name, oracle_text, color_identity, keywords = row
+    return analyze_commander_oracle_text(
+        oracle_text=oracle_text or "",
+        commander_name=name,
+        color_identity=list(color_identity or []),
+        keywords=list(keywords or []),
+    )
+
+
 # ── Synergy ──────────────────────────────────────────────────────────────────
 
 class SynergyPair(BaseModel):
@@ -124,6 +155,7 @@ async def get_synergies(
 class DeckRequest(BaseModel):
     commander_oracle_id: UUID
     checkpoint: str = "latest"
+    boost_overrides: list[str] = []
 
 
 class DeckOut(BaseModel):
@@ -137,7 +169,10 @@ class DeckOut(BaseModel):
 @app.post("/decks/generate", response_model=DeckOut)
 async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
     """Ask the model to build a 99-card commander deck."""
-    result = await deck_ops.generate(db, req.commander_oracle_id, req.checkpoint)
+    result = await deck_ops.generate(
+        db, req.commander_oracle_id, req.checkpoint,
+        boost_overrides=req.boost_overrides or None,
+    )
     if result is None:
         raise HTTPException(400, "Could not generate deck — commander not found or model unavailable")
     return result

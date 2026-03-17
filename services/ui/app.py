@@ -34,14 +34,29 @@ def browse_deck(deck_id: str) -> dict:
     return r.json()
 
 
-def generate_deck(oracle_id: str, checkpoint: str = "latest") -> dict:
+def generate_deck(oracle_id: str, checkpoint: str = "latest", boost_overrides: list[str] | None = None) -> dict:
     r = httpx.post(
         f"{API_URL}/decks/generate",
-        json={"commander_oracle_id": oracle_id, "checkpoint": checkpoint},
+        json={
+            "commander_oracle_id": oracle_id,
+            "checkpoint": checkpoint,
+            "boost_overrides": boost_overrides or [],
+        },
         timeout=120,
     )
     r.raise_for_status()
     return r.json()
+
+
+@st.cache_data(ttl=300)
+def analyze_commander(oracle_id: str) -> dict | None:
+    """Call the analyze endpoint for a commander (cached 5 min)."""
+    try:
+        r = httpx.get(f"{API_URL}/commanders/{oracle_id}/analyze", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=3600)
@@ -53,6 +68,12 @@ def get_metrics() -> dict | None:
         return r.json()
     except Exception:
         return None
+
+
+# ── UI constants ──────────────────────────────────────────────────────────────
+
+_CONFIDENCE_ICONS = {"high": "✅", "medium": "⚠️", "low": "❓", "unknown": "❓"}
+_GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -201,12 +222,71 @@ with tab_deck:
             choice = st.selectbox("Select commander", list(options.keys()))
             commander = options[choice]
 
+    # ── Commander Analysis panel ───────────────────────────────────────────────
+    _analysis: dict | None = None
+    _boost_overrides: list[str] = []
+    if commander:
+        _analysis = analyze_commander(str(commander["oracle_id"]))
+        if _analysis:
+            _boost_overrides = _analysis.get("boost_overrides", [])
+
+        conf_label = _analysis.get("generation_confidence", "none") if _analysis else "none"
+        conf_icon = _GENERATION_CONF_ICONS.get(conf_label, "❓")
+
+        with st.expander(
+            f"Commander Analysis: {commander['name']}  {conf_icon} generation confidence: {conf_label}",
+            expanded=True,
+        ):
+            if _analysis is None:
+                st.warning("Could not fetch commander analysis (API unavailable).")
+            else:
+                # Color identity
+                colors = " / ".join(_analysis.get("color_identity") or []) or "Colorless"
+                st.markdown(f"**Colors:** {colors}")
+
+                # Archetype hint
+                hint = _analysis.get("archetype_hint")
+                if hint:
+                    st.markdown(f"**Inferred deck goal:** {hint}")
+
+                # Signals
+                signals = _analysis.get("signals", [])
+                if signals:
+                    st.markdown("**Detected signals:**")
+                    for sig in signals:
+                        conf = sig.get("confidence", "unknown")
+                        icon = _CONFIDENCE_ICONS.get(conf, "❓")
+                        boost_note = " *(boost applied)*" if sig.get("boost_applied") else ""
+                        phrase = sig.get("phrase", "")
+                        label = sig.get("label", "")
+                        sig_type = sig.get("signal_type", "")
+                        st.markdown(
+                            f"  {icon} **{sig_type}**: {label}"
+                            f'  — `"{phrase}"`  [confidence: {conf}]{boost_note}'
+                        )
+                else:
+                    st.info("No signals detected from oracle text.")
+
+                # Gaps
+                gaps = _analysis.get("gaps", [])
+                if gaps:
+                    st.markdown("**Gaps** *(mechanics the parser couldn't fully interpret):*")
+                    for gap in gaps:
+                        st.markdown(f"  ❓ {gap}")
+                    st.caption(
+                        "These mechanics may reduce generation quality. "
+                        "Adding decklists for this commander will improve results."
+                    )
+
+                if _boost_overrides:
+                    st.caption(f"Score boosts active: {', '.join(_boost_overrides)}")
+
     checkpoint = st.text_input("Model checkpoint", value="latest")
 
     if commander and st.button("Generate deck", type="primary"):
         with st.spinner("Generating 99-card deck…"):
             try:
-                deck = generate_deck(str(commander["oracle_id"]), checkpoint)
+                deck = generate_deck(str(commander["oracle_id"]), checkpoint, _boost_overrides)
                 st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
                 st.markdown(f"**Commander:** {deck['commander']['name']}")
 

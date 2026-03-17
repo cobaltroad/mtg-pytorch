@@ -1,0 +1,533 @@
+"""Commander oracle-text analysis — pure signal extraction, no DB dependency.
+
+Parses a commander's oracle text into structured deckbuilding signals so the UI
+can explain *why* the model builds the deck it does, and surface gaps where the
+parser has no interpretation (triggering a "consider adding decklists" note).
+
+Design goals:
+  - Purely functional: `analyze_commander_oracle_text()` takes strings, returns
+    a `CommanderAnalysis`.  No database I/O, no imports from other ops modules.
+  - Extensible: add new entries to `RULES_TERM_SIGNALS` to handle new mechanics.
+  - Transparent: every signal carries a `confidence` label and the matched phrase.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import NamedTuple
+
+from pydantic import BaseModel
+
+
+# ── Response models ───────────────────────────────────────────────────────────
+
+class SignalResult(BaseModel):
+    signal_type: str    # "tribal" | "mechanic" | "combat" | "counter" | "evasion"
+                        # | "death_sac" | "token" | "spellslinger" | "draw"
+                        # | "graveyard" | "lifegain" | "unknown"
+    label: str          # Human-readable label shown in the UI
+    confidence: str     # "high" | "medium" | "low" | "unknown"
+    phrase: str         # Matched phrase from oracle text
+    boost_applied: bool # Whether this signal changes generation behaviour
+
+
+class CommanderAnalysis(BaseModel):
+    commander_name: str
+    color_identity: list[str]
+    signals: list[SignalResult]
+    gaps: list[str]              # Phrases the parser couldn't interpret
+    archetype_hint: str | None   # e.g. "elf tribal + elfball"
+    generation_confidence: str   # "high" | "medium" | "low" | "none"
+    boost_overrides: list[str]   # Boost keys active for this commander (e.g. ["mana_producers"])
+
+
+# ── Internal rule representation ──────────────────────────────────────────────
+
+class _RulesTerm(NamedTuple):
+    signal_type: str
+    label: str
+    confidence: str
+    boost: str | None   # None → recognized but no boost → appears in gaps too
+
+
+# ── MTG rules-term dictionary ─────────────────────────────────────────────────
+# Each key is the *exact phrase* to search for (case-insensitive substring match).
+# boost=None means "recognized concept, but no heuristic boost is implemented" →
+# the term is included as a ⚠️ signal AND added to gaps[] to prompt the user.
+#
+# To extend: add a new key-value pair. That's it.
+
+RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
+    # Mana / ramp mechanics
+    "mana ability": _RulesTerm(
+        "mechanic", "mana dork / elfball (mana ability = mana-producing activated ability)",
+        "high", "mana_producers",
+    ),
+    # Cycling
+    "whenever you cycle": _RulesTerm(
+        "mechanic", "cycling matters",
+        "high", "cycling",
+    ),
+    "cycling": _RulesTerm(
+        "keyword", "cycling",
+        "medium", "cycling",
+    ),
+    # Dungeon / venture
+    "complete a dungeon": _RulesTerm(
+        "mechanic", "dungeon completion (venture into the dungeon)",
+        "medium", None,
+    ),
+    "venture into the dungeon": _RulesTerm(
+        "mechanic", "venture into the dungeon",
+        "medium", None,
+    ),
+    # Lifegain
+    "whenever you gain life": _RulesTerm(
+        "lifegain", "lifegain payoff",
+        "high", "lifegain",
+    ),
+    "whenever a player gains life": _RulesTerm(
+        "lifegain", "lifegain matters",
+        "medium", "lifegain",
+    ),
+    # Spellslinger keywords
+    "prowess": _RulesTerm(
+        "keyword", "prowess / spellslinger",
+        "high", "spellslinger",
+    ),
+    "magecraft": _RulesTerm(
+        "keyword", "magecraft / spellslinger",
+        "high", "spellslinger",
+    ),
+    "storm": _RulesTerm(
+        "keyword", "storm (copies per spell cast this turn)",
+        "high", "spellslinger",
+    ),
+    # Token / wide keywords
+    "convoke": _RulesTerm(
+        "keyword", "convoke (tap creatures to help cast spells) / token wide",
+        "medium", "tokens",
+    ),
+    "populate": _RulesTerm(
+        "keyword", "populate (copy a token) / token wide",
+        "high", "tokens",
+    ),
+    # Ramp / Eldrazi
+    "annihilator": _RulesTerm(
+        "keyword", "annihilator (Eldrazi aggro / ramp)",
+        "high", "ramp",
+    ),
+    # Energy
+    "energy counter": _RulesTerm(
+        "mechanic", "energy counter matters",
+        "medium", None,
+    ),
+    # Exile play (e.g. Rocco, Prosper)
+    "play it from exile": _RulesTerm(
+        "mechanic", "play from exile matters",
+        "high", "play_from_exile",
+    ),
+    "play cards from exile": _RulesTerm(
+        "mechanic", "play from exile matters",
+        "high", "play_from_exile",
+    ),
+    "cast it from exile": _RulesTerm(
+        "mechanic", "cast from exile matters",
+        "high", "play_from_exile",
+    ),
+    # Food / artifact tokens
+    "food token": _RulesTerm(
+        "mechanic", "Food artifact tokens (lifegain + sacrifice synergy)",
+        "high", "food",
+    ),
+    "treasure token": _RulesTerm(
+        "mechanic", "Treasure token production (ramp)",
+        "high", "treasures",
+    ),
+    "clue token": _RulesTerm(
+        "mechanic", "Clue tokens (draw / investigate matters)",
+        "high", "clues",
+    ),
+    # Deathtouch payoff (e.g. Fynn)
+    "deathtouch": _RulesTerm(
+        "keyword", "deathtouch — wants other deathtouch creatures",
+        "high", "deathtouch",
+    ),
+    # Infect
+    "infect": _RulesTerm(
+        "keyword", "infect (poison counter win condition)",
+        "high", "infect",
+    ),
+    # Mill
+    "mill": _RulesTerm(
+        "keyword", "mill (put cards from library into graveyard)",
+        "medium", "mill",
+    ),
+    # Proliferate
+    "proliferate": _RulesTerm(
+        "keyword", "proliferate (spread counters)",
+        "high", "counters",
+    ),
+    # Keyword counters (e.g. Atraxa)
+    "keyword counter": _RulesTerm(
+        "mechanic", "keyword counters",
+        "medium", "counters",
+    ),
+    # Card-type matters (e.g. Atraxa Grand Unifier)
+    "instant card": _RulesTerm(
+        "mechanic", "instant card type matters",
+        "medium", "spellslinger",
+    ),
+    "sorcery card": _RulesTerm(
+        "mechanic", "sorcery card type matters",
+        "medium", "spellslinger",
+    ),
+    "artifact card": _RulesTerm(
+        "mechanic", "artifact card type matters",
+        "medium", "artifacts",
+    ),
+    "enchantment card": _RulesTerm(
+        "mechanic", "enchantment card type matters",
+        "medium", "enchantments",
+    ),
+    "planeswalker card": _RulesTerm(
+        "mechanic", "planeswalker card type matters",
+        "medium", "planeswalkers",
+    ),
+    "creature card": _RulesTerm(
+        "mechanic", "creature card type matters",
+        "medium", "creatures",
+    ),
+    # Phasing / blink
+    "exile and return": _RulesTerm(
+        "mechanic", "blink / flicker (exile and return)",
+        "medium", "blink",
+    ),
+    "phase out": _RulesTerm(
+        "mechanic", "phasing (phase out / phase in)",
+        "medium", None,
+    ),
+}
+
+# ── Pattern-based signal extraction ──────────────────────────────────────────
+# Each entry: (signal_type, label, confidence, boost, pattern)
+
+@dataclass
+class _PatternSignal:
+    signal_type: str
+    label: str
+    confidence: str
+    boost: str | None
+    pattern: re.Pattern[str]
+
+
+_PATTERN_SIGNALS: list[_PatternSignal] = [
+    # ── Tribal ────────────────────────────────────────────────────────────────
+    _PatternSignal("tribal", "Tribal: Elf", "high", "tribal",
+                   re.compile(r"\belf\b|\belves\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Zombie", "high", "tribal",
+                   re.compile(r"\bzombie(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Goblin", "high", "tribal",
+                   re.compile(r"\bgoblin(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Dragon", "high", "tribal",
+                   re.compile(r"\bdragon(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Vampire", "high", "tribal",
+                   re.compile(r"\bvampire(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Knight", "high", "tribal",
+                   re.compile(r"\bknight(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Merfolk", "high", "tribal",
+                   re.compile(r"\bmerfolk\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Human", "high", "tribal",
+                   re.compile(r"\bhuman(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Sliver", "high", "tribal",
+                   re.compile(r"\bsliver(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Spirit", "high", "tribal",
+                   re.compile(r"\bspirit(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Warrior", "high", "tribal",
+                   re.compile(r"\bwarrior(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Wizard", "high", "tribal",
+                   re.compile(r"\bwizard(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Cleric", "high", "tribal",
+                   re.compile(r"\bcleric(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Rogue", "high", "tribal",
+                   re.compile(r"\brogue(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Dinosaur", "high", "tribal",
+                   re.compile(r"\bdinosaur(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Changeling (all types)", "high", "tribal",
+                   re.compile(r"\bchangeling\b", re.I)),
+
+    # ── Combat ────────────────────────────────────────────────────────────────
+    _PatternSignal("combat", "attack-oriented trigger", "high", None,
+                   re.compile(r"\bwhenever\b.{0,60}\battack(s|ed|ing)?\b", re.I)),
+    _PatternSignal("combat", "combat damage trigger", "high", None,
+                   re.compile(r"\bdeal(s)? combat damage\b", re.I)),
+    _PatternSignal("combat", "combat damage to a player", "high", None,
+                   re.compile(r"\bdeal(s)?.{0,30}damage to (a |the )?player", re.I)),
+    _PatternSignal("combat", "menace — requires two blockers", "high", None,
+                   re.compile(r"\bmenace\b", re.I)),
+    _PatternSignal("combat", "first strike", "medium", None,
+                   re.compile(r"\bfirst strike\b", re.I)),
+    _PatternSignal("combat", "double strike", "high", None,
+                   re.compile(r"\bdouble strike\b", re.I)),
+    _PatternSignal("combat", "trample", "medium", None,
+                   re.compile(r"\btrample\b", re.I)),
+    _PatternSignal("combat", "deathtouch granted to attackers", "high", "deathtouch",
+                   re.compile(r"gain deathtouch.{0,30}(until end of turn|when.{0,30}attack)", re.I)),
+    _PatternSignal("combat", "lifelink granted in combat", "medium", None,
+                   re.compile(r"gain lifelink.{0,30}(until end of turn|when.{0,30}attack)", re.I)),
+
+    # ── Evasion ───────────────────────────────────────────────────────────────
+    _PatternSignal("evasion", "flying", "medium", None,
+                   re.compile(r"\bflying\b", re.I)),
+    _PatternSignal("evasion", "hexproof", "medium", None,
+                   re.compile(r"\bhexproof\b", re.I)),
+    _PatternSignal("evasion", "protection from", "medium", None,
+                   re.compile(r"\bprotection from\b", re.I)),
+    _PatternSignal("evasion", "can't be blocked", "high", None,
+                   re.compile(r"\bcan'?t be blocked\b", re.I)),
+    _PatternSignal("evasion", "shroud", "medium", None,
+                   re.compile(r"\bshroud\b", re.I)),
+    _PatternSignal("evasion", "ward", "medium", None,
+                   re.compile(r"\bward\b", re.I)),
+    _PatternSignal("evasion", "indestructible", "medium", None,
+                   re.compile(r"\bindestructible\b", re.I)),
+
+    # ── Counter synergy ───────────────────────────────────────────────────────
+    _PatternSignal("counter", "+1/+1 counters", "high", "counters",
+                   re.compile(r"\+1/\+1 counter", re.I)),
+    _PatternSignal("counter", "-1/-1 counters", "medium", "counters",
+                   re.compile(r"-1/-1 counter", re.I)),
+    _PatternSignal("counter", "charge counters", "medium", "counters",
+                   re.compile(r"\bcharge counter", re.I)),
+
+    # ── Death / sacrifice ─────────────────────────────────────────────────────
+    _PatternSignal("death_sac", "death trigger (creature dies)", "high", "aristocrats",
+                   re.compile(r"when(ever)?.{0,40}(creature|nontoken).{0,20}dies", re.I)),
+    _PatternSignal("death_sac", "sacrifice outlet trigger", "high", "aristocrats",
+                   re.compile(r"whenever you sacrifice", re.I)),
+    _PatternSignal("death_sac", "sacrifice a creature for effect", "high", "aristocrats",
+                   re.compile(r"sacrifice (a|an|one or more) (creature|permanent)", re.I)),
+
+    # ── Token production ──────────────────────────────────────────────────────
+    _PatternSignal("token", "creates creature tokens", "high", "tokens",
+                   re.compile(r"create (a|an|x|\d+|that many) .{0,30}(creature )?token", re.I)),
+    _PatternSignal("token", "token on attack/damage", "high", "tokens",
+                   re.compile(r"create (a|an|x|\d+|that many) .{0,30}token.{0,60}(attack|damage|combat)", re.I)),
+
+    # ── Spellslinger ──────────────────────────────────────────────────────────
+    _PatternSignal("spellslinger", "instant/sorcery trigger", "high", "spellslinger",
+                   re.compile(r"whenever you cast (an? )?(instant|sorcery|noncreature spell)", re.I)),
+    _PatternSignal("spellslinger", "each spell cast trigger", "high", "spellslinger",
+                   re.compile(r"whenever you cast (your|a|the) (second|third|fourth|next|another)", re.I)),
+
+    # ── Draw / card advantage ─────────────────────────────────────────────────
+    _PatternSignal("draw", "draw cards trigger", "high", None,
+                   re.compile(r"draw (a |\d+ )?card(s)?", re.I)),
+    _PatternSignal("draw", "look at top of library", "medium", None,
+                   re.compile(r"look at the top.{0,30}(card|library)", re.I)),
+    _PatternSignal("draw", "draw on damage/attack", "high", None,
+                   re.compile(r"draw (a |\d+ )?card.{0,60}(whenever|combat|damage|attack)", re.I)),
+
+    # ── Graveyard ─────────────────────────────────────────────────────────────
+    _PatternSignal("graveyard", "return from graveyard to battlefield", "high", "graveyard",
+                   re.compile(r"return .{0,40} from (your |a |the )?graveyard to (the )?battlefield", re.I)),
+    _PatternSignal("graveyard", "cast from graveyard", "high", "graveyard",
+                   re.compile(r"from (your |a )?graveyard.{0,30}cast", re.I)),
+    _PatternSignal("graveyard", "flashback / unearth", "medium", "graveyard",
+                   re.compile(r"\bflashback\b|\bunearth\b", re.I)),
+
+    # ── Lifegain ──────────────────────────────────────────────────────────────
+    _PatternSignal("lifegain", "gain life effect", "medium", "lifegain",
+                   re.compile(r"\bgain(s)? \d+ life\b", re.I)),
+    _PatternSignal("lifegain", "gain life conditional", "medium", "lifegain",
+                   re.compile(r"\bgain life\b", re.I)),
+
+    # ── Landfall ──────────────────────────────────────────────────────────────
+    _PatternSignal("mechanic", "landfall", "high", "landfall",
+                   re.compile(r"\blandfall\b", re.I)),
+    _PatternSignal("mechanic", "land enters trigger", "high", "landfall",
+                   re.compile(r"whenever (a |one or more )?land(s)?.{0,20}enters", re.I)),
+
+    # ── Aristocrats / death payoffs ───────────────────────────────────────────
+    _PatternSignal("death_sac", "when commander enters or leaves", "medium", None,
+                   re.compile(r"when(ever)? .{0,30} enters the battlefield", re.I)),
+]
+
+# ── Archetype hint derivation ─────────────────────────────────────────────────
+# Maps sets of detected boost keys to a human-readable archetype hint.
+# Checked in order; first match wins.  More specific combos go first.
+
+_ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
+    ({"tribal", "mana_producers"},     "elf tribal + elfball (mana-dork matters)"),
+    ({"tribal", "aristocrats"},        "tribal aristocrats"),
+    ({"tribal", "tokens"},             "tribal token swarm"),
+    ({"tribal", "counters"},           "tribal counters"),
+    ({"tribal"},                       "tribal"),
+    ({"mana_producers", "counters"},   "elfball / mana-dork matters + counters"),
+    ({"mana_producers"},               "elfball / mana-dork matters"),
+    ({"aristocrats", "tokens"},        "aristocrats + token sacrifice"),
+    ({"aristocrats"},                  "aristocrats"),
+    ({"tokens", "go_wide"},            "go-wide token swarm"),
+    ({"tokens"},                       "tokens"),
+    ({"play_from_exile", "food"},      "exile-play + Food (lifegain artifacts)"),
+    ({"play_from_exile", "treasures"}, "exile-play + Treasure ramp"),
+    ({"play_from_exile"},              "exile-play matters"),
+    ({"spellslinger"},                 "spellslinger / storm"),
+    ({"counters", "proliferate"},      "proliferate / counter matters"),
+    ({"counters"},                     "counters matters"),
+    ({"graveyard"},                    "reanimator / graveyard"),
+    ({"lifegain"},                     "lifegain payoff"),
+    ({"infect"},                       "infect (poison counters)"),
+    ({"deathtouch"},                   "deathtouch / poison combat"),
+    ({"landfall"},                     "landfall"),
+    ({"ramp"},                         "big mana / Eldrazi ramp"),
+    ({"mill"},                         "mill"),
+    ({"voltron"},                      "voltron / equipment"),
+]
+
+
+# ── Main analysis function ────────────────────────────────────────────────────
+
+def analyze_commander_oracle_text(
+    oracle_text: str,
+    commander_name: str = "Unknown Commander",
+    color_identity: list[str] | None = None,
+    keywords: list[str] | None = None,
+) -> CommanderAnalysis:
+    """Parse a commander's oracle text into structured deckbuilding signals.
+
+    Parameters
+    ----------
+    oracle_text:
+        The commander's full oracle text (may be empty string).
+    commander_name:
+        Card name — used in the response object only.
+    color_identity:
+        Commander's color identity symbols (e.g. ["B", "G"]).
+    keywords:
+        Printed keyword abilities list from the card data (e.g. ["Flying",
+        "Vigilance"]).  These supplement oracle-text scanning.
+
+    Returns
+    -------
+    CommanderAnalysis
+        Structured result with signals, gaps, archetype hint, and confidence.
+    """
+    color_identity = color_identity or []
+    keywords = keywords or []
+    text_lower = oracle_text.lower()
+
+    signals: list[SignalResult] = []
+    gaps: list[str] = []
+    seen_boosts: set[str] = set()
+    seen_labels: set[str] = set()   # deduplicate
+
+    # ── 1. Keyword list from card data (high confidence) ──────────────────────
+    for kw in keywords:
+        kw_lower = kw.lower()
+        # Check against rules-term dict
+        if kw_lower in RULES_TERM_SIGNALS:
+            term = RULES_TERM_SIGNALS[kw_lower]
+            label = term.label
+            if label not in seen_labels:
+                seen_labels.add(label)
+                boost = term.boost or ""
+                signals.append(SignalResult(
+                    signal_type=term.signal_type,
+                    label=label,
+                    confidence=term.confidence,
+                    phrase=kw,
+                    boost_applied=bool(term.boost),
+                ))
+                if term.boost:
+                    seen_boosts.add(term.boost)
+                if not term.boost:
+                    gaps.append(f'Keyword "{kw}" recognized but no generation boost implemented')
+
+    # ── 2. Rules-term dictionary scan (oracle text) ───────────────────────────
+    for phrase, term in RULES_TERM_SIGNALS.items():
+        if phrase in text_lower:
+            label = term.label
+            if label not in seen_labels:
+                seen_labels.add(label)
+                signals.append(SignalResult(
+                    signal_type=term.signal_type,
+                    label=label,
+                    confidence=term.confidence,
+                    phrase=phrase,
+                    boost_applied=bool(term.boost),
+                ))
+                if term.boost:
+                    seen_boosts.add(term.boost)
+                if not term.boost:
+                    gaps.append(
+                        f'Recognized MTG rules term "{phrase}" but no generation boost implemented'
+                    )
+
+    # ── 3. Pattern-based signal extraction ───────────────────────────────────
+    combined = f"{oracle_text}\n{' '.join(keywords)}"
+    for ps in _PATTERN_SIGNALS:
+        m = ps.pattern.search(combined)
+        if m:
+            label = ps.label
+            if label not in seen_labels:
+                seen_labels.add(label)
+                signals.append(SignalResult(
+                    signal_type=ps.signal_type,
+                    label=label,
+                    confidence=ps.confidence,
+                    phrase=m.group(0).strip(),
+                    boost_applied=bool(ps.boost),
+                ))
+                if ps.boost:
+                    seen_boosts.add(ps.boost)
+
+    # ── 4. Gap detection — unrecognized "whenever … / if … / each …" clauses ──
+    trigger_phrases = re.findall(
+        r"(whenever\s+[^.]{10,80}|if\s+[^,]{10,60},|each\s+[^,]{10,50},)",
+        oracle_text,
+        re.I,
+    )
+    for tp in trigger_phrases:
+        tp_clean = tp.strip()
+        # Consider it unrecognized if none of the known rules-term keys appear in it
+        # and none of the pattern signals matched it
+        known_hit = any(k in tp_clean.lower() for k in RULES_TERM_SIGNALS)
+        pattern_hit = any(ps.pattern.search(tp_clean) for ps in _PATTERN_SIGNALS)
+        if not known_hit and not pattern_hit:
+            # Only flag genuinely novel-looking constructs (skip trivial fragments)
+            if len(tp_clean.split()) > 4:
+                gap_msg = f'Unrecognized trigger/condition: "{tp_clean[:80]}"'
+                if gap_msg not in gaps:
+                    gaps.append(gap_msg)
+
+    # ── 5. Archetype hint derivation ──────────────────────────────────────────
+    archetype_hint: str | None = None
+    for required_boosts, hint in _ARCHETYPE_HINTS:
+        if required_boosts.issubset(seen_boosts):
+            archetype_hint = hint
+            break
+
+    # ── 6. Generation confidence ──────────────────────────────────────────────
+    # Heuristic: more signals with high confidence → better coverage.
+    high_count = sum(1 for s in signals if s.confidence == "high")
+    gap_count = len(gaps)
+    if high_count >= 3 and gap_count == 0:
+        generation_confidence = "high"
+    elif high_count >= 1 or (len(signals) >= 2 and gap_count <= 1):
+        generation_confidence = "medium"
+    elif signals:
+        generation_confidence = "low"
+    else:
+        generation_confidence = "none"
+
+    return CommanderAnalysis(
+        commander_name=commander_name,
+        color_identity=color_identity,
+        signals=signals,
+        gaps=gaps,
+        archetype_hint=archetype_hint,
+        generation_confidence=generation_confidence,
+        boost_overrides=sorted(seen_boosts),
+    )

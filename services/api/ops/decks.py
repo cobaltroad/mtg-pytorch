@@ -15,6 +15,12 @@ log = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# Compiled once at import time — used in boost logic inside generate().
+# Matches mana-producing activated abilities like "{T}: Add {G}" or "Add {C}".
+_MANA_ADD_RE = re.compile(r"\{[tT]\}\s*:\s*[Aa]dd|\badd \{", re.I)
+# Score multiplier applied to mana-producing cards when "mana_producers" boost is active.
+_MANA_PRODUCER_BOOST = 1.35
+
 # ── Land budget constants ─────────────────────────────────────────────────────
 # Hypergeometric: with 36 lands in 99 cards, E[lands in opening 7] ≈ 2.55
 LAND_TARGET = 36
@@ -75,12 +81,24 @@ def _sync_db_url(db_url: str) -> str:
 
 
 async def generate(
-    db: AsyncSession, commander_oracle_id: UUID, checkpoint: str
+    db: AsyncSession,
+    commander_oracle_id: UUID,
+    checkpoint: str,
+    boost_overrides: list[str] | None = None,
 ) -> dict | None:
     """Generate a 99-card deck using the DeckConstructor model.
 
     Falls back to the synergy-based stub if the model or checkpoint is
     unavailable (logs a warning in that case).
+
+    Parameters
+    ----------
+    boost_overrides:
+        Optional list of boost keys derived from ``/commanders/{id}/analyze``
+        (e.g. ``["mana_producers", "tribal"]``).  When ``"mana_producers"``
+        is present, cards whose oracle text contains a mana-producing activated
+        ability (``{T}: Add``) receive a 1.35× score multiplier so the model
+        surfaces mana-dorks even when training signal is sparse.
     """
     # Resolve commander card
     result = await db.execute(
@@ -136,6 +154,40 @@ async def generate(
                 )
 
                 if scored:
+                    # ── Heuristic boost overrides ─────────────────────────────
+                    # Apply score multipliers from commander analysis signals.
+                    # "mana_producers": boost cards with mana-producing activated
+                    # abilities (e.g. "{T}: Add {G}") — the "elfball" engine for
+                    # commanders like Tyvar the Bellicose whose key mechanic is
+                    # the MTG rules term "mana ability".
+                    active_boosts: set[str] = set(boost_overrides or [])
+                    if active_boosts:
+                        # Fetch oracle texts for scored cards (non-land pool)
+                        scored_ids = [cid for cid, _ in scored]
+                        if scored_ids:
+                            boost_result = await db.execute(
+                                text("""
+                                    SELECT id::text, oracle_text
+                                    FROM cards
+                                    WHERE id::text = ANY(:ids)
+                                """),
+                                {"ids": scored_ids},
+                            )
+                            oracle_texts: dict[str, str] = {
+                                str(r[0]): (r[1] or "") for r in boost_result.fetchall()
+                            }
+                        else:
+                            oracle_texts = {}
+
+                        def _apply_boosts(pair: tuple[str, float]) -> tuple[str, float]:
+                            cid, sc = pair
+                            ot = oracle_texts.get(cid, "")
+                            if "mana_producers" in active_boosts and _MANA_ADD_RE.search(ot):
+                                sc = sc * _MANA_PRODUCER_BOOST
+                            return cid, sc
+
+                        scored = [_apply_boosts(p) for p in scored]
+
                     # ── Lookup tables (fetched in parallel) ───────────────────
                     (type_lines, cmc_map), (ramp_ids, guaranteed_ramp), land_staples = \
                         await asyncio.gather(
