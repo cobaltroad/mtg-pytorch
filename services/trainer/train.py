@@ -141,15 +141,20 @@ def load_synergy_pairs(
     neg_ratio: int = 3,
     sample: int = 500_000,
     hard_neg_frac: float = 0.5,
+    role_demand_sample: int = 100_000,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
-    Positives: synergy_edges rows with score_type='ability_trigger'.
+    Positives: synergy_edges rows with score_type='ability_trigger' (label=1.0)
+               plus score_type='role_demand' (label=stored score, 0–1).
+               Role-demand edges encode human-observed role frequency × archetype
+               weight, so their score is a meaningful soft label.
     Negatives: hard_neg_frac of budget from hard negatives (nearest neighbours
                in embedding space that are NOT synergistic), the rest random.
     Total negatives = neg_ratio × len(positives).
     """
-    log.info("Loading synergy pairs (sample=%d)…", sample)
+    log.info("Loading synergy pairs (ability_trigger sample=%d, role_demand sample=%d)…",
+             sample, role_demand_sample)
     with get_conn() as conn:
         with conn.cursor() as cur:
             # TABLESAMPLE avoids a full sort — safe even on large tables
@@ -164,7 +169,28 @@ def load_synergy_pairs(
                 if r[0] in embeddings and r[1] in embeddings
             ]
 
-    log.info("  %d positive pairs", len(positives))
+            # Role-demand edges: use stored score as soft label so the model
+            # learns that a high-demand role match is stronger signal than a
+            # low-frequency one.  These come from the decklist browser feedback
+            # loop (write_role_demand_edges) and may be boosted by user votes.
+            if role_demand_sample > 0:
+                cur.execute("""
+                    SELECT card_a::text, card_b::text, score
+                    FROM synergy_edges
+                    WHERE score_type = 'role_demand'
+                    LIMIT %s
+                """, (role_demand_sample,))
+                role_pairs = [
+                    (r[0], r[1], float(r[2])) for r in cur.fetchall()
+                    if r[0] in embeddings and r[1] in embeddings
+                ]
+                log.info("  %d ability_trigger pairs + %d role_demand pairs",
+                         len(positives), len(role_pairs))
+                positives = positives + role_pairs
+            else:
+                log.info("  %d ability_trigger pairs (role_demand disabled)", len(positives))
+
+    log.info("  %d total positive pairs", len(positives))
 
     all_ids = list(embeddings.keys())
     pos_set = {(a, b) for a, b, _ in positives}
@@ -807,6 +833,9 @@ def main():
                         help="Fraction of negatives that are hard (nearest-neighbour) vs random")
     parser.add_argument("--sample", type=int, default=500_000,
                         help="Max positive pairs to sample from synergy_edges")
+    parser.add_argument("--role-demand-sample", type=int, default=100_000,
+                        help="Max role_demand edges to include as soft-label positives "
+                             "(0 to disable; uses stored score as label)")
     parser.add_argument("--label-smoothing", type=float, default=0.1,
                         help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2")
     parser.add_argument("--noise", type=float, default=0.05,
@@ -871,6 +900,7 @@ def main():
             neg_ratio=args.neg_ratio,
             sample=args.sample,
             hard_neg_frac=args.hard_neg_frac,
+            role_demand_sample=args.role_demand_sample,
         )
         if not pairs:
             log.error("No synergy pairs found — run compute_synergy stage first.")

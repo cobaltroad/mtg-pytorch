@@ -423,6 +423,32 @@ with tab_train:
         "Phase 3 first, then Phase 4 once Phase 3 stabilises."
     )
 
+    # ── Phase 2 ───────────────────────────────────────────────────────────────
+    st.markdown("### Phase 2 — Ability-trigger synergy")
+    p2col1, p2col2, p2col3 = st.columns(3)
+    p2_epochs           = p2col1.number_input("Epochs", value=20, min_value=1, max_value=200, key="p2_epochs")
+    p2_lr               = p2col2.number_input("Learning rate", value=1e-4, format="%.0e", key="p2_lr")
+    p2_resume           = p2col3.checkbox("Resume from phase2_best", value=True, key="p2_resume")
+    p2col4, p2col5      = st.columns(2)
+    p2_sample           = p2col4.number_input("ability_trigger sample", value=500_000, min_value=10_000, step=50_000, key="p2_sample")
+    p2_role_demand      = p2col5.number_input("role_demand sample (0=off)", value=100_000, min_value=0, step=10_000, key="p2_role_demand")
+
+    if st.button("Start Phase 2", type="primary", key="start_p2"):
+        with st.spinner("Launching Phase 2 trainer…"):
+            try:
+                r = httpx.post(f"{API_URL}/train/start", json={
+                    "phase": 2, "epochs": int(p2_epochs), "lr": p2_lr, "resume": p2_resume,
+                    "sample": int(p2_sample), "role_demand_sample": int(p2_role_demand),
+                }, timeout=15)
+                r.raise_for_status()
+                info = r.json()
+                st.success(f"Phase 2 started — container `{info['short_id']}` ({info['name']})")
+                st.caption(f"Command: `{info['command']}`")
+            except httpx.HTTPError as e:
+                st.error(f"Failed to start Phase 2: {e}")
+
+    st.divider()
+
     # ── Phase 3 ───────────────────────────────────────────────────────────────
     st.markdown("### Phase 3 — Deck co-occurrence (BPR)")
     p3col1, p3col2, p3col3 = st.columns(3)

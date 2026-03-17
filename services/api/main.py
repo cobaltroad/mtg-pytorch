@@ -252,6 +252,8 @@ class TrainRequest(BaseModel):
     encoder_lr_scale: float = 0.1
     temp_start: float = 0.5
     temp_end: float = 0.05
+    sample: int = 500_000
+    role_demand_sample: int = 100_000
 
 
 @app.post("/train/start")
@@ -269,6 +271,8 @@ async def start_training(req: TrainRequest):
             encoder_lr_scale=req.encoder_lr_scale,
             temp_start=req.temp_start,
             temp_end=req.temp_end,
+            sample=req.sample,
+            role_demand_sample=req.role_demand_sample,
         ),
     )
     if "error" in result:
