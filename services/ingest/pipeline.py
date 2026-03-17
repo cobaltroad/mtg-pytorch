@@ -319,7 +319,7 @@ async def embed_cards() -> None:
 
 # ── Stage 4: Tag abilities ────────────────────────────────────────────────────
 
-from synergy import TRIGGER_PATTERNS, PRODUCER_MAP, TRIBES, ROLE_PATTERNS, LAND_ROLE_PATTERNS, is_land_card  # noqa: E402
+from synergy import TRIGGER_PATTERNS, PRODUCER_MAP, TRIBES, ALL_TYPES_SQL, ROLE_PATTERNS, LAND_ROLE_PATTERNS, is_land_card  # noqa: E402
 
 KEYWORD_RE = re.compile(
     r"\b(flying|trample|haste|vigilance|deathtouch|lifelink|reach|hexproof|"
@@ -518,7 +518,7 @@ async def compute_tribal_typeline_synergy() -> None:
                 SELECT id::text FROM cards
                 WHERE (
                     (lower(type_line) LIKE '%{t}%' AND lower(type_line) LIKE '%creature%')
-                    OR 'Changeling' = ANY(keywords)
+                    OR {ALL_TYPES_SQL}
                 )
             """))).fetchall()
             commanders = (await db.execute(text(f"""

@@ -44,6 +44,7 @@ from . import deckbuilding, events, lifegain, roles, tribal, utility
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
+ALL_TYPES_SQL = tribal.ALL_TYPES_SQL
 
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     *events.TRIGGER_PATTERNS,
@@ -65,4 +66,4 @@ ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
 LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
 is_land_card = roles.is_land_card
 
-__all__ = ["TRIGGER_PATTERNS", "PRODUCER_MAP", "TRIBES", "ROLE_PATTERNS", "LAND_ROLE_PATTERNS", "is_land_card"]
+__all__ = ["TRIGGER_PATTERNS", "PRODUCER_MAP", "TRIBES", "ALL_TYPES_SQL", "ROLE_PATTERNS", "LAND_ROLE_PATTERNS", "is_land_card"]

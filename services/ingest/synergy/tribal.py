@@ -23,7 +23,7 @@ from .lifegain import LIFEGAIN_PRODUCER_SQL
 TRIBES: list[str] = [
     "Dragon", "Elf", "Zombie", "Vampire", "Eldrazi", "Human",
     "Dinosaur", "Goblin", "Angel", "Pirate", "Wizard", "Assassin",
-    "Merfolk", "Cat", "Sliver",
+    "Merfolk", "Cat", "Sliver", "Wolf",
 ]
 
 # ── Dynamic pattern + producer generation ────────────────────────────────────
@@ -31,7 +31,15 @@ TRIBES: list[str] = [
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = []
 PRODUCER_MAP: dict[str, str] = {}
 
-_CHANGELING = "'Changeling' = ANY(keywords)"
+# SQL predicate: card is (or grants) every creature type simultaneously.
+#   * Changeling keyword — Mothdust Changeling, Mirror Entity, etc.
+#   * "is every creature type" in oracle text — Maskwood Nexus ("each creature
+#     you control is every creature type"), Universal Automaton self-grants, etc.
+ALL_TYPES_SQL: str = (
+    "'Changeling' = ANY(keywords)"
+    " OR lower(oracle_text) LIKE '%is every creature type%'"
+)
+_CHANGELING = ALL_TYPES_SQL  # alias kept for legacy cross-synergy blocks below
 
 for _tribe in TRIBES:
     _t = _tribe.lower()
