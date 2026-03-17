@@ -68,9 +68,13 @@ async def main() -> None:
                 data = resp.json()
                 role_dist = data.get("role_distribution", {})
                 archetypes = data.get("archetypes", [])
+                archetype = data.get("archetype", "unknown")
+                win_conditions = data.get("win_conditions", [])
                 log.info(
-                    "  [%d/%d] %s — archetypes=%s roles=%s",
+                    "  [%d/%d] %s — archetype=%s win_conds=%s archetypes=%s roles=%s",
                     i, len(decks), commander,
+                    archetype,
+                    ",".join(win_conditions) or "none",
                     ",".join(archetypes) or "none",
                     {k: v for k, v in role_dist.items() if v},
                 )

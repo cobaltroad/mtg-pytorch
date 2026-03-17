@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ops.card_roles import tag_card_roles, get_card_roles, write_role_demand_edges, tag_commander_archetypes
+from ops.import_utils import detect_archetype
 
 log = logging.getLogger(__name__)
 
@@ -125,6 +126,7 @@ async def get_deck_with_roles(db: AsyncSession, deck_id: str) -> dict | None:
     # ── Role-tag each card (idempotent INSERT … ON CONFLICT DO NOTHING) ───────
     role_counts: Counter[str] = Counter()
     cards_out: list[dict] = []
+    card_details_for_archetype: list[dict] = []  # fed into detect_archetype()
 
     for row in cards_rows:
         cid         = row[0]
@@ -157,6 +159,18 @@ async def get_deck_with_roles(db: AsyncSession, deck_id: str) -> dict | None:
             "oracle_text": oracle_text,
             "roles":       roles,      # list[{role, effect_class}]
         })
+        card_details_for_archetype.append({
+            "oracle_text": oracle_text,
+            "type_line":   type_line,
+            "cmc":         cmc,
+            "keywords":    keywords,
+        })
+
+    # ── Deck-composition archetype detection ──────────────────────────────────
+    # Re-run on every browse so that updated heuristics are applied to existing
+    # decks (e.g. after backfill_roles.py re-processes them).  Preserves any
+    # user votes stored in metadata['archetype_overrides'].
+    arch_meta = detect_archetype(card_details_for_archetype)
 
     # ── Write role_demand edges (feedback loop) ───────────────────────────────
     if role_counts:
@@ -171,11 +185,15 @@ async def get_deck_with_roles(db: AsyncSession, deck_id: str) -> dict | None:
         except Exception as exc:
             log.warning("role_demand edge write failed for deck %s: %s", deck_id, exc)
 
-    # ── Update deck metadata with role counts + archetypes (Issue #33 partial) ─
+    # ── Update deck metadata with role counts + archetypes ────────────────────
     try:
         m = dict(deck_row.metadata or {})
-        m["role_counts"] = dict(role_counts)
-        m["archetypes"]  = archetypes
+        m["role_counts"]    = dict(role_counts)
+        m["archetypes"]     = archetypes
+        # Deck-composition fields (overwritten on every browse for freshness)
+        m["archetype"]      = arch_meta["archetype"]
+        m["win_conditions"] = arch_meta["win_conditions"]
+        m["avg_cmc"]        = arch_meta["avg_cmc"]
         await db.execute(text("""
             UPDATE decks SET metadata = CAST(:meta AS jsonb) WHERE id = CAST(:deck_id AS uuid)
         """), {"meta": __import__("json").dumps(m), "deck_id": deck_id})
@@ -183,7 +201,8 @@ async def get_deck_with_roles(db: AsyncSession, deck_id: str) -> dict | None:
     except Exception as exc:
         log.warning("metadata role_counts update failed: %s", exc)
 
-    return _format_deck(deck_row, cards_out, role_counts=dict(role_counts), archetypes=archetypes)
+    return _format_deck(deck_row, cards_out, role_counts=dict(role_counts), archetypes=archetypes,
+                        arch_meta=arch_meta)
 
 
 _VOTE_PROMOTE    = 2.0   # score multiplier for promoted role/archetype
@@ -331,9 +350,10 @@ def _format_deck(
     cards: list[dict],
     role_counts: dict | None = None,
     archetypes: list[str] | None = None,
+    arch_meta: dict | None = None,
 ) -> dict:
     m = deck_row.metadata or {}
-    return {
+    result = {
         "deck_id":             deck_row.deck_id,
         "source":              deck_row.source,
         "created_at":          deck_row.created_at.isoformat() if deck_row.created_at else None,
@@ -346,3 +366,12 @@ def _format_deck(
         "role_counts":         role_counts or m.get("role_counts", {}),
         "cards":               cards,
     }
+    if arch_meta is not None:
+        result["archetype"]      = arch_meta["archetype"]
+        result["win_conditions"] = arch_meta["win_conditions"]
+        result["avg_cmc"]        = arch_meta["avg_cmc"]
+    else:
+        result["archetype"]      = m.get("archetype", "unknown")
+        result["win_conditions"] = m.get("win_conditions", [])
+        result["avg_cmc"]        = m.get("avg_cmc", 0.0)
+    return result
