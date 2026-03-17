@@ -11,6 +11,8 @@ from uuid import UUID
 from fastapi import FastAPI, Query, HTTPException, Depends
 from pydantic import BaseModel
 
+from sqlalchemy import text
+
 from db import get_db, AsyncSession
 from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
 from ops import deck_browser as browser_ops
