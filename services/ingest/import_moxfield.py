@@ -59,6 +59,8 @@ from pathlib import Path
 
 import asyncpg
 
+from import_utils import detect_archetype, fetch_card_details
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -302,6 +304,10 @@ async def import_file(
                  path.name, cmd_name, len(card_ids), unresolved)
         return "ok", "dry-run"
 
+    # Detect archetype from card composition
+    card_details = await fetch_card_details(conn, card_ids)
+    arch_meta = detect_archetype(card_details)
+
     result = await conn.execute("""
         INSERT INTO decks (commander_id, source, source_url, card_ids, metadata)
         VALUES ($1::uuid, $2, $3, $4::uuid[], $5::jsonb)
@@ -316,6 +322,7 @@ async def import_file(
             "file":             path.name,
             "commanders":       commanders,
             "unresolved_cards": unresolved,
+            **arch_meta,
         }),
     )
     count = int(result.split()[-1])

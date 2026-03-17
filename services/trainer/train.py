@@ -31,6 +31,7 @@ Phase 4 – Generative deck construction
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import os
@@ -512,7 +513,8 @@ def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("""
                 SELECT commander_id::text,
-                       ARRAY(SELECT unnest(card_ids)::text) AS card_ids
+                       ARRAY(SELECT unnest(card_ids)::text) AS card_ids,
+                       metadata
                 FROM decks
                 WHERE commander_id IS NOT NULL
             """)
@@ -545,11 +547,15 @@ def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
         if len(card_ids) < 10:
             continue
         cmd_ci = color_ids.get(cmd_id, frozenset())
+        metadata = row["metadata"] or {}
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
         decks.append({
             "commander_id":      cmd_id,
             "card_ids":          card_ids,
             "color_identity":    cmd_ci,
             "legal_neg_indices": _legal_indices(cmd_ci),
+            "archetype":         metadata.get("archetype", "unknown"),
         })
 
     log.info("Loaded %d decks (%d skipped — commander or cards not embedded)",
@@ -564,6 +570,7 @@ def train_deck_phase(
     epochs: int,
     lr: float,
     batch_size: int = 32,
+    archetype_weight: dict[str, float] | None = None,
 ):
     """Phase 3: BPR ranking loss on human Commander decklists.
 
@@ -573,15 +580,16 @@ def train_deck_phase(
     BPR loss: -log(sigmoid(score_pos - score_neg))
     This teaches relative preference rather than absolute scores, which suits
     the noisy signal from human deckbuilding better than BCE.
+
+    archetype_weight: optional dict mapping archetype label → loss multiplier
+        (e.g. {"combo": 2.0, "tokens": 1.5}).  Decks whose archetype is not
+        in the dict default to a weight of 1.0.  Pass None to disable.
     """
     all_ids = list(embeddings.keys())
     all_embs = torch.from_numpy(
         np.stack([embeddings[k] for k in all_ids])
     )  # (N, D)
 
-    loader = DataLoader(
-        dataset, batch_size=1, shuffle=True, num_workers=0, collate_fn=lambda x: x[0]
-    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
@@ -593,12 +601,22 @@ def train_deck_phase(
         total_loss = 0.0
         n_batches = 0
 
-        for cmd_emb, card_embs, legal_neg_idx in loader:
-            cmd_emb  = cmd_emb.to(device)   # (D,)
-            card_embs = card_embs.to(device)  # (K, D)
+        # Iterate directly over dataset (like Phase 4) so we can read per-deck
+        # metadata (archetype) for optional loss weighting.
+        deck_indices = list(range(len(dataset)))
+        random.shuffle(deck_indices)
+
+        for idx in deck_indices:
+            cmd_emb, card_embs, legal_neg_idx = dataset[idx]
+            cmd_emb   = cmd_emb.to(device)    # (D,)
+            card_embs = card_embs.to(device)   # (K, D)
 
             if card_embs.size(0) < 2:
                 continue
+
+            # Per-deck archetype loss weight
+            deck_archetype = dataset.decks[idx].get("archetype", "unknown")
+            weight = archetype_weight.get(deck_archetype, 1.0) if archetype_weight else 1.0
 
             # Project commander and deck cards
             z_cmd  = model(cmd_emb.unsqueeze(0))            # (1, D')
@@ -615,7 +633,7 @@ def train_deck_phase(
             score_pos = (z_cmd * z_pos).sum(dim=-1)         # (K,)
             score_neg = (z_cmd * z_neg).sum(dim=-1)         # (K,)
 
-            loss = -F.logsigmoid(score_pos - score_neg).mean()
+            loss = -F.logsigmoid(score_pos - score_neg).mean() * weight
 
             optimizer.zero_grad()
             loss.backward()
@@ -851,6 +869,12 @@ def main():
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint (phase2→phase2_best, "
                              "phase1→phase1_best; falls back to previous phase if not found)")
+    parser.add_argument("--archetype-weight", type=str, default="",
+                        dest="archetype_weight",
+                        help="Phase 3: comma-separated archetype=weight pairs to upweight "
+                             "certain deck types in BPR loss "
+                             "(e.g. 'combo=2.0,tokens=1.5').  Archetypes not listed "
+                             "default to 1.0.  Leave empty to treat all decks equally.")
     parser.add_argument("--freeze-encoder", action="store_true", default=True,
                         dest="freeze_encoder",
                         help="Phase 4: freeze card_encoder weights so the decoder learns "
@@ -947,8 +971,23 @@ def main():
                 log.info("No phase3_best found — loading phase2_best as warm start")
                 load_checkpoint(model, "phase2_best", device)
 
+        # Parse optional --archetype-weight flag (e.g. "combo=2.0,tokens=1.5")
+        archetype_weight: dict[str, float] | None = None
+        if args.archetype_weight:
+            archetype_weight = {}
+            for part in args.archetype_weight.split(","):
+                name, _, val = part.strip().partition("=")
+                if name and val:
+                    try:
+                        archetype_weight[name.strip()] = float(val.strip())
+                    except ValueError:
+                        log.warning("Invalid --archetype-weight entry %r — skipped", part)
+            if archetype_weight:
+                log.info("Archetype weights: %s", archetype_weight)
+
         train_deck_phase(
             model, dataset, embeddings, args.epochs, args.lr, args.batch_size,
+            archetype_weight=archetype_weight,
         )
 
     elif args.phase == 4:
