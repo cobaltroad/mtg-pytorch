@@ -319,7 +319,7 @@ async def embed_cards() -> None:
 
 # ── Stage 4: Tag abilities ────────────────────────────────────────────────────
 
-from synergy import TRIGGER_PATTERNS, PRODUCER_MAP, TRIBES  # noqa: E402
+from synergy import TRIGGER_PATTERNS, PRODUCER_MAP, TRIBES, ROLE_PATTERNS, LAND_ROLE_PATTERNS, is_land_card  # noqa: E402
 
 KEYWORD_RE = re.compile(
     r"\b(flying|trample|haste|vigilance|deathtouch|lifelink|reach|hexproof|"
@@ -332,8 +332,49 @@ KEYWORD_RE = re.compile(
 )
 
 
+def _tag_roles(oracle_text: str, type_line: str) -> list[dict]:
+    """Return a list of role-tag dicts for a single card.
+
+    Applies :data:`ROLE_PATTERNS` against *oracle_text* and, when the card is
+    a Land, also applies :data:`LAND_ROLE_PATTERNS`.  Each matching role is
+    emitted at most once per card (duplicates within a single card are dropped).
+
+    Args:
+        oracle_text: The card's oracle text (may contain newlines for MDFCs).
+        type_line:   The card's type line (e.g. "Legendary Creature — Zombie").
+
+    Returns:
+        A list of ``card_abilities``-shaped dicts with ``ability_type='role'``.
+    """
+    seen_roles: set[str] = set()
+    rows: list[dict] = []
+
+    patterns = list(ROLE_PATTERNS)
+    if is_land_card(type_line):
+        patterns = patterns + list(LAND_ROLE_PATTERNS)
+
+    for pattern, role_name in patterns:
+        if role_name in seen_roles:
+            continue
+        m = re.search(pattern, oracle_text, re.IGNORECASE)
+        if m:
+            seen_roles.add(role_name)
+            rows.append({
+                "ability_type": "role",
+                "ability_name": role_name,
+                "trigger_event": None,
+                "effect_class": None,
+                "raw_text": m.group(0)[:200],
+            })
+
+    return rows
+
+
 async def tag_abilities() -> None:
     log.info("Tagging abilities…")
+
+    # ── Pass 1: keyword / triggered / activated abilities ─────────────────────
+    # Only processes cards that have no ability rows at all yet.
     async with Session() as db:
         result = await db.execute(text("""
             SELECT c.id, c.oracle_text, c.keywords
@@ -345,7 +386,7 @@ async def tag_abilities() -> None:
         """))
         rows = result.fetchall()
 
-    log.info("Tagging %d cards…", len(rows))
+    log.info("Tagging %d cards (keyword/triggered)…", len(rows))
     async with Session() as db:
         for row in tqdm(rows):
             card_id, oracle_text, kw_list = row[0], row[1] or "", row[2] or []
@@ -392,6 +433,41 @@ async def tag_abilities() -> None:
                     VALUES
                         (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text)
                 """), inserts)
+
+        await db.commit()
+
+    # ── Pass 2: functional role tags ──────────────────────────────────────────
+    # Processes cards that have no 'role' ability rows yet.  This is a separate
+    # pass so that role tags can be added (or re-added after a pattern update)
+    # independently of keyword/triggered tagging.
+    async with Session() as db:
+        result = await db.execute(text("""
+            SELECT c.id, c.oracle_text, c.type_line
+            FROM cards c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM card_abilities a
+                WHERE a.card_id = c.id AND a.ability_type = 'role'
+            )
+            AND c.oracle_text IS NOT NULL
+        """))
+        role_rows = result.fetchall()
+
+    log.info("Tagging roles for %d cards…", len(role_rows))
+    async with Session() as db:
+        for row in tqdm(role_rows):
+            card_id, oracle_text, type_line = row[0], row[1] or "", row[2] or ""
+            role_inserts = [
+                {**rd, "card_id": str(card_id)}
+                for rd in _tag_roles(oracle_text, type_line)
+            ]
+            if role_inserts:
+                await db.execute(text("""
+                    INSERT INTO card_abilities
+                        (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
+                    VALUES
+                        (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text)
+                    ON CONFLICT (card_id, ability_type, ability_name, effect_class) DO NOTHING
+                """), role_inserts)
 
         await db.commit()
 
