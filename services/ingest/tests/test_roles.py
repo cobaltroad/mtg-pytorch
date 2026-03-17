@@ -114,6 +114,12 @@ DRAW_ONE_CARDS = [
     ("Faithless Looting", "Draw two cards, then discard two cards.",                  "Sorcery"),
     ("Gitaxian Probe",    "({U/P} can be paid with either {U} or 2 life.)\nLook at target player's hand.\n"
                           "Draw a card.",                                              "Instant"),
+    # Wheel/mass-draw effects are one-shot sorcery draws, not repeatable engines
+    ("Windfall",
+     "Each player discards their hand, then draws cards equal to the greatest number of "
+     "cards a player discarded this way.",
+     "Sorcery"),
+    ("Wheel of Fortune",  "Each player discards their hand and draws seven cards.",   "Sorcery"),
 ]
 
 @pytest.mark.parametrize("name,oracle,type_line", DRAW_ONE_CARDS)
@@ -122,18 +128,31 @@ def test_draw_one(name, oracle, type_line):
     assert "draw_one" in roles, f"{name!r} should be tagged as draw_one; got {roles}"
 
 
-# ── Draw engine ───────────────────────────────────────────────────────────────
+# ── Repeatable draw ───────────────────────────────────────────────────────────
 
-DRAW_ENGINE_CARDS = [
+REPEATABLE_DRAW_CARDS = [
+    # "Whenever" triggered draw on permanents — fires every time the condition is met
     ("Rhystic Study",
      "Whenever an opponent casts a spell, you may pay {1}. If you don't, draw a card.",
      "Enchantment"),
-    ("Phyrexian Arena",
-     "At the beginning of your upkeep, you draw a card and you lose 1 life.",
+    ("Mystic Remora",
+     "Whenever an opponent casts a noncreature spell, you may draw a card unless that "
+     "player pays {4}.",
      "Enchantment"),
+    ("Beast Whisperer",
+     "Whenever you cast a creature spell, draw a card.",
+     "Creature — Elf Druid"),
     ("Consecrated Sphinx",
      "Whenever an opponent draws a card, you may draw two cards.",
      "Creature — Sphinx"),
+    ("Toski Bearer of Secrets",
+     "This spell can't be countered.\nIndestructible\nWhenever a creature you control "
+     "deals combat damage to a player, draw a card.",
+     "Legendary Creature — Squirrel"),
+    # "at the beginning of" step-triggered draw — once per turn, every turn
+    ("Phyrexian Arena",
+     "At the beginning of your upkeep, you draw a card and you lose 1 life.",
+     "Enchantment"),
     ("Howling Mine",
      "At the beginning of each player's draw step, if Howling Mine is untapped, "
      "that player draws an additional card.",
@@ -143,20 +162,36 @@ DRAW_ENGINE_CARDS = [
      "choose two cards in your hand drawn this turn. For each of those cards, pay 4 life "
      "or put the card on top of your library.",
      "Enchantment"),
-    ("Windfall",
-     "Each player discards their hand, then draws cards equal to the greatest number of "
-     "cards a player discarded this way.",
-     "Sorcery"),
-    ("Toski Bearer of Secrets",
-     "This spell can't be countered.\nIndestructible\nWhenever a creature you control "
-     "deals combat damage to a player, draw a card.",
-     "Legendary Creature — Squirrel"),
+    # Activated-ability draw — can be used repeatedly, costs mana/resources each time
+    ("War Room",
+     "{3}, {T}, Pay 1 life: Draw a card. Activate only as a sorcery.",
+     "Land"),
 ]
 
-@pytest.mark.parametrize("name,oracle,type_line", DRAW_ENGINE_CARDS)
-def test_draw_engine(name, oracle, type_line):
+@pytest.mark.parametrize("name,oracle,type_line", REPEATABLE_DRAW_CARDS)
+def test_repeatable_draw(name, oracle, type_line):
     roles = get_roles(oracle, type_line)
-    assert "draw_engine" in roles, f"{name!r} should be tagged as draw_engine; got {roles}"
+    assert "repeatable_draw" in roles, f"{name!r} should be tagged as repeatable_draw; got {roles}"
+
+
+# ── Repeatable draw does NOT fire for ETB / one-shot draw ─────────────────────
+
+NOT_REPEATABLE_DRAW_CARDS = [
+    # Sorcery: one-time draw from hand
+    ("Night's Whisper",   "You draw two cards and you lose 2 life.",                  "Sorcery"),
+    ("Brainstorm",        "Draw three cards, then put two cards from your hand on top of your library in any order.", "Instant"),
+    # ETB draw: "When ~ enters" fires exactly once
+    ("Mulldrifter",
+     "Flying\nWhen Mulldrifter enters the battlefield, draw two cards.\nEvoke {2}{U}",
+     "Creature — Elemental"),
+]
+
+@pytest.mark.parametrize("name,oracle,type_line", NOT_REPEATABLE_DRAW_CARDS)
+def test_not_repeatable_draw(name, oracle, type_line):
+    roles = get_roles(oracle, type_line)
+    assert "repeatable_draw" not in roles, (
+        f"{name!r} should NOT be tagged as repeatable_draw; got {roles}"
+    )
 
 
 # ── Removal ───────────────────────────────────────────────────────────────────
@@ -523,7 +558,7 @@ def test_recall_all_roles():
     role_samples = {
         "ramp":            RAMP_CARDS,
         "draw_one":        DRAW_ONE_CARDS,
-        "draw_engine":     DRAW_ENGINE_CARDS,
+        "repeatable_draw": REPEATABLE_DRAW_CARDS,
         "removal":         REMOVAL_CARDS,
         "sweeper":         SWEEPER_CARDS,
         "tutor":           TUTOR_CARDS,

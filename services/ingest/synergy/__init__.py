@@ -25,7 +25,7 @@ Sub-modules, each covering one broad theme:
                         ``protection``), and combat tricks (``evasion_grant``,
                         ``combat_tricks``).
 * :mod:`roles`       — functional deck-role patterns (``ramp``, ``draw_one``,
-                        ``draw_engine``, ``removal``, ``sweeper``, ``tutor``,
+                        ``repeatable_draw``, ``removal``, ``sweeper``, ``tutor``,
                         ``protection``, ``win_condition``, ``anthem``,
                         ``token_generator``, ``recursion``, ``interaction``,
                         ``combat_trick``, ``mana_land``, ``utility_land``).

@@ -14,15 +14,32 @@ ramp
     producers like Selvala or Cabal Coffers.
 
 draw_one
-    A card or ability that draws one or more cards as a singular effect (not
-    triggered / repeated).  Includes loot (draw-then-discard), impulse draw
-    (exile top of library, may cast), and the cantrip template.
+    A card or ability that draws one or more cards as a singular, non-repeating
+    effect.  Includes instants and sorceries that draw, loot (draw-then-discard),
+    impulse draw (exile top of library, may cast), cantrips, life-pay draw
+    (Necropotence style), and wheel/mass-draw effects that refill all hands
+    simultaneously (Windfall, Wheel of Fortune).  These are one-shot effects
+    cast from hand, not engines that keep working across multiple turns.
 
-draw_engine
-    Repeated or triggered draw: whenever a condition is met, draw a card.
-    Covers Rhystic Study, Phyrexian Arena, Consecrated Sphinx, and impulse
-    value engines (Precognition Field).  Also covers group-draw effects like
-    Howling Mine and wheel spells that make each player draw.
+repeatable_draw
+    A static, permanent-based source of card advantage that generates ongoing
+    draw (or impulse-draw) across multiple turns.  The card stays on the
+    battlefield and keeps triggering or can be activated repeatedly.
+
+    Specifically matched:
+
+    * ``\bwhenever\b`` triggered draws — condition fires repeatedly as long as
+      the permanent is in play (Rhystic Study, Mystic Remora, Beast Whisperer,
+      Reconnaissance Mission, Consecrated Sphinx, Toski).
+    * ``at the beginning of`` step-triggered draws — once per turn (Phyrexian
+      Arena, Sylvan Library, Howling Mine, Dictate of Kruphix).
+    * Activated-ability draws — explicitly cost-driven but repeatable over the
+      course of the game (War Room, Sensei's Divining Top, The Immortal Sun).
+    * Repeatable impulse engines — at beginning of turn, exile top and may play
+      (Precognition Field, Future Sight).
+
+    One-time ETB draw ("When X enters the battlefield, draw a card") and all
+    instant / sorcery draw effects belong in ``draw_one``, not here.
 
 removal
     Single-target interaction: destroy, exile, direct-damage, or bounce
@@ -132,7 +149,7 @@ ROLE_PATTERNS: list[tuple[str, str]] = [
         r"|\bdiscard.{0,30}draw (a card|cards?)\b",
         "draw_one",
     ),
-    # impulse draw: exile top of library then may play/cast it
+    # impulse draw: exile top of library then may play/cast it (one-time spell)
     (
         r"exile the top \S+ cards? of your library.{0,80}"
         r"(you may (play|cast)|may (play|cast) (it|them))",
@@ -151,26 +168,43 @@ ROLE_PATTERNS: list[tuple[str, str]] = [
         r"|look at the top.{0,60}put (it|one of them|that card).{0,30}(your hand|into your hand)",
         "draw_one",
     ),
+    # wheel / mass-draw: all players draw simultaneously (Windfall, Wheel of Fortune,
+    # Jace's Archivist, Reforge the Soul).  These are one-shot effects, typically cast
+    # from hand, even though they affect all players.
+    # "\d+ cards?" covers numeric amounts; "seven cards" / "x cards" cover named amounts.
+    (r"each (player|opponent).{0,60}draws? (cards?|a card|\d+ cards?|seven cards?|x cards?)", "draw_one"),
 
-    # ── Draw engine (triggered / repeatable) ──────────────────────────────────
+    # ── Repeatable draw ───────────────────────────────────────────────────────
+    # Static, permanent-based card-advantage engines that keep working as long as
+    # the card remains on the battlefield.
 
-    # whenever/when a condition → draw (Rhystic Study, Consecrated Sphinx, Toski, etc.)
-    # Broad match: covers "draw a card", "draw two cards", "draw X cards", "draws"
-    (r"when(ever)?\s+.{0,120}draws? (a card|\d+ cards?|cards?)", "draw_engine"),
-    # at the beginning of upkeep/draw step → draw (Phyrexian Arena, Sylvan Library,
-    # Howling Mine "that player draws an additional card")
+    # "Whenever" triggered draw — fires repeatedly on a recurring condition.
+    # Uses \bwhenever\b (not "when") to exclude single-fire ETB triggers like
+    # "When Mulldrifter enters the battlefield, draw two cards."
+    # Covers: Rhystic Study, Mystic Remora, Beast Whisperer, Consecrated Sphinx,
+    #         Toski Bearer of Secrets, Reconnaissance Mission, etc.
+    (r"\bwhenever\b.{0,120}draws? (a card|\d+ cards?|cards?)", "repeatable_draw"),
+    # "at the beginning of" step-triggered draw — once per turn, every turn.
+    # Covers: Phyrexian Arena, Sylvan Library, Howling Mine, Dictate of Kruphix.
     (
         r"at the beginning of.{0,80}draws? (a card|\d+ cards?|cards?|an additional card|two additional)",
-        "draw_engine",
+        "repeatable_draw",
     ),
-    # each/all players draw (Howling Mine, Dictate of Kruphix, wheel effects)
-    # Windfall: "each player … draws cards equal to …"
-    (r"each (player|opponent).{0,60}draws? (cards?|a card|\d+ cards?)", "draw_engine"),
-    # impulse engines: at beginning of turn, exile top, may play (Precognition Field)
+    # Activated-ability draw — explicit cost → draw on a permanent.
+    # Covers: War Room ("{3}, {T}, Pay 1 life: Draw a card"),
+    #         Sensei's Divining Top ("{1}, {T}: Draw three cards …"),
+    #         The Immortal Sun, etc.
+    # Matches any activation cost (one or more {symbol} groups) followed by ": draw".
+    (
+        r"\{[^}]+\}[^:]{0,80}:\s*.{0,60}draw (a card|\d+ cards?|cards?)",
+        "repeatable_draw",
+    ),
+    # Repeatable impulse engine — at beginning of turn, exile top and may play.
+    # Covers: Precognition Field, Future Sight, Oracle of Mul Daya.
     (
         r"at the beginning of.{0,60}"
         r"exile the top.{0,80}(you may (play|cast)|may (play|cast) (it|them))",
-        "draw_engine",
+        "repeatable_draw",
     ),
 
     # ── Removal (single-target) ───────────────────────────────────────────────
