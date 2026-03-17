@@ -1,0 +1,116 @@
+1 Abundant Countryside
+1 Allosaurus Shepherd
+1 Ancient Tomb
+1 Arbor Elf
+1 Arwen, Weaver of Hope
+1 Assassin's Trophy
+1 Bayou
+1 Beast Whisperer
+1 Blowfly Infestation
+1 Boseiju, Who Endures
+1 Cavern of Souls
+1 Champions of the Perfect
+1 Circle of Dreams Druid
+1 Command Tower
+1 Concordant Crossroads
+1 Cover of Darkness
+1 Deathrite Shaman
+1 Demonic Tutor
+1 Dionus, Elvish Archdruid
+1 Dismember
+1 Eclipsed Elf
+1 Eclipsed Realms
+1 Eladamri, Korvecdal
+1 Elven Chorus
+1 Elves of Deep Shadow
+1 Elvish Archdruid
+1 Elvish Champion
+1 Elvish Harbinger
+1 Elvish Mystic
+1 Elvish Warmaster
+1 Evendo, Waking Haven
+1 Evolution Sage
+1 Ezuri, Renegade Leader
+1 Fauna Shaman
+1 Finale of Devastation
+1 Flourishing Defenses
+4 Forest
+1 Formidable Speaker
+1 Fyndhorn Elves
+1 Gaea's Cradle
+1 Galadhrim Ambush
+1 Gathering Stone
+1 Generous Patron
+1 Glissa Sunslayer
+1 Guardian Project
+1 Gyre Sage
+1 Heroic Intervention
+1 Imperious Perfect
+1 Inkmoth Nexus
+1 Joraga Treespeaker
+1 Joraga Warcaller
+1 Kindred Dominance
+1 Lathril, Blade of the Elves
+1 Leaf-Crowned Visionary
+1 Llanowar Elves
+1 Llanowar Wastes
+1 Lys Alana Huntmaster
+1 Marwyn, the Nurturer
+1 Massacre Girl, Known Killer
+1 Misty Rainforest
+1 Necroskitter
+1 Noxious Revival
+1 Overgrown Tomb
+1 Priest of Titania
+1 Prowess of the Fair
+1 Quest for Renewal
+1 Realmwalker
+1 Reclamation Sage
+1 Roaming Throne
+1 Secluded Courtyard
+1 Selvala, Heart of the Wilds
+1 Shamanic Revelation
+1 Snow-Covered Forest
+1 Snow-Covered Swamp
+1 Sol Ring
+1 Staff of Domination
+2 Swamp
+1 The Great Henge
+1 Three Tree City
+1 Triumph of the Hordes
+1 Tyvar Kell
+1 Tyvar, Jubilant Brawler
+1 Tyvar, the Pummeler
+1 Undergrowth Stadium
+1 Vampiric Tutor
+1 Veil of Summer
+1 Verdant Catacombs
+1 Wastewood Verge
+1 Windswept Heath
+1 Wirewood Lodge
+1 Wolverine Riders
+1 Wooded Foothills
+1 Worldly Tutor
+1 Yavimaya, Cradle of Growth
+1 Yeva, Nature's Herald
+
+SIDEBOARD:
+1 Abrupt Decay
+1 Agatha's Soul Cauldron
+1 Arcane Signet
+1 Blight Rot
+1 Chord of Calling
+1 Copperhorn Scout
+1 Crop Rotation
+1 Crumbling Ashes
+1 Elderfang Venom
+1 Elven Ambush
+1 Elvish Guidance
+1 Elvish Promenade
+1 Elvish Reclaimer
+1 Jaheira, Friend of the Forest
+1 Skullclamp
+1 Sylvan Library
+1 Toxic Deluge
+
+1 High Perfect Morcant

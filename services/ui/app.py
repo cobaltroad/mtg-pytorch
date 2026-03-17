@@ -21,9 +21,15 @@ def search_cards(q: str) -> list[dict]:
     return r.json()
 
 
-@st.cache_data(ttl=300)
-def get_similar(oracle_id: str) -> list[dict]:
-    r = httpx.get(f"{API_URL}/cards/{oracle_id}/similar", params={"limit": 10}, timeout=10)
+@st.cache_data(ttl=60)
+def list_decks() -> list[dict]:
+    r = httpx.get(f"{API_URL}/decks", timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def browse_deck(deck_id: str) -> dict:
+    r = httpx.get(f"{API_URL}/decks/{deck_id}/browse", timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -51,42 +57,111 @@ def get_metrics() -> dict | None:
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-tab_search, tab_deck, tab_import, tab_train = st.tabs(["Card Search & Similarity", "Deck Builder", "Import Decklist", "Re-Train"])
+tab_browser, tab_deck, tab_import, tab_train = st.tabs(["Decklist Browser", "Deck Builder", "Import Decklist", "Re-Train"])
 
-with tab_search:
-    st.subheader("Search cards")
-    query = st.text_input("Search by name or rules text", placeholder="draw a card when…")
-    if query:
-        with st.spinner("Searching…"):
-            results = search_cards(query)
+with tab_browser:
+    st.subheader("Human decklist browser")
+    st.caption(
+        "Browse imported Commander decklists. Opening a deck triggers role-annotation "
+        "of each card and writes role_demand synergy edges to the training database."
+    )
 
-        if not results:
-            st.info("No results found.")
-        else:
-            df = pd.DataFrame(results)[["name", "type_line", "mana_cost", "cmc", "oracle_text"]]
-            selected = st.dataframe(
-                df,
-                use_container_width=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                column_config={
-                    "oracle_text": st.column_config.TextColumn("oracle_text", width="medium"),
-                },
-            )
+    # ── Deck list ─────────────────────────────────────────────────────────────
+    try:
+        all_decks = list_decks()
+    except Exception as e:
+        st.error(f"Could not load decks: {e}")
+        all_decks = []
 
-            if selected and selected.selection.rows:
-                row = results[selected.selection.rows[0]]
-                st.markdown(f"### {row['name']}")
-                st.markdown(f"**Type:** {row.get('type_line','—')}  |  **Cost:** {row.get('mana_cost','—')}")
-                st.markdown(row.get("oracle_text", ""))
+    if not all_decks:
+        st.info("No decks imported yet. Use the **Import Decklist** tab to add decklists.")
+    else:
+        # Filter by commander name
+        commander_filter = st.text_input(
+            "Filter by commander", placeholder="Wilhelt, Atraxa…", key="browser_filter"
+        )
+        filtered = [
+            d for d in all_decks
+            if not commander_filter
+            or commander_filter.lower() in d["commander_name"].lower()
+            or commander_filter.lower() in (d.get("deck_name") or "").lower()
+        ]
 
-                if st.button("Find similar cards"):
-                    with st.spinner("Embedding search…"):
-                        similar = get_similar(str(row["oracle_id"]))
-                    st.subheader("Similar cards (vector search)")
+        st.caption(f"{len(filtered)} of {len(all_decks)} decks shown")
+
+        # Build selection table
+        deck_rows = [
+            {
+                "deck_name":      d.get("deck_name") or "—",
+                "commander":      d["commander_name"],
+                "colors":         " ".join(d.get("commander_colors") or []),
+                "source":         d["source"],
+                "cards":          d["card_count"],
+                "_deck_id":       d["deck_id"],
+            }
+            for d in filtered
+        ]
+        deck_df = pd.DataFrame(deck_rows)
+
+        selected_deck = st.dataframe(
+            deck_df[["deck_name", "commander", "colors", "source", "cards"]],
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+
+        # ── Selected deck detail ───────────────────────────────────────────────
+        if selected_deck and selected_deck.selection.rows:
+            chosen = deck_rows[selected_deck.selection.rows[0]]
+            st.divider()
+            st.markdown(f"### {chosen['deck_name'] or chosen['commander']}  —  {chosen['commander']}")
+
+            with st.spinner("Loading deck and annotating roles…"):
+                try:
+                    deck_detail = browse_deck(chosen["_deck_id"])
+                except Exception as e:
+                    st.error(f"Could not load deck: {e}")
+                    deck_detail = None
+
+            if deck_detail:
+                # Archetypes
+                archetypes = deck_detail.get("archetypes", [])
+                if archetypes:
+                    st.markdown("**Archetypes:** " + "  `" + "`  `".join(archetypes) + "`")
+
+                # Role counts summary
+                role_counts = deck_detail.get("role_counts", {})
+                if role_counts:
+                    rc_cols = st.columns(len(role_counts))
+                    for col, (role, cnt) in zip(rc_cols, sorted(role_counts.items())):
+                        col.metric(role, cnt)
+
+                # Cards table
+                cards = deck_detail.get("cards", [])
+                card_rows = [
+                    {
+                        "name":      c["name"],
+                        "type":      c.get("type_line", ""),
+                        "cost":      c.get("mana_cost", ""),
+                        "cmc":       c.get("cmc", ""),
+                        "roles":     " | ".join(
+                            r["role"] for r in c.get("roles", [])
+                        ) or "—",
+                        "effects":   " | ".join(
+                            r["effect_class"] for r in c.get("roles", [])
+                        ) or "—",
+                    }
+                    for c in cards
+                ]
+                if card_rows:
                     st.dataframe(
-                        pd.DataFrame(similar)[["name", "type_line", "mana_cost", "oracle_text"]],
+                        pd.DataFrame(card_rows),
                         use_container_width=True,
+                        height=600,
+                        column_config={
+                            "roles":   st.column_config.TextColumn("roles", width="medium"),
+                            "effects": st.column_config.TextColumn("effect tags", width="medium"),
+                        },
                     )
 
 with tab_deck:
@@ -210,13 +285,14 @@ with tab_import:
     st.subheader("Import a Moxfield decklist")
     st.markdown(
         "Paste a Moxfield export (or any standard decklist format) below. "
-        "Imported decks are used as training signal to improve the model."
+        "After import the model does a first-pass analysis — vote on its "
+        "interpretation to refine training signal."
     )
 
     deck_name = st.text_input("Deck name (optional)", placeholder="My Wilhelt build")
     decklist_text = st.text_area(
         "Paste decklist here",
-        height=400,
+        height=300,
         placeholder=(
             "Commander\n"
             "1 Wilhelt, the Rotcleaver\n\n"
@@ -228,12 +304,12 @@ with tab_import:
     )
 
     if st.button("Import", type="primary") and decklist_text.strip():
-        with st.spinner("Parsing and importing…"):
+        with st.spinner("Parsing, importing, and running first-pass analysis…"):
             try:
                 r = httpx.post(
                     f"{API_URL}/decks/import",
                     json={"text": decklist_text, "deck_name": deck_name or "Untitled"},
-                    timeout=30,
+                    timeout=60,
                 )
                 r.raise_for_status()
                 result = r.json()
@@ -256,6 +332,86 @@ with tab_import:
                         )
                         for name in result["unresolved"]:
                             st.text(f"  • {name}")
+
+                # ── First-pass analysis panel ─────────────────────────────────
+                analysis = result.get("analysis")
+                deck_id  = result.get("deck_id")
+                if analysis and not result.get("duplicate"):
+                    st.divider()
+                    st.markdown("### First-pass model analysis")
+
+                    # Archetypes with vote buttons
+                    archetypes = analysis.get("archetypes", [])
+                    role_counts = analysis.get("role_counts", {})
+
+                    if archetypes:
+                        st.markdown("**Detected archetypes** — vote to confirm or reject:")
+                        arch_vote_state = {}
+                        arch_cols = st.columns(min(len(archetypes), 4))
+                        for i, arch in enumerate(archetypes):
+                            with arch_cols[i % len(arch_cols)]:
+                                st.caption(arch)
+                                pkey = f"vote_arch_up_{arch}"
+                                dkey = f"vote_arch_dn_{arch}"
+                                up = st.button("+1", key=pkey)
+                                dn = st.button("-1", key=dkey)
+                                if up:
+                                    arch_vote_state[arch] = 1
+                                elif dn:
+                                    arch_vote_state[arch] = -1
+
+                    if role_counts:
+                        st.markdown("**Role distribution** (from first-pass):")
+                        rc_cols = st.columns(len(role_counts))
+                        for col, (role, cnt) in zip(rc_cols, sorted(role_counts.items())):
+                            col.metric(role, cnt)
+
+                    # Per-card role table with inline voting
+                    cards = analysis.get("cards", [])
+                    if cards:
+                        st.markdown("**Card role assignments** — click to vote:")
+                        vote_payloads: list[dict] = []
+
+                        card_rows = [
+                            {
+                                "name":    c["name"],
+                                "type":    c.get("type_line", ""),
+                                "cost":    c.get("mana_cost", ""),
+                                "roles":   " | ".join(r["role"] for r in c.get("roles", [])) or "—",
+                                "effects": " | ".join(r["effect_class"] for r in c.get("roles", [])) or "—",
+                                "_card_id": c["card_id"],
+                                "_roles":   [r["role"] for r in c.get("roles", [])],
+                            }
+                            for c in cards
+                        ]
+                        st.dataframe(
+                            pd.DataFrame(card_rows)[["name", "type", "cost", "roles", "effects"]],
+                            use_container_width=True,
+                            height=400,
+                        )
+
+                    # Submit votes button
+                    if deck_id and st.button("Submit votes & amend", type="secondary"):
+                        votes_to_send = []
+                        for arch, v in arch_vote_state.items():
+                            votes_to_send.append({"archetype": arch, "vote": v})
+                        if votes_to_send:
+                            with st.spinner("Applying votes and amending…"):
+                                try:
+                                    httpx.post(
+                                        f"{API_URL}/decks/{deck_id}/vote",
+                                        json={"votes": votes_to_send},
+                                        timeout=15,
+                                    ).raise_for_status()
+                                    httpx.post(
+                                        f"{API_URL}/decks/{deck_id}/amend",
+                                        timeout=30,
+                                    ).raise_for_status()
+                                    st.success("Votes applied. Training edges updated.")
+                                except httpx.HTTPError as e:
+                                    st.error(f"Vote submission failed: {e}")
+                        else:
+                            st.info("No votes to submit.")
 
             except httpx.HTTPError as e:
                 st.error(f"Import failed: {e}")

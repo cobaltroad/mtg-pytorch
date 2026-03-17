@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from db import get_db, AsyncSession
 from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
+from ops import deck_browser as browser_ops
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +157,8 @@ class DeckImportResult(BaseModel):
     unresolved: list[str]
     duplicate: bool
     message: str
+    deck_id: str | None = None
+    analysis: dict | None = None
 
 
 @app.post("/decks/import", response_model=DeckImportResult)
@@ -163,6 +166,58 @@ async def import_deck(req: DeckImportRequest, db: AsyncSession = Depends(get_db)
     """Parse and import a pasted Moxfield-format decklist."""
     from ops.import_utils import import_decklist_text
     return await import_decklist_text(req.text, req.deck_name, db)
+
+
+# ── Deck browser ─────────────────────────────────────────────────────────────
+
+@app.get("/decks")
+async def list_decks(db: AsyncSession = Depends(get_db)):
+    """Return all human-imported decks with commander info and card count."""
+    return await browser_ops.list_decks(db)
+
+
+@app.get("/decks/{deck_id}/browse")
+async def browse_deck(deck_id: str, db: AsyncSession = Depends(get_db)):
+    """Return a single deck with all cards annotated by role tags.
+
+    Side effects: writes role tags to card_abilities and role_demand synergy
+    edges from the commander to role-matching cards (the feedback loop).
+    """
+    result = await browser_ops.get_deck_with_roles(db, deck_id)
+    if result is None:
+        raise HTTPException(404, "Deck not found")
+    return result
+
+
+class VoteEntry(BaseModel):
+    # Either (card_id + role) for a card-level vote, or (archetype) for deck-level
+    card_id:   str | None = None
+    role:      str | None = None
+    archetype: str | None = None
+    vote:      int        # +1 promote, -1 dissuade
+
+
+class VoteRequest(BaseModel):
+    votes: list[VoteEntry]
+
+
+@app.post("/decks/{deck_id}/vote")
+async def vote_deck_analysis(deck_id: str, req: VoteRequest, db: AsyncSession = Depends(get_db)):
+    """Store user votes on the model's first-pass role / archetype analysis.
+
+    Votes are persisted in decks.metadata['votes'] and used by /amend to
+    adjust role_demand edge scores (promoted → 2× score, dissuaded → removed).
+    """
+    return await browser_ops.apply_votes(db, deck_id, req.votes)
+
+
+@app.post("/decks/{deck_id}/amend")
+async def amend_deck_analysis(deck_id: str, db: AsyncSession = Depends(get_db)):
+    """Re-run analysis incorporating stored votes and update training edges."""
+    result = await browser_ops.amend_with_votes(db, deck_id)
+    if result is None:
+        raise HTTPException(404, "Deck not found")
+    return result
 
 
 # ── Deck metrics ─────────────────────────────────────────────────────────────

@@ -191,8 +191,9 @@ async def import_decklist_text(
 
     result = await db.execute(text("""
         INSERT INTO decks (commander_id, source, source_url, card_ids, metadata)
-        VALUES (:cmd_id::uuid, :source, NULL, :card_ids::uuid[], :meta::jsonb)
+        VALUES (CAST(:cmd_id AS uuid), :source, NULL, CAST(:card_ids AS uuid[]), CAST(:meta AS jsonb))
         ON CONFLICT DO NOTHING
+        RETURNING id::text
     """), {
         "cmd_id":   cmd_id,
         "source":   source,
@@ -205,8 +206,18 @@ async def import_decklist_text(
     })
     await db.commit()
 
-    inserted = result.rowcount if result.rowcount is not None else 0
-    duplicate = (inserted == 0)
+    inserted_row = result.fetchone()
+    duplicate    = (inserted_row is None)
+    deck_id      = inserted_row[0] if inserted_row else None
+
+    # ── First-pass analysis on new decks ─────────────────────────────────────
+    analysis: dict | None = None
+    if deck_id:
+        try:
+            from ops.deck_browser import get_deck_with_roles
+            analysis = await get_deck_with_roles(db, deck_id)
+        except Exception:
+            pass  # analysis is optional; import still succeeds
 
     return {
         "ok":             True,
@@ -214,6 +225,8 @@ async def import_decklist_text(
         "cards_imported": len(card_ids),
         "unresolved":     unresolved_names,
         "duplicate":      duplicate,
+        "deck_id":        deck_id,
+        "analysis":       analysis,  # first-pass role + archetype parse
         "message": (
             f"Duplicate — deck already in database."
             if duplicate else
