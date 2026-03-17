@@ -15,6 +15,15 @@ Sub-modules, each covering one broad theme:
 * :mod:`tribal`      — dynamically generated tribal patterns for all tribes
                         in :data:`TRIBES`, including Zombie/Angel cross-synergy
                         overrides.
+* :mod:`utility`     — utility-role patterns present in most Commander decks:
+                        draw engines (``spell_draw``, ``creature_draw``,
+                        ``wheel``), removal (``targeted_removal``, ``burn``,
+                        ``wither``, ``bounce``, ``sweeper``), tutors
+                        (``tutor_creature``, ``tutor_artifact``, ``tutor_any``),
+                        interaction (``counterspell_hard``,
+                        ``counterspell_conditional``, ``counterspell_redirect``,
+                        ``protection``), and combat tricks (``evasion_grant``,
+                        ``combat_tricks``).
 
 ``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`, and
 :data:`TRIBES` from this package — no other changes to the pipeline are needed
@@ -23,7 +32,7 @@ when a sub-module is extended.
 
 from __future__ import annotations
 
-from . import deckbuilding, events, lifegain, tribal
+from . import deckbuilding, events, lifegain, tribal, utility
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
@@ -33,6 +42,7 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     *lifegain.TRIGGER_PATTERNS,
     *deckbuilding.TRIGGER_PATTERNS,
     *tribal.TRIGGER_PATTERNS,
+    *utility.TRIGGER_PATTERNS,
 ]
 
 PRODUCER_MAP: dict[str, str] = {
@@ -40,6 +50,7 @@ PRODUCER_MAP: dict[str, str] = {
     **lifegain.PRODUCER_MAP,
     **deckbuilding.PRODUCER_MAP,
     **tribal.PRODUCER_MAP,
+    **utility.PRODUCER_MAP,
 }
 
 __all__ = ["TRIGGER_PATTERNS", "PRODUCER_MAP", "TRIBES"]
