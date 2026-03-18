@@ -292,12 +292,28 @@ with tab_deck:
 
                 # ── Context seed section ──────────────────────────────────────
                 context_cards = deck.get("context_cards", [])
-                if context_cards:
+                is_proxy = deck.get("proxy_context", False)
+                if context_cards and not is_proxy:
                     with st.expander(f"Context seed ({len(context_cards)} archetype staples used to prime the decoder)"):
+                        st.write(", ".join(context_cards))
+                elif context_cards and is_proxy:
+                    with st.expander(
+                        f"⚠️ Proxy context ({len(context_cards)} staples from similar commanders — "
+                        "no training decks exist for this commander)",
+                        expanded=True,
+                    ):
+                        st.info(
+                            f"No decklists have been imported for **{deck['commander']['name']}**. "
+                            "The decoder was seeded with staples from the most embedding-similar "
+                            "commanders that *do* have training data. "
+                            "Results will improve once you import decklists for this commander "
+                            "in the **Import Decklist** tab."
+                        )
                         st.write(", ".join(context_cards))
                 else:
                     st.warning(
-                        f"No training decks found for **{deck['commander']['name']}**. "
+                        f"No training decks found for **{deck['commander']['name']}** "
+                        f"and no similar commanders with training data were found. "
                         "The model is flying blind — results will be poor. "
                         "Add decklists in the **Import Decklist** tab to improve accuracy."
                     )

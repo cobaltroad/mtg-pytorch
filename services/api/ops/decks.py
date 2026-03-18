@@ -185,6 +185,29 @@ async def generate(
                     None, inference.get_common_context, commander_id, db_url
                 )
 
+                # ── Proxy context for unseen commanders ───────────────────
+                # When no training decks exist for this commander, seed the
+                # decoder with staples from the most embedding-similar
+                # commanders that *do* have decks.  Without this the decoder
+                # receives only the single commander-embedding token as
+                # context, which biases it toward generic staples it saw
+                # across all training decks rather than tribal/synergy cards
+                # specific to this commander's strategy.
+                proxy_context: bool = False
+                if not context_ids:
+                    context_ids = await loop.run_in_executor(
+                        None,
+                        lambda: inference.get_proxy_context_from_similar_commanders(
+                            commander_id, db_url, embeddings
+                        ),
+                    )
+                    proxy_context = bool(context_ids)
+                    if proxy_context:
+                        log.info(
+                            "Using proxy context (%d cards) for unseen commander %s",
+                            len(context_ids), commander_id,
+                        )
+
                 all_ids = list(embeddings.keys())
 
                 # Load color identities (lazy, cached) and filter to legal pool
@@ -255,8 +278,15 @@ async def generate(
                         return "Basic" in tl and "Land" in tl
 
                     # ── Tribal boost ──────────────────────────────────────────
-                    # Read the commander's oracle text to detect which creature
-                    # types it explicitly references (e.g. "Elves you control").
+                    # Detect which creature types the commander cares about from
+                    # two sources:
+                    #   1. Oracle text — explicit references like "Elves you control"
+                    #      (catches planeswalker commanders such as Tyvar the Bellicose
+                    #       that are not themselves a creature type but care about one).
+                    #   2. Commander's own type line — if the commander IS a creature
+                    #      of a certain type (e.g. Voja, Jaws of the Conclave is a
+                    #      Wolf Elf), that identity should also trigger the tribal boost
+                    #      even when the oracle text doesn't enumerate the type by name.
                     # Boost cards of those types — this catches tribal commanders
                     # even when training co-occurrence data is thin.
                     all_subtypes: frozenset[str] = frozenset(
@@ -266,7 +296,14 @@ async def generate(
                         for subtype in tl.split("\u2014", 1)[1].split()
                     )
                     cmd_oracle_text: str = commander_row[4] or ""
+                    cmd_type_line: str = commander_row[3] or ""
                     cmd_tribal_types = _commander_tribal_types(cmd_oracle_text, all_subtypes)
+                    # If the commander is itself a Creature, also include its own
+                    # creature subtypes so type-line identity contributes to the boost.
+                    if "Creature" in cmd_type_line:
+                        cmd_tribal_types = cmd_tribal_types | (
+                            _card_subtypes(cmd_type_line) & all_subtypes
+                        )
                     if cmd_tribal_types:
                         scored = [
                             (
@@ -505,6 +542,7 @@ async def generate(
                         "scores": scores,
                         "checkpoint": ckpt_name,
                         "context_cards": context_names,
+                        "proxy_context": proxy_context,
                         "role_counts": archetype_info.get("role_counts", {}),
                         "archetype": archetype_info.get("archetype", ""),
                         "win_conditions": archetype_info.get("win_conditions", []),

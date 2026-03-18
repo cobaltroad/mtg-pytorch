@@ -112,7 +112,7 @@ async def analyze_commander(oracle_id: UUID, db: AsyncSession = Depends(get_db))
     """
     result = await db.execute(
         text("""
-            SELECT name, oracle_text, color_identity, keywords
+            SELECT name, oracle_text, color_identity, keywords, type_line
             FROM cards WHERE oracle_id = :oid
         """),
         {"oid": str(oracle_id)},
@@ -121,12 +121,13 @@ async def analyze_commander(oracle_id: UUID, db: AsyncSession = Depends(get_db))
     if not row:
         raise HTTPException(404, "Card not found")
 
-    name, oracle_text, color_identity, keywords = row
+    name, oracle_text, color_identity, keywords, type_line = row
     return analyze_commander_oracle_text(
         oracle_text=oracle_text or "",
         commander_name=name,
         color_identity=list(color_identity or []),
         keywords=list(keywords or []),
+        type_line=type_line or "",
     )
 
 
@@ -164,6 +165,7 @@ class DeckOut(BaseModel):
     scores: list[float]
     checkpoint: str
     context_cards: list[str] = []
+    proxy_context: bool = False
 
 
 @app.post("/decks/generate", response_model=DeckOut)
