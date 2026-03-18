@@ -31,6 +31,7 @@ _ROLE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("ramp", re.compile(r"\{t\}\s*:\s*add", re.I), "mana_rock"),
     ("ramp", re.compile(r"add \{[cwubrg]\}", re.I), "mana_ability"),
     ("ramp", re.compile(r"add (one|two|three|x) mana", re.I), "mana_ability"),
+    ("ramp", re.compile(r"create (a |an |\d+ |x )?(gold|treasure|food|clue) token", re.I), "treasure"),
     ("ramp", re.compile(r"search your library for (a |up to \w+ )?(basic |snow )?(land|plains|island|swamp|mountain|forest)", re.I), "land_tutor"),
     ("ramp", re.compile(r"put (that card |a basic land card |it )?onto the battlefield (tapped )?from your hand", re.I), "land_ramp"),
     ("ramp", re.compile(r"you may play (an? )?(additional )?land", re.I), "land_ramp"),
@@ -65,6 +66,11 @@ _ROLE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("protection", re.compile(r"return .{0,40} from (your |a )graveyard to .{0,20}(hand|battlefield)", re.I), "recursion"),
     ("protection", re.compile(r"(prevents? all damage|prevent that damage)", re.I), "damage_prevention"),
 
+    # token — creature/token generation
+    ("token", re.compile(r"create (a |an |\d+ |x ).{0,40}creature token", re.I), "token_gen"),
+    ("token", re.compile(r"create (a |an |\d+ |x ).{0,20}token", re.I), "token_gen"),
+    ("token", re.compile(r"put (a |an |\d+ ).{0,30}token(s)? onto the battlefield", re.I), "token_gen"),
+
     # win_condition — alternate or dominant win paths
     ("win_condition", re.compile(r"\binfect\b", re.I), "infect"),
     ("win_condition", re.compile(r"\btoxic\b", re.I), "toxic"),
@@ -76,15 +82,12 @@ _ROLE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
 ]
 
 
-_LAND_RAMP_SKIP = {"mana_rock", "mana_ability"}  # patterns that are noise on land cards
-
 def detect_roles(oracle_text: str, type_line: str = "", keywords: list[str] | None = None) -> list[tuple[str, str]]:
     """Return list of (role, effect_class) for a card based on oracle text.
 
     Runs all _ROLE_PATTERNS against the combined oracle + keyword text.
     Multiple roles are possible; deduplication is done by (role, effect_class).
-    Land cards are excluded from mana_rock / mana_ability ramp tags since those
-    patterns match every basic land — ramp means accelerating *beyond* your land drops.
+    Land cards are never tagged as ramp — lands are land drops, not acceleration.
     """
     keywords = keywords or []
     is_land = "land" in type_line.lower()
@@ -93,8 +96,7 @@ def detect_roles(oracle_text: str, type_line: str = "", keywords: list[str] | No
     seen: set[tuple[str, str]] = set()
     results: list[tuple[str, str]] = []
     for role, pattern, effect_class in _ROLE_PATTERNS:
-        # Skip mana-ability patterns for plain land cards
-        if is_land and role == "ramp" and effect_class in _LAND_RAMP_SKIP:
+        if is_land and role == "ramp":
             continue
         key = (role, effect_class)
         if key in seen:

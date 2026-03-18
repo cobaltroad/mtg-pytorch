@@ -170,6 +170,7 @@ with tab_browser:
                         ) or "—",
                         "effects":   " | ".join(
                             r["effect_class"] for r in c.get("roles", [])
+                            if r.get("effect_class")
                         ) or "—",
                     }
                     for c in cards
@@ -378,6 +379,7 @@ with tab_deck:
                         ) or "—",
                         "effects": " | ".join(
                             r["effect_class"] for r in c.get("roles", [])
+                            if r.get("effect_class")
                         ) or "—",
                         "score": round(s, 4),
                     }
@@ -497,7 +499,7 @@ with tab_import:
                                 "type":    c.get("type_line", ""),
                                 "cost":    c.get("mana_cost", ""),
                                 "roles":   " | ".join(r["role"] for r in c.get("roles", [])) or "—",
-                                "effects": " | ".join(r["effect_class"] for r in c.get("roles", [])) or "—",
+                                "effects": " | ".join(r["effect_class"] for r in c.get("roles", []) if r.get("effect_class")) or "—",
                                 "_card_id": c["card_id"],
                                 "_roles":   [r["role"] for r in c.get("roles", [])],
                             }
