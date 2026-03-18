@@ -131,6 +131,7 @@ async def generate(
     commander_oracle_id: UUID,
     checkpoint: str,
     boost_overrides: list[str] | None = None,
+    combo_boost: float = 0.3,
 ) -> dict | None:
     """Generate a 99-card deck using the DeckConstructor model.
 
@@ -145,6 +146,9 @@ async def generate(
         is present, cards whose oracle text contains a mana-producing activated
         ability (``{T}: Add``) receive a 1.35× score multiplier so the model
         surfaces mana-dorks even when training signal is sparse.
+    combo_boost:
+        Scalar α for the package-aware combo boost pass.  Applied after all
+        other per-card scoring.  Set to 0.0 to disable.
     """
     # Resolve commander card
     result = await db.execute(
@@ -315,6 +319,21 @@ async def generate(
                             for cid, sc in scored
                         ]
                         scored.sort(key=lambda x: x[1], reverse=True)
+
+                    # ── Combo package boost ───────────────────────────────
+                    # Detect triggered multi-card combos and boost missing
+                    # members proportional to how complete the combo already
+                    # is (via proxy context / prior deck cards).
+                    triggered_combos: list[dict] = []
+                    if combo_boost > 0.0 and context_ids:
+                        from ops.combo_boost import apply_combo_boost
+                        scored, triggered_combos = await apply_combo_boost(
+                            db,
+                            scored,
+                            context_ids,
+                            color_identity,
+                            combo_boost=combo_boost,
+                        )
 
                     nonbasic_scored = [
                         (cid, sc) for cid, sc in scored
@@ -546,6 +565,7 @@ async def generate(
                         "role_counts": archetype_info.get("role_counts", {}),
                         "archetype": archetype_info.get("archetype", ""),
                         "win_conditions": archetype_info.get("win_conditions", []),
+                        "combo_packages_triggered": triggered_combos,
                     }
 
     except Exception as exc:
