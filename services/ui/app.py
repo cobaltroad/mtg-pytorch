@@ -429,7 +429,7 @@ with tab_import:
             try:
                 r = httpx.post(
                     f"{API_URL}/decks/import",
-                    json={"text": decklist_text, "deck_name": deck_name or "Untitled"},
+                    json={"text": decklist_text, "deck_name": deck_name},
                     timeout=60,
                 )
                 r.raise_for_status()

@@ -186,7 +186,7 @@ async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
 
 class DeckImportRequest(BaseModel):
     text: str
-    deck_name: str = "Untitled"
+    deck_name: str = ""
 
 
 class DeckImportResult(BaseModel):

@@ -427,6 +427,18 @@ async def build_name_index(db: AsyncSession) -> dict[str, str]:
     return index
 
 
+def _slugify(name: str) -> str:
+    """Convert a card name to a lowercase hyphenated filename-style slug.
+
+    Example: "Wilhelt, the Rotcleaver" → "wilhelt-the-rotcleaver"
+    """
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+    slug = re.sub(r"\s+", "-", slug.strip())
+    slug = re.sub(r"-+", "-", slug)
+    return slug
+
+
 async def import_decklist_text(
     raw_text: str,
     deck_name: str,
@@ -463,6 +475,10 @@ async def import_decklist_text(
         return {"ok": False, "commander": commanders[0], "cards_imported": 0,
                 "unresolved": commanders, "duplicate": False,
                 "message": f"Commander not found in database: {', '.join(commanders)}"}
+
+    # Default deck name to slugified commander name when not supplied
+    if not deck_name:
+        deck_name = _slugify(cmd_name)
 
     # Resolve maindeck
     cmd_name_set = {c.lower() for c in commanders}
