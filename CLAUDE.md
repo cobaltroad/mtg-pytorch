@@ -59,6 +59,13 @@ docker compose run --rm trainer python train.py --phase 2 --epochs 20
 open https://$UI_HOST
 ```
 
+## Windows local (no Docker)
+
+For native Windows development without Docker/WSL (using `.venv`, local
+Postgres, and PowerShell runners), see:
+
+- `docs/windows-non-docker-setup.md`
+
 ## Training progression
 
 The model is trained in four phases, each building on the last:

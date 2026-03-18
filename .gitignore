@@ -7,3 +7,6 @@ __pycache__/
 *.pt
 *.ckpt
 wandb/
+.venv/
+.vscode/
+*.log
