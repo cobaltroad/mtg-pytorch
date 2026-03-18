@@ -394,6 +394,7 @@ def analyze_commander_oracle_text(
     commander_name: str = "Unknown Commander",
     color_identity: list[str] | None = None,
     keywords: list[str] | None = None,
+    type_line: str | None = None,
 ) -> CommanderAnalysis:
     """Parse a commander's oracle text into structured deckbuilding signals.
 
@@ -408,6 +409,11 @@ def analyze_commander_oracle_text(
     keywords:
         Printed keyword abilities list from the card data (e.g. ["Flying",
         "Vigilance"]).  These supplement oracle-text scanning.
+    type_line:
+        The commander's full type line (e.g. "Legendary Creature — Wolf Elf").
+        When provided and the card is a Creature, creature subtypes in the type
+        line are scanned for tribal signals even if the oracle text does not
+        explicitly mention the tribe by name.
 
     Returns
     -------
@@ -416,6 +422,7 @@ def analyze_commander_oracle_text(
     """
     color_identity = color_identity or []
     keywords = keywords or []
+    type_line = type_line or ""
     text_lower = oracle_text.lower()
 
     signals: list[SignalResult] = []
@@ -482,6 +489,31 @@ def analyze_commander_oracle_text(
                 ))
                 if ps.boost:
                     seen_boosts.add(ps.boost)
+
+    # ── 3b. Type-line tribal detection ────────────────────────────────────────
+    # For commanders that ARE a creature of a given type (e.g. Voja, Jaws of
+    # the Conclave — "Legendary Creature — Wolf Elf"), emit a tribal signal for
+    # each creature subtype even when the oracle text doesn't enumerate the type
+    # by name.  This mirrors the generation-side fix so the UI correctly reflects
+    # the tribal boost that will be applied during deck building.
+    if type_line and "Creature" in type_line and "\u2014" in type_line:
+        creature_subtypes = type_line.split("\u2014", 1)[1].split()
+        for subtype in creature_subtypes:
+            # Check against the pattern signals to see if this subtype has a known tribal label.
+            for ps in _PATTERN_SIGNALS:
+                if ps.signal_type == "tribal" and ps.pattern.search(subtype):
+                    if ps.label not in seen_labels:
+                        seen_labels.add(ps.label)
+                        signals.append(SignalResult(
+                            signal_type=ps.signal_type,
+                            label=ps.label,
+                            confidence=ps.confidence,
+                            phrase=subtype,
+                            boost_applied=bool(ps.boost),
+                        ))
+                        if ps.boost:
+                            seen_boosts.add(ps.boost)
+                    break   # Each subtype should match at most one tribal pattern to avoid duplicate signals
 
     # ── 4. Gap detection — unrecognized "whenever … / if … / each …" clauses ──
     trigger_phrases = re.findall(

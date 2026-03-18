@@ -330,6 +330,135 @@ def get_common_context(
     return [cid for cid, _ in common[:max_cards]]
 
 
+# ── Proxy context for unseen commanders ──────────────────────────────────────
+
+def get_proxy_context_from_similar_commanders(
+    commander_id: str,
+    db_url: str,
+    embeddings: dict[str, np.ndarray],
+    top_k: int = 3,
+    max_cards: int = 20,
+    min_freq: float = 0.5,
+) -> list[str]:
+    """Return common staple cards from the most embedding-similar commanders with training decks.
+
+    Used as a fallback when ``get_common_context`` returns empty (i.e., no decks
+    have been imported for this commander yet).  Instead of leaving the decoder
+    with only the commander embedding as context — which produces generic-staple
+    biased scores — we seed it with cards that real players put alongside the
+    *most similar* commanders they **have** trained on.
+
+    Similarity is cosine distance in the Phase-1 embedding space, so an Elf
+    planeswalker like Tyvar the Bellicose will naturally cluster near Lathril /
+    Ezuri / other Elf commanders whose oracle texts share the same vocabulary.
+    Those commanders' shared staples (Llanowar Elves, Elvish Archdruid, etc.)
+    then prime the decoder to score Elf-tribal cards appropriately.
+
+    Parameters
+    ----------
+    commander_id:
+        Card UUID (str) of the commander to find proxy context for.
+    db_url:
+        Synchronous psycopg2-compatible database URL.
+    embeddings:
+        Full card embedding dict (output of ``get_embeddings``).
+    top_k:
+        Number of most-similar commanders to aggregate decks from.
+    max_cards:
+        Maximum number of proxy context cards to return.
+    min_freq:
+        Minimum fraction of the aggregated decks a card must appear in to be
+        included.  Higher values → fewer but more universally-played staples.
+
+    Returns
+    -------
+    list[str]
+        Card IDs sorted by frequency descending, capped at ``max_cards``.
+        Empty if no suitable proxy commanders exist.
+    """
+    if commander_id not in embeddings:
+        return []
+
+    # Collect all commanders that have at least one imported deck.
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT commander_id::text
+                FROM decks
+                WHERE commander_id IS NOT NULL
+                """
+            )
+            rows = cur.fetchall()
+
+    deck_commander_ids: list[str] = [r[0] for r in rows if r[0] != commander_id]
+    # ^ Skip the target commander itself in case it somehow has a deck (shouldn't happen for
+    # unseen commanders, but avoids a trivial self-similarity edge case).
+    if not deck_commander_ids:
+        return []
+
+    # Rank by cosine similarity in the raw (pre-model) embedding space.
+    cmd_vec = embeddings[commander_id].astype(np.float32)
+    cmd_norm = np.linalg.norm(cmd_vec)
+    if cmd_norm == 0:
+        return []
+    cmd_unit = cmd_vec / cmd_norm
+
+    sims: list[tuple[str, float]] = []
+    for cid in deck_commander_ids:
+        if cid not in embeddings:
+            continue
+        other = embeddings[cid].astype(np.float32)
+        other_norm = np.linalg.norm(other)
+        if other_norm == 0:
+            continue
+        sim = float(np.dot(cmd_unit, other / other_norm))
+        sims.append((cid, sim))
+
+    sims.sort(key=lambda x: x[1], reverse=True)
+    proxy_commander_ids = [cid for cid, _ in sims[:top_k]]
+
+    if not proxy_commander_ids:
+        return []
+
+    # Aggregate decks from those proxy commanders and find frequent staples.
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ARRAY(SELECT unnest(card_ids)::text) AS card_ids
+                FROM decks
+                WHERE commander_id::text = ANY(%s)
+                """,
+                (proxy_commander_ids,),
+            )
+            deck_rows = cur.fetchall()
+
+    if not deck_rows:
+        return []
+
+    n_decks = len(deck_rows)
+    freq: dict[str, int] = {}
+    for (card_ids,) in deck_rows:
+        for cid in (card_ids or []):
+            freq[cid] = freq.get(cid, 0) + 1
+
+    threshold = min_freq * n_decks
+    common = [
+        (cid, count)
+        for cid, count in freq.items()
+        # Exclude the unseen commander itself from proxy context cards (belt-and-suspenders:
+        # commanders are rarely in their own deck lists, but guard against dirty data).
+        if count >= threshold and cid != commander_id
+    ]
+    common.sort(key=lambda x: x[1], reverse=True)
+    log.info(
+        "Proxy context for %s: using %d similar commanders, found %d candidates (>= %.0f%% freq)",
+        commander_id, len(proxy_commander_ids), len(common), min_freq * 100,
+    )
+    return [cid for cid, _ in common[:max_cards]]
+
+
 # ── Card scoring ──────────────────────────────────────────────────────────────
 
 def score_cards(

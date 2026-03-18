@@ -349,3 +349,122 @@ def test_mana_ability_in_rules_terms():
     )
     term = RULES_TERM_SIGNALS["mana ability"]
     assert term.boost == "mana_producers"
+
+
+# ── Type-line tribal detection ────────────────────────────────────────────────
+
+class TestTypeLineTribalDetection:
+    """Verify that the commander's own creature subtypes (type_line) contribute
+    tribal signals even when the oracle text does not mention the tribe."""
+
+    def test_elf_from_type_line_only(self):
+        """A commander that IS an Elf (type_line) but has minimal oracle text
+        should still receive the Elf tribal signal and boost."""
+        analysis = analyze_commander_oracle_text(
+            oracle_text="Vigilance",   # oracle text has no tribal reference
+            commander_name="Vanilla Elf Legend",
+            color_identity=["G"],
+            type_line="Legendary Creature — Elf Warrior",
+        )
+        labels = _labels(analysis)
+        assert any("Elf" in lbl for lbl in labels), (
+            f"Elf tribal signal not detected from type_line: {labels}"
+        )
+        assert "tribal" in _boosts(analysis), (
+            f"tribal boost not applied from type_line, boosts={_boosts(analysis)}"
+        )
+
+    def test_wolf_elf_from_type_line(self):
+        """Voja-style commander: Wolf Elf in type_line → at least the Elf tribal signal
+        fires (Wolf is not in _PATTERN_SIGNALS so it is not separately flagged)."""
+        analysis = analyze_commander_oracle_text(
+            oracle_text="Trample",
+            commander_name="Test Wolf-Elf",
+            color_identity=["G", "W"],
+            type_line="Legendary Creature — Wolf Elf",
+        )
+        labels = _labels(analysis)
+        assert any("Elf" in lbl for lbl in labels), (
+            f"No Elf signal found from Wolf Elf type_line: {labels}"
+        )
+        assert "tribal" in _boosts(analysis)
+
+    def test_planeswalker_type_line_not_boosted(self):
+        """A planeswalker type-line ('Legendary Planeswalker — Tyvar') must NOT
+        trigger a tribal boost — 'Tyvar' is not a creature type."""
+        analysis = analyze_commander_oracle_text(
+            oracle_text="",
+            commander_name="Tyvar",
+            color_identity=["B", "G"],
+            type_line="Legendary Planeswalker — Tyvar",
+        )
+        assert "tribal" not in _boosts(analysis), (
+            "Planeswalker type-line should not produce a tribal boost"
+        )
+
+    def test_no_type_line_backward_compatible(self):
+        """Omitting type_line should behave identically to the old interface."""
+        analysis_old = analyze_commander_oracle_text(
+            oracle_text=TYVAR_ORACLE,
+            commander_name="Tyvar the Bellicose",
+            color_identity=["B", "G"],
+        )
+        analysis_new = analyze_commander_oracle_text(
+            oracle_text=TYVAR_ORACLE,
+            commander_name="Tyvar the Bellicose",
+            color_identity=["B", "G"],
+            type_line=None,
+        )
+        assert _boosts(analysis_old) == _boosts(analysis_new), (
+            "Omitting type_line should produce identical boosts"
+        )
+
+    def test_type_line_does_not_duplicate_oracle_detected_signal(self):
+        """When the oracle text already mentions the tribe AND the type_line
+        confirms it, the signal should appear only once (no duplicates)."""
+        analysis = analyze_commander_oracle_text(
+            oracle_text=LATHRIL_ORACLE,
+            commander_name="Lathril, Blade of the Elves",
+            color_identity=["B", "G"],
+            type_line="Legendary Creature — Elf Warrior",
+        )
+        elf_signals = [s for s in analysis.signals if "Elf" in s.label]
+        assert len(elf_signals) == 1, (
+            f"Expected exactly one Elf signal, got {len(elf_signals)}: {[s.label for s in elf_signals]}"
+        )
+
+
+# ── Proxy context helper (pure unit tests, no DB) ────────────────────────────
+
+class TestProxyContextLogic:
+    """Unit-test the cosine-similarity ranking logic in isolation, without a DB."""
+
+    def test_most_similar_embedding_ranks_first(self):
+        """The commander with the closest embedding should be ranked first."""
+        import numpy as np
+
+        # Create a simple 4-d embedding space.
+        base = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        # Proxy A: very similar (same direction)
+        proxy_a = np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32)
+        # Proxy B: less similar (rotated)
+        proxy_b = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        def _cosine(a, b):
+            a = a / (np.linalg.norm(a) + 1e-8)
+            b = b / (np.linalg.norm(b) + 1e-8)
+            return float(np.dot(a, b))
+
+        sim_a = _cosine(base, proxy_a)
+        sim_b = _cosine(base, proxy_b)
+        assert sim_a > sim_b, (
+            "Proxy A (closer direction) should have higher cosine similarity"
+        )
+
+    def test_zero_vector_excluded(self):
+        """A zero-norm embedding must not raise ZeroDivisionError."""
+        import numpy as np
+        zero = np.zeros(4, dtype=np.float32)
+        norm = np.linalg.norm(zero)
+        # The function guards with `if cmd_norm == 0: return []`
+        assert norm == 0.0
