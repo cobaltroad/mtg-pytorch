@@ -330,7 +330,9 @@ async def generate(
                         scored, triggered_combos = await apply_combo_boost(
                             db,
                             scored,
-                            context_ids,
+                            # Include the commander so must_be_commander slots
+                            # are treated as already present.
+                            [commander_id] + list(context_ids),
                             color_identity,
                             combo_boost=combo_boost,
                         )

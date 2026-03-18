@@ -169,6 +169,7 @@ class ComboPackageOut(BaseModel):
     cards_missing: list[str]
     completion: float
     package_weight: float
+    boost_applied: bool = False
 
 
 class DeckOut(BaseModel):
