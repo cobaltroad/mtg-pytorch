@@ -159,6 +159,16 @@ class DeckRequest(BaseModel):
     commander_oracle_id: UUID
     checkpoint: str = "latest"
     boost_overrides: list[str] = []
+    combo_boost: float = 0.3
+
+
+class ComboPackageOut(BaseModel):
+    spellbook_id: str
+    produces: list[str]
+    cards_included: list[str]
+    cards_missing: list[str]
+    completion: float
+    package_weight: float
 
 
 class DeckOut(BaseModel):
@@ -168,6 +178,7 @@ class DeckOut(BaseModel):
     checkpoint: str
     context_cards: list[str] = []
     proxy_context: bool = False
+    combo_packages_triggered: list[ComboPackageOut] = []
 
 
 @app.post("/decks/generate", response_model=DeckOut)
@@ -176,6 +187,7 @@ async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
     result = await deck_ops.generate(
         db, req.commander_oracle_id, req.checkpoint,
         boost_overrides=req.boost_overrides or None,
+        combo_boost=req.combo_boost,
     )
     if result is None:
         raise HTTPException(400, "Could not generate deck — commander not found or model unavailable")
