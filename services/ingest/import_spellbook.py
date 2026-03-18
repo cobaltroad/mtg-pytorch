@@ -53,42 +53,6 @@ def _asyncpg_dsn(url: str) -> str:
     return url.replace("postgresql+asyncpg://", "postgresql://")
 
 
-async def _fetch_all_variants(client: httpx.AsyncClient) -> list[dict]:
-    """Paginate through /variants/ and return all OK, commander-legal, non-spoiler entries."""
-    variants: list[dict] = []
-    url = f"{_BASE_URL}/variants/"
-    params: dict = {"limit": _PAGE_SIZE, "offset": 0, "ordering": "id"}
-
-    while url:
-        resp = await client.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get("results", [])
-
-        for v in results:
-            if v.get("status") != "OK":
-                continue
-            if v.get("spoiler"):
-                continue
-            legalities = v.get("legalities") or {}
-            if not legalities.get("commander"):
-                continue
-            variants.append(v)
-
-            if SPELLBOOK_LIMIT and len(variants) >= SPELLBOOK_LIMIT:
-                log.info("SPELLBOOK_LIMIT=%d reached, stopping fetch", SPELLBOOK_LIMIT)
-                return variants
-
-        # Follow pagination — next may be a full URL; after first page drop params
-        next_url = data.get("next")
-        if next_url:
-            url = next_url
-            params = {}
-        else:
-            break
-
-    return variants
-
 
 async def _build_oracle_index(conn) -> dict[str, tuple[str, str]]:
     """Return {oracle_id_str: (card_id_str, card_name)} for every card in our DB."""
@@ -202,43 +166,87 @@ async def main() -> None:
     if DRY_RUN:
         log.info("DRY-RUN mode — no database writes")
 
-    log.info("Fetching variants from Commander Spellbook…")
-    async with httpx.AsyncClient() as client:
-        variants = await _fetch_all_variants(client)
-    log.info("Fetched %d eligible variants", len(variants))
-
-    if DRY_RUN:
-        # Show a sample of what would be imported
-        for v in variants[:5]:
-            produces = [p["feature"]["name"] for p in (v.get("produces") or [])]
-            cards    = [u["card"]["name"] for u in (v.get("uses") or []) if u.get("card")]
-            log.info("  DRY-RUN variant %s: %s → %s", v["id"], cards, produces)
-        log.info("DRY-RUN complete — %d variants would be imported", len(variants))
-        return
-
-    dsn  = _asyncpg_dsn(DATABASE_URL)
-    conn = await asyncpg.connect(dsn)
-    try:
+    # Build DB connection and oracle index before fetching (fail fast on bad DSN)
+    conn = None
+    oracle_index: dict[str, tuple[str, str]] = {}
+    if not DRY_RUN:
+        dsn  = _asyncpg_dsn(DATABASE_URL)
+        conn = await asyncpg.connect(dsn)
         log.info("Building oracle_id index from local card DB…")
         oracle_index = await _build_oracle_index(conn)
         log.info("  %d oracle IDs indexed", len(oracle_index))
 
-        ok = errors = 0
-        for i, variant in enumerate(variants):
-            try:
-                await _upsert_variant(conn, variant, oracle_index)
-                ok += 1
-            except Exception as exc:
-                errors += 1
-                log.warning("  ERROR on variant %s: %s", variant.get("id"), exc)
+    log.info("Fetching and importing variants from Commander Spellbook…")
+    base_url = f"{_BASE_URL}/variants/"
+    offset = 0
+    page = 0
+    ok = errors = total_fetched = 0
 
-            if (i + 1) % 500 == 0:
-                log.info("  … %d / %d processed", i + 1, len(variants))
+    try:
+        async with httpx.AsyncClient() as client:
+            while True:
+                resp = await client.get(
+                    base_url,
+                    params={"limit": _PAGE_SIZE, "offset": offset, "ordering": "id"},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                results = data.get("results", [])
+                page += 1
+
+                if not results:
+                    break
+
+                for v in results:
+                    if v.get("status") != "OK":
+                        continue
+                    if v.get("spoiler"):
+                        continue
+                    legalities = v.get("legalities") or {}
+                    if not legalities.get("commander"):
+                        continue
+
+                    total_fetched += 1
+
+                    if DRY_RUN:
+                        if total_fetched <= 5:
+                            produces = [p["feature"]["name"] for p in (v.get("produces") or [])]
+                            cards    = [u["card"]["name"] for u in (v.get("uses") or []) if u.get("card")]
+                            log.info("  DRY-RUN variant %s: %s → %s", v["id"], cards, produces)
+                        continue
+
+                    try:
+                        await _upsert_variant(conn, v, oracle_index)
+                        ok += 1
+                    except Exception as exc:
+                        errors += 1
+                        log.warning("  ERROR on variant %s: %s", v.get("id"), exc)
+
+                    if SPELLBOOK_LIMIT and total_fetched >= SPELLBOOK_LIMIT:
+                        log.info("SPELLBOOK_LIMIT=%d reached", SPELLBOOK_LIMIT)
+                        break
+
+                if page % 10 == 0 or (SPELLBOOK_LIMIT and total_fetched >= SPELLBOOK_LIMIT):
+                    log.info("  … page %d | %d eligible | %d imported | %d errors",
+                             page, total_fetched, ok, errors)
+
+                if SPELLBOOK_LIMIT and total_fetched >= SPELLBOOK_LIMIT:
+                    break
+                if len(results) < _PAGE_SIZE:
+                    break
+
+                offset += _PAGE_SIZE
 
     finally:
-        await conn.close()
+        if conn:
+            await conn.close()
 
-    log.info("Done — %d imported/updated, %d errors", ok, errors)
+    if DRY_RUN:
+        log.info("DRY-RUN complete — %d variants would be imported", total_fetched)
+    else:
+        log.info("Done — %d imported/updated, %d errors (from %d eligible variants across %d pages)",
+                 ok, errors, total_fetched, page)
 
 
 if __name__ == "__main__":
