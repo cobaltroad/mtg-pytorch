@@ -16,3 +16,7 @@ ingest_cache/
 checkpoints/
 *.dump
 *.tar.gz
+
+# Spike benchmark outputs (generated locally, not committed)
+spike/data/
+spike/results/
