@@ -52,10 +52,10 @@ def extract_card_sample(cur, n: int) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 
-def extract_positive_pairs(cur, n: int) -> list[dict]:
+def extract_positive_pairs(cur, card_ids: list[str], n: int) -> list[dict]:
     """
     Return n known-synergistic pairs from synergy_edges (ability_trigger only,
-    score > 0.5).  Both cards must be in the card_sample set.
+    score > 0.5) where both cards are in card_ids.
     """
     cur.execute(
         """
@@ -63,10 +63,12 @@ def extract_positive_pairs(cur, n: int) -> list[dict]:
         FROM synergy_edges se
         WHERE se.score_type = 'ability_trigger'
           AND se.score > 0.5
+          AND se.card_a = ANY(%s::uuid[])
+          AND se.card_b = ANY(%s::uuid[])
         ORDER BY random()
         LIMIT %s
         """,
-        (n,),
+        (card_ids, card_ids, n),
     )
     return [
         {"card_a": r["card_a"], "card_b": r["card_b"], "score": float(r["score"]), "label": 1}
@@ -153,16 +155,17 @@ def main():
             card_sample_path.write_text(json.dumps(cards, indent=2))
             print(f"  Saved → {card_sample_path}")
 
+            card_ids = [c["id"] for c in cards]
+
             print(f"Extracting {args.pairs} positive synergy pairs…")
-            positives = extract_positive_pairs(cur, args.pairs)
+            positives = extract_positive_pairs(cur, card_ids, args.pairs)
             if not positives:
                 sys.exit(
-                    "ERROR: No synergy_edges with score_type='ability_trigger' found. "
-                    "Run compute_synergy stage first."
+                    "ERROR: No synergy_edges with score_type='ability_trigger' found "
+                    "for cards in the sample. Try --sample with a larger value, or "
+                    "run compute_synergy stage first."
                 )
             print(f"  {len(positives)} positive pairs extracted.")
-
-            card_ids = [c["id"] for c in cards]
             positive_set = {(min(p["card_a"], p["card_b"]), max(p["card_a"], p["card_b"]))
                             for p in positives}
 
