@@ -69,7 +69,7 @@ def extract_positive_pairs(cur, n: int) -> list[dict]:
         (n,),
     )
     return [
-        {"card_a": r[0], "card_b": r[1], "score": float(r[2]), "label": 1}
+        {"card_a": r["card_a"], "card_b": r["card_b"], "score": float(r["score"]), "label": 1}
         for r in cur.fetchall()
     ]
 
@@ -86,7 +86,6 @@ def extract_negative_pairs(
     """
     # Fetch all synergy_edge pairs (both directions) for the cards in our sample
     # to avoid accidentally labelling a real synergy as negative.
-    placeholders = ",".join(["%s"] * len(card_ids))
     cur.execute(
         f"""
         SELECT card_a::text, card_b::text
@@ -98,8 +97,8 @@ def extract_negative_pairs(
     )
     known_synergies: set[tuple[str, str]] = set()
     for r in cur.fetchall():
-        known_synergies.add((r[0], r[1]))
-        known_synergies.add((r[1], r[0]))
+        known_synergies.add((r["card_a"], r["card_b"]))
+        known_synergies.add((r["card_b"], r["card_a"]))
 
     negatives: list[dict] = []
     attempts = 0
