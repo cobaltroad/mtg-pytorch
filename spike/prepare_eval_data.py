@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import sys
 from pathlib import Path
@@ -27,14 +26,13 @@ from pathlib import Path
 import psycopg2
 import psycopg2.extras
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+import common  # loads .env before DATABASE_URL is read
+
 DATA_DIR = Path(__file__).parent / "data"
 
 
 def get_conn():
-    if not DATABASE_URL:
-        sys.exit("ERROR: DATABASE_URL is not set.")
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(common.get_database_url())
 
 
 def extract_card_sample(cur, n: int) -> list[dict]:
