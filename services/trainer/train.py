@@ -36,6 +36,7 @@ import logging
 import math
 import os
 import random
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -143,6 +144,7 @@ def load_synergy_pairs(
     sample: int = 500_000,
     hard_neg_frac: float = 0.5,
     role_demand_sample: int = 100_000,
+    combo_sample: int = 200_000,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
@@ -150,12 +152,14 @@ def load_synergy_pairs(
                plus score_type='role_demand' (label=stored score, 0–1).
                Role-demand edges encode human-observed role frequency × archetype
                weight, so their score is a meaningful soft label.
+               plus combo_package pairs: cards sharing a combo package are
+               positive pairs (label=1.0), capped at combo_sample.
     Negatives: hard_neg_frac of budget from hard negatives (nearest neighbours
                in embedding space that are NOT synergistic), the rest random.
     Total negatives = neg_ratio × len(positives).
     """
-    log.info("Loading synergy pairs (ability_trigger sample=%d, role_demand sample=%d)…",
-             sample, role_demand_sample)
+    log.info("Loading synergy pairs (ability_trigger sample=%d, role_demand sample=%d, combo sample=%d)…",
+             sample, role_demand_sample, combo_sample)
     with get_conn() as conn:
         with conn.cursor() as cur:
             # TABLESAMPLE avoids a full sort — safe even on large tables
@@ -185,11 +189,33 @@ def load_synergy_pairs(
                     (r[0], r[1], float(r[2])) for r in cur.fetchall()
                     if r[0] in embeddings and r[1] in embeddings
                 ]
-                log.info("  %d ability_trigger pairs + %d role_demand pairs",
+                log.info("  %d ability_trigger + %d role_demand pairs",
                          len(positives), len(role_pairs))
                 positives = positives + role_pairs
             else:
                 log.info("  %d ability_trigger pairs (role_demand disabled)", len(positives))
+
+            # Combo-package pairs: all card pairs that share a combo package
+            # are strong positives — they must be played together to win.
+            if combo_sample > 0:
+                cur.execute("""
+                    SELECT a.card_id::text, b.card_id::text
+                    FROM combo_package_cards a
+                    JOIN combo_package_cards b
+                      ON a.combo_package_id = b.combo_package_id
+                     AND a.card_id < b.card_id
+                    WHERE a.card_id IS NOT NULL
+                      AND b.card_id IS NOT NULL
+                      AND a.is_template = FALSE
+                      AND b.is_template = FALSE
+                    LIMIT %s
+                """, (combo_sample,))
+                combo_pairs = [
+                    (r[0], r[1], 1.0) for r in cur.fetchall()
+                    if r[0] in embeddings and r[1] in embeddings
+                ]
+                log.info("  + %d combo_package pairs", len(combo_pairs))
+                positives = positives + combo_pairs
 
     log.info("  %d total positive pairs", len(positives))
 
@@ -808,9 +834,9 @@ def save_checkpoint(model: nn.Module, name: str):
     path = CHECKPOINT_DIR / f"{name}.pt"
     torch.save(model.state_dict(), path)
     latest = CHECKPOINT_DIR / "latest.pt"
-    if latest.is_symlink():
+    if latest.exists() or latest.is_symlink():
         latest.unlink()
-    latest.symlink_to(path.name)
+    shutil.copy2(path, latest)
     log.info("Checkpoint saved: %s", path)
 
 
@@ -854,6 +880,9 @@ def main():
     parser.add_argument("--role-demand-sample", type=int, default=100_000,
                         help="Max role_demand edges to include as soft-label positives "
                              "(0 to disable; uses stored score as label)")
+    parser.add_argument("--combo-sample", type=int, default=200_000,
+                        help="Max combo_package card pairs to include as hard positives "
+                             "(0 to disable; requires import_spellbook.py to have run)")
     parser.add_argument("--label-smoothing", type=float, default=0.1,
                         help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2")
     parser.add_argument("--noise", type=float, default=0.05,
@@ -925,6 +954,7 @@ def main():
             sample=args.sample,
             hard_neg_frac=args.hard_neg_frac,
             role_demand_sample=args.role_demand_sample,
+            combo_sample=args.combo_sample,
         )
         if not pairs:
             log.error("No synergy pairs found — run compute_synergy stage first.")

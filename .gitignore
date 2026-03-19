@@ -10,3 +10,9 @@ wandb/
 .venv/
 .vscode/
 *.log
+
+# Local data artifacts (not committed)
+ingest_cache/
+checkpoints/
+*.dump
+*.tar.gz
