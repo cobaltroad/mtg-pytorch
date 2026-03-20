@@ -13,10 +13,13 @@ produced by prepare_eval_data.py.  Measures two things:
 
 Candidate models
 ----------------
-  MiniLM-L6-v2     384-d   current baseline
-  all-mpnet-base-v2  768-d   Path A candidate
-  gte-large        1024-d   Path A candidate
-  e5-large-v2      1024-d   Path A candidate (uses "passage: " prefix)
+  MiniLM-L6-v2          384-d   current baseline
+  all-mpnet-base-v2     768-d   Path A candidate
+  gte-large             1024-d  Path A candidate
+  e5-large-v2           1024-d  Path A candidate (uses symmetric "query: " prefix)
+  bge-base-en-v1.5      768-d   Path A candidate (BAAI BGE base)
+  bge-large-en-v1.5     1024-d  Path A candidate (BAAI BGE large)
+  nomic-embed-text-v1.5 768-d   Path A candidate (Matryoshka; requires trust_remote_code)
 
 Outputs
 -------
@@ -43,12 +46,16 @@ import numpy as np
 DATA_DIR = Path(__file__).parent / "data"
 RESULTS_DIR = Path(__file__).parent / "results"
 
-# (short_name, hf_model_id, prefix_for_e5)
-CANDIDATE_MODELS: list[tuple[str, str, str]] = [
-    ("MiniLM",      "sentence-transformers/all-MiniLM-L6-v2",    ""),
-    ("all-mpnet",   "sentence-transformers/all-mpnet-base-v2",    ""),
-    ("gte-large",   "thenlper/gte-large",                         ""),
-    ("e5-large",    "intfloat/e5-large-v2",                       "passage: "),
+# (short_name, hf_model_id, query_prefix, trust_remote_code)
+CANDIDATE_MODELS: list[tuple[str, str, str, bool]] = [
+    ("MiniLM",      "sentence-transformers/all-MiniLM-L6-v2",    "",        False),
+    ("all-mpnet",   "sentence-transformers/all-mpnet-base-v2",    "",        False),
+    ("gte-large",   "thenlper/gte-large",                         "",        False),
+    # e5 models require a prefix; use symmetric "query: " for similarity (not retrieval)
+    ("e5-large",    "intfloat/e5-large-v2",                       "query: ", False),
+    ("bge-base",    "BAAI/bge-base-en-v1.5",                      "",        False),
+    ("bge-large",   "BAAI/bge-large-en-v1.5",                     "",        False),
+    ("nomic",       "nomic-ai/nomic-embed-text-v1.5",             "search_document: ", True),
 ]
 
 MODEL_SHORT_NAMES = {m[0] for m in CANDIDATE_MODELS}
@@ -133,11 +140,12 @@ def run_model(
     cards: list[dict],
     pairs: list[dict],
     batch_size: int,
+    trust_remote_code: bool = False,
 ) -> dict:
     from sentence_transformers import SentenceTransformer
 
     print(f"\n[{short_name}]  loading {model_id} …")
-    model = SentenceTransformer(model_id)
+    model = SentenceTransformer(model_id, trust_remote_code=trust_remote_code)
     dim = model.get_sentence_embedding_dimension()
     print(f"  dimension: {dim}")
 
@@ -194,7 +202,7 @@ def main():
         nargs="+",
         choices=list(MODEL_SHORT_NAMES),
         default=None,
-        help="Subset of models to run (default: all four)",
+        help="Subset of models to run (default: all)",
     )
     parser.add_argument("--batch-size", type=int, default=128,
                         help="Encoding batch size (default: 128)")
@@ -209,10 +217,11 @@ def main():
     print(f"  {len(cards)} cards, {n_pos} positive pairs, {n_neg} negative pairs")
 
     results = []
-    for short_name, model_id, prefix in CANDIDATE_MODELS:
+    for short_name, model_id, prefix, trust_remote_code in CANDIDATE_MODELS:
         if short_name not in selected:
             continue
-        result = run_model(short_name, model_id, prefix, cards, pairs, args.batch_size)
+        result = run_model(short_name, model_id, prefix, cards, pairs, args.batch_size,
+                           trust_remote_code=trust_remote_code)
         results.append(result)
 
     print_results_table(results)

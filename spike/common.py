@@ -43,6 +43,21 @@ def load_env() -> None:
 load_env()
 
 
+def _hf_login() -> None:
+    """Authenticate with the HF Hub if HF_TOKEN is set."""
+    token = os.environ.get("HF_TOKEN", "")
+    if not token:
+        return
+    try:
+        from huggingface_hub import login
+        login(token=token, add_to_git_credential=False)
+    except Exception:
+        pass  # huggingface_hub not installed — skip silently
+
+
+_hf_login()
+
+
 def get_database_url(async_driver: bool = False) -> str:
     """
     Return DATABASE_URL, constructing it from POSTGRES_* vars if needed.

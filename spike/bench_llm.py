@@ -45,6 +45,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import common  # noqa: F401 — loads .env at import time
 import numpy as np
 
 DATA_DIR    = Path(__file__).parent / "data"
@@ -52,7 +53,8 @@ RESULTS_DIR = Path(__file__).parent / "results"
 
 CANDIDATE_MODELS = {
     "mistral-7b": "mistralai/Mistral-7B-Instruct-v0.3",
-    "llama3-8b":  "meta-llama/Meta-Llama-3-8B-Instruct",
+    "llama3.2-3b":  "meta-llama/Llama-3.2-3B-Instruct",
+    "llama3.1-8b":  "meta-llama/Llama-3.1-8B-Instruct",
     # lightweight stub for harness validation only
     "flan-t5-small": "google/flan-t5-small",
 }
@@ -305,7 +307,10 @@ def main():
     print(f"Device: {device}")
     print(f"Loading {args.model} ({model_id})…")
 
-    load_kwargs: dict = {"device_map": "auto"}
+    # Force all layers onto a single GPU; "auto" can split embedding onto CPU
+    # with bitsandbytes 4-bit on Blackwell (sm_120) + nightly PyTorch.
+    device_map = {"": 0} if torch.cuda.is_available() else "cpu"
+    load_kwargs: dict = {"device_map": device_map}
     if args.quant == "4bit":
         from transformers import BitsAndBytesConfig
         load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
@@ -313,9 +318,13 @@ def main():
         from transformers import BitsAndBytesConfig
         load_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
 
+    import os
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
+    hf_token = os.environ.get("HF_TOKEN") or None
+    tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(model_id, token=hf_token, **load_kwargs)
     model.eval()
 
     results_this_run = []
@@ -385,7 +394,7 @@ def main():
     for r in results_this_run:
         _save_result(r)
 
-    print(f"\nResults saved → {RESULTS_DIR / 'path_b.json'}")
+    print(f"\nResults saved -> {RESULTS_DIR / 'path_b.json'}")
 
 
 def _save_result(result: dict) -> None:
