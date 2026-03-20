@@ -21,6 +21,25 @@ _MANA_ADD_RE = re.compile(r"\{[tT]\}\s*:\s*[Aa]dd|\badd \{", re.I)
 # Score multiplier applied to mana-producing cards when "mana_producers" boost is active.
 _MANA_PRODUCER_BOOST = 1.35
 
+# Matches commander-conditional cost-reduction or in-play bonus text.
+# Covers the canonical "If you control a commander" wording found on
+# Deflecting Swat, Fierce Guardianship, Loyal Apprentice, Jeska's Will, etc.
+# Also catches "As long as you control a commander" (persistent bonus cards).
+_COMMANDER_VALUE_RE = re.compile(
+    r"if you control a commander"
+    r"|as long as you control a commander"
+    r"|while you control a commander",
+    re.I,
+)
+# Matches Mox Amber / Selvala-style "legendary creature or planeswalker … mana" text.
+_LEGEND_MANA_RE = re.compile(
+    r"legendary (creature|planeswalker).{0,60}(mana|add)"
+    r"|add.{0,30}legendary (creature|planeswalker)",
+    re.I,
+)
+# Score multiplier applied to commander-value cards when "commander_value" boost is active.
+_COMMANDER_VALUE_BOOST = 1.4
+
 # ── Land budget constants ─────────────────────────────────────────────────────
 # Hypergeometric: with 36 lands in 99 cards, E[lands in opening 7] ≈ 2.55
 LAND_TARGET = 36
@@ -259,6 +278,11 @@ async def generate(
                             ot = oracle_texts.get(cid, "")
                             if "mana_producers" in active_boosts and _MANA_ADD_RE.search(ot):
                                 sc = sc * _MANA_PRODUCER_BOOST
+                            if "commander_value" in active_boosts and (
+                                _COMMANDER_VALUE_RE.search(ot)
+                                or _LEGEND_MANA_RE.search(ot)
+                            ):
+                                sc = sc * _COMMANDER_VALUE_BOOST
                             return cid, sc
 
                         scored = [_apply_boosts(p) for p in scored]

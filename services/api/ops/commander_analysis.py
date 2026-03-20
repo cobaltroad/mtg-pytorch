@@ -208,6 +208,16 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
         "mechanic", "phasing (phase out / phase in)",
         "medium", None,
     ),
+    # Commander-value: explicit "if you control a commander" text on the commander itself
+    # (rare, but e.g. some partner / background cards reference this condition)
+    "if you control a commander": _RulesTerm(
+        "mechanic", "commander in-play payoff (free-cast / bonus while commander present)",
+        "high", "commander_value",
+    ),
+    "as long as you control a commander": _RulesTerm(
+        "mechanic", "commander in-play payoff (persistent bonus while commander present)",
+        "high", "commander_value",
+    ),
 }
 
 # ── Pattern-based signal extraction ──────────────────────────────────────────
@@ -354,36 +364,46 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
                    re.compile(r"when(ever)? .{0,30} enters the battlefield", re.I)),
 ]
 
+# Label used by the low-MV commander signal (step 3c).  Defined here so it can
+# be referenced both in the label set and in archetype hint derivation below.
+_LOW_MV_LABEL = "low mana-value commander (CMC ≤ 2) — commander-value cards enabled"
+
 # ── Archetype hint derivation ─────────────────────────────────────────────────
 # Maps sets of detected boost keys to a human-readable archetype hint.
 # Checked in order; first match wins.  More specific combos go first.
 
 _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
-    ({"tribal", "mana_producers"},     "elf tribal + elfball (mana-dork matters)"),
-    ({"tribal", "aristocrats"},        "tribal aristocrats"),
-    ({"tribal", "tokens"},             "tribal token swarm"),
-    ({"tribal", "counters"},           "tribal counters"),
-    ({"tribal"},                       "tribal"),
-    ({"mana_producers", "counters"},   "elfball / mana-dork matters + counters"),
-    ({"mana_producers"},               "elfball / mana-dork matters"),
-    ({"aristocrats", "tokens"},        "aristocrats + token sacrifice"),
-    ({"aristocrats"},                  "aristocrats"),
-    ({"tokens", "go_wide"},            "go-wide token swarm"),
-    ({"tokens"},                       "tokens"),
-    ({"play_from_exile", "food"},      "exile-play + Food (lifegain artifacts)"),
-    ({"play_from_exile", "treasures"}, "exile-play + Treasure ramp"),
-    ({"play_from_exile"},              "exile-play matters"),
-    ({"spellslinger"},                 "spellslinger / storm"),
-    ({"counters", "proliferate"},      "proliferate / counter matters"),
-    ({"counters"},                     "counters matters"),
-    ({"graveyard"},                    "reanimator / graveyard"),
-    ({"lifegain"},                     "lifegain payoff"),
-    ({"infect"},                       "infect (poison counters)"),
-    ({"deathtouch"},                   "deathtouch / poison combat"),
-    ({"landfall"},                     "landfall"),
-    ({"ramp"},                         "big mana / Eldrazi ramp"),
-    ({"mill"},                         "mill"),
-    ({"voltron"},                      "voltron / equipment"),
+    ({"tribal", "mana_producers"},              "elf tribal + elfball (mana-dork matters)"),
+    ({"tribal", "aristocrats"},                 "tribal aristocrats"),
+    ({"tribal", "tokens"},                      "tribal token swarm"),
+    ({"tribal", "counters"},                    "tribal counters"),
+    ({"tribal"},                                "tribal"),
+    # Low-MV commander combos (check before generic commander_value)
+    ({"commander_value", "spellslinger"},       "low-MV commander + spellslinger (free interaction)"),
+    ({"commander_value", "aristocrats"},        "low-MV commander + aristocrats (free disruption)"),
+    ({"commander_value", "tokens"},             "low-MV commander + tokens (free interaction)"),
+    ({"commander_value", "tribal"},             "low-MV commander + tribal (free interaction)"),
+    ({"commander_value"},                       "low-MV commander — free-cast / commander-value staples"),
+    ({"mana_producers", "counters"},            "elfball / mana-dork matters + counters"),
+    ({"mana_producers"},                        "elfball / mana-dork matters"),
+    ({"aristocrats", "tokens"},                 "aristocrats + token sacrifice"),
+    ({"aristocrats"},                           "aristocrats"),
+    ({"tokens", "go_wide"},                     "go-wide token swarm"),
+    ({"tokens"},                                "tokens"),
+    ({"play_from_exile", "food"},               "exile-play + Food (lifegain artifacts)"),
+    ({"play_from_exile", "treasures"},          "exile-play + Treasure ramp"),
+    ({"play_from_exile"},                       "exile-play matters"),
+    ({"spellslinger"},                          "spellslinger / storm"),
+    ({"counters", "proliferate"},               "proliferate / counter matters"),
+    ({"counters"},                              "counters matters"),
+    ({"graveyard"},                             "reanimator / graveyard"),
+    ({"lifegain"},                              "lifegain payoff"),
+    ({"infect"},                                "infect (poison counters)"),
+    ({"deathtouch"},                            "deathtouch / poison combat"),
+    ({"landfall"},                              "landfall"),
+    ({"ramp"},                                  "big mana / Eldrazi ramp"),
+    ({"mill"},                                  "mill"),
+    ({"voltron"},                               "voltron / equipment"),
 ]
 
 
@@ -395,6 +415,7 @@ def analyze_commander_oracle_text(
     color_identity: list[str] | None = None,
     keywords: list[str] | None = None,
     type_line: str | None = None,
+    cmc: float | int | None = None,
 ) -> CommanderAnalysis:
     """Parse a commander's oracle text into structured deckbuilding signals.
 
@@ -414,6 +435,12 @@ def analyze_commander_oracle_text(
         When provided and the card is a Creature, creature subtypes in the type
         line are scanned for tribal signals even if the oracle text does not
         explicitly mention the tribe by name.
+    cmc:
+        The commander's mana value (converted mana cost).  When provided and
+        ≤ 2, a ``commander_value`` signal is emitted — cards like Deflecting
+        Swat, Fierce Guardianship, and Loyal Apprentice that care about having
+        a commander in play gain maximum value from cheap, frequently-present
+        commanders (Rograkh, Yoshimaru, Thrasios, etc.).
 
     Returns
     -------
@@ -514,6 +541,31 @@ def analyze_commander_oracle_text(
                         if ps.boost:
                             seen_boosts.add(ps.boost)
                     break   # Each subtype should match at most one tribal pattern to avoid duplicate signals
+
+    # ── 3c. Low-MV commander detection ───────────────────────────────────────
+    # Commanders with CMC ≤ 2 are reliably in play — they're cheap to cast
+    # initially and cheap to recast after removal (command-zone tax is small).
+    # This unlocks the full value of "commander-value" cards:
+    #   - Free-cast spells (Deflecting Swat, Fierce Guardianship, …)
+    #   - Persistent-bonus permanents (Loyal Apprentice, …)
+    #   - Legend-mana producers (Mox Amber, …)
+    # CMC 0 commanders (Rograkh Son of Rohgahh) are the theoretical maximum;
+    # CMC 1 (Yoshimaru, Isamaru) and CMC 2 (Thrasios, Kraum, Lurrus) are the
+    # practical sweet spot.  CMC 3+ means the command-zone tax grows each cast,
+    # reducing how often the commander is actually in play.
+    if cmc is not None and cmc <= 2:
+        label = _LOW_MV_LABEL
+        if label not in seen_labels:
+            seen_labels.add(label)
+            cmc_int = int(cmc)
+            signals.append(SignalResult(
+                signal_type="mechanic",
+                label=label,
+                confidence="high",
+                phrase=f"CMC {cmc_int} commander",
+                boost_applied=True,
+            ))
+            seen_boosts.add("commander_value")
 
     # ── 4. Gap detection — unrecognized "whenever … / if … / each …" clauses ──
     trigger_phrases = re.findall(
