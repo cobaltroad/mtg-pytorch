@@ -291,7 +291,7 @@ _pydantic_available = importlib.util.find_spec("pydantic") is not None
 class TestCommanderAnalysisIntegration:
     """Tests for the low-MV commander detection in analyze_commander_oracle_text()."""
 
-    def _analyze(self, oracle="", cmc=None, type_line="Legendary Creature — Human"):
+    def _analyze(self, oracle="", cmc=None, type_line="Legendary Creature — Advisor"):
         # Import here to keep test isolation clear
         import sys
         from pathlib import Path
