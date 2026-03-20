@@ -52,7 +52,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 CHECKPOINT_DIR = Path(os.environ.get("CHECKPOINT_DIR", "/checkpoints"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
 try:
     import wandb
@@ -264,7 +264,7 @@ class AllCardsDataset(Dataset):
 class CardEncoder(nn.Module):
     """Projects a pre-computed embedding into a shared latent space."""
 
-    def __init__(self, input_dim: int = 384, hidden_dim: int = 512, output_dim: int = 256):
+    def __init__(self, input_dim: int = 768, hidden_dim: int = 512, output_dim: int = 256):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -286,9 +286,9 @@ class DeckConstructor(nn.Module):
     attending to the commander as a prefix token.
     """
 
-    def __init__(self, embed_dim: int = 256, n_heads: int = 4, n_layers: int = 3):
+    def __init__(self, input_dim: int = 768, embed_dim: int = 256, n_heads: int = 4, n_layers: int = 3):
         super().__init__()
-        self.card_encoder = CardEncoder(output_dim=embed_dim)
+        self.card_encoder = CardEncoder(input_dim=input_dim, output_dim=embed_dim)
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=embed_dim, nhead=n_heads, dim_feedforward=embed_dim * 4,
             dropout=0.1, batch_first=True,
@@ -933,7 +933,8 @@ def main():
         dataset = AllCardsDataset(embeddings)
         log.info("Dataset: %d cards", len(dataset))
 
-        model = CardEncoder().to(device)
+        input_dim = len(next(iter(embeddings.values())))
+        model = CardEncoder(input_dim=input_dim).to(device)
         if args.resume:
             load_checkpoint(model, "phase1_best", device)
 
@@ -963,7 +964,8 @@ def main():
         dataset = SynergyDataset(pairs, embeddings)
         log.info("Dataset: %d pairs", len(dataset))
 
-        model = CardEncoder().to(device)
+        input_dim = len(next(iter(embeddings.values())))
+        model = CardEncoder(input_dim=input_dim).to(device)
         if args.resume:
             # Try phase2_best first; fall back to phase1_best (warm start from Phase 1)
             if (CHECKPOINT_DIR / "phase2_best.pt").exists():
@@ -993,7 +995,8 @@ def main():
         dataset = DeckDataset(decks, embeddings)
         log.info("Dataset: %d decks", len(dataset))
 
-        model = CardEncoder().to(device)
+        input_dim = len(next(iter(embeddings.values())))
+        model = CardEncoder(input_dim=input_dim).to(device)
         if args.resume:
             if (CHECKPOINT_DIR / "phase3_best.pt").exists():
                 load_checkpoint(model, "phase3_best", device)
@@ -1034,12 +1037,13 @@ def main():
         dataset = DeckDataset(decks, embeddings)
         log.info("Dataset: %d decks", len(dataset))
 
-        model = DeckConstructor().to(device)
+        input_dim = len(next(iter(embeddings.values())))
+        model = DeckConstructor(input_dim=input_dim).to(device)
         if args.resume and (CHECKPOINT_DIR / "phase4_best.pt").exists():
             load_checkpoint(model, "phase4_best", device)
         else:
             # Warm-start the card_encoder from Phase 3 weights
-            phase3_encoder = CardEncoder().to(device)
+            phase3_encoder = CardEncoder(input_dim=input_dim).to(device)
             if (CHECKPOINT_DIR / "phase3_best.pt").exists():
                 load_checkpoint(phase3_encoder, "phase3_best", device)
                 model.card_encoder.load_state_dict(phase3_encoder.state_dict())
