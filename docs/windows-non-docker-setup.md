@@ -122,25 +122,25 @@ Use `scripts\run-local-job.ps1`.
 Phase 2 (ability-trigger synergy):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-local-job.ps1 -Mode train -Phase 2
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 -Mode train -Phase 2
 ```
 
 Phase 3 (deck co-occurrence):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-local-job.ps1 -Mode train -Phase 3
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 -Mode train -Phase 3
 ```
 
 Phase 4 (deck constructor):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-local-job.ps1 -Mode train -Phase 4
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 -Mode train -Phase 4
 ```
 
 Example with overrides:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-local-job.ps1 -Mode train -Phase 4 -Epochs 50 -LearningRate 1e-4 -Resume:$false -FreezeEncoder:$false -EncoderLrScale 0.1 -TempStart 0.5 -TempEnd 0.05
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 -Mode train -Phase 4 -Epochs 50 -LearningRate 1e-4 -Resume:$false -FreezeEncoder:$false -EncoderLrScale 0.1 -TempStart 0.5 -TempEnd 0.05
 ```
 
 ### B) Run ingest stage(s)

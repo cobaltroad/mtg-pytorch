@@ -5,7 +5,7 @@ param(
     [ValidateSet(2, 3, 4)]
     [int]$Phase = 3,
 
-    [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_tribal_typeline_synergy', 'backfill_roles', 'all')]
+    [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'backfill_roles', 'all')]
     [string]$Stage = 'compute_synergy',
 
     [Nullable[int]]$Epochs = $null,
@@ -20,9 +20,11 @@ param(
     [int]$Sample = 500000,
     [int]$RoleDemandSample = 100000,
     [int]$ComboSample = 200000,
+    [int]$CommanderValueSample = 200000,
 
     [int]$SynergyLimit = 500000,
-    [int]$TribalMemberLimit = 50000
+    [int]$TribalMemberLimit = 80000,
+    [int]$CommanderValueLimit = 200000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -182,7 +184,7 @@ if ($Mode -eq 'train') {
     }
 
     if ($Phase -eq 2) {
-        $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample)
+        $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
     }
 
     if ($Phase -eq 4) {
@@ -203,6 +205,7 @@ $env:EDHREC_CACHE_DIR = $cacheDir
 $env:BATCH_SIZE = if ($env:INGEST_BATCH_SIZE) { $env:INGEST_BATCH_SIZE } else { '256' }
 $env:SYNERGY_LIMIT = "$SynergyLimit"
 $env:TRIBAL_MEMBER_LIMIT = "$TribalMemberLimit"
+$env:COMMANDER_VALUE_LIMIT = "$CommanderValueLimit"
 
 if ($Stage -eq 'backfill_roles') {
     $apiUrl = if ($env:API_URL) { $env:API_URL } else { 'http://localhost:8000' }
