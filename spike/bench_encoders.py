@@ -37,6 +37,7 @@ import json
 import time
 from pathlib import Path
 
+import common  # noqa: F401 — loads .env at import time
 import numpy as np
 
 DATA_DIR = Path(__file__).parent / "data"
