@@ -105,11 +105,11 @@ def get_model(checkpoint_name: str = "phase4_best") -> Optional[DeckConstructor]
 
 def get_embeddings(
     db_url: str,
-    model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    model_name: str = "sentence-transformers/all-mpnet-base-v2",
 ) -> dict[str, np.ndarray]:
     """Lazy-load and cache all card embeddings from the DB.
 
-    Returns {card_id (str): np.ndarray shape (384,)}.
+    Returns {card_id (str): np.ndarray shape (768,)}.
     """
     cache_key = f"{db_url}::{model_name}"
     if cache_key in _embeddings_cache:
