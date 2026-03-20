@@ -105,9 +105,15 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     #          legendaries by legendary count).
     # We target the *generic* "legendary creature or planeswalker … mana"
     # wording rather than the specific card text to stay extensible.
+    # Three alternatives cover the ordering variants:
+    #   1. "legendary creature/planeswalker … mana/add"  (legend first)
+    #   2. "add … legendary creature/planeswalker"        (add first, short gap)
+    #   3. "mana value … legendary creature/planeswalker" (mana value before
+    #      legend, e.g. "equal to the mana value of target legendary creature")
     (
         r"legendary (creature|planeswalker).{0,60}(mana|add)"
-        r"|add.{0,30}legendary (creature|planeswalker)",
+        r"|add.{0,30}legendary (creature|planeswalker)"
+        r"|mana value.{0,40}legendary (creature|planeswalker)",
         "Commander mana-value / legendary mana payoff",
         "commander_mana_value",
     ),

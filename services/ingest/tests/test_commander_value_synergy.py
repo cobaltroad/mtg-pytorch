@@ -12,6 +12,7 @@ Validates that:
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -280,6 +281,13 @@ class TestProducerMapStructure:
 
 # ── commander_analysis integration ───────────────────────────────────────────
 
+_pydantic_available = importlib.util.find_spec("pydantic") is not None
+
+
+@pytest.mark.skipif(
+    not _pydantic_available,
+    reason="pydantic (API dependency) not installed — tests run in full inside Docker",
+)
 class TestCommanderAnalysisIntegration:
     """Tests for the low-MV commander detection in analyze_commander_oracle_text()."""
 
