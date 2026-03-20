@@ -486,18 +486,20 @@ TRIBAL_MEMBER_LIMIT = int(os.environ.get("TRIBAL_MEMBER_LIMIT", "50_000"))
 
 
 async def compute_tribal_typeline_synergy() -> None:
-    """Build synergy edges based purely on shared creature type in type_line.
+    """Build synergy edges between tribal commanders and tribe members.
 
     Two kinds of edges are generated for each tribe in TRIBES:
 
     1. Commander → member  (uncapped)
-       Legendary creature cards of that tribe → every other card of that tribe.
-       This is the critical signal for commanders like Wilhelt whose synergy
-       is entirely encoded in type_line, not oracle text.
+       Legendary creature cards whose oracle text mentions the tribe name
+       (e.g. "Zombie", "Elf") paired with every card of that tribe.
+       Requiring the tribe to appear in oracle text prevents false positives
+       from commanders that merely happen to share a creature type (e.g. a
+       Legendary Human with no Human-matters text should not get Human edges).
 
     2. Member → member  (capped at TRIBAL_MEMBER_LIMIT per tribe)
-       All non-legendary tribe members paired with each other, so intra-tribal
-       co-occurrence is reflected in the embedding space.
+       All tribe members paired with each other, so intra-tribal co-occurrence
+       is reflected in the embedding space.
 
     Changelings ('Changeling' = ANY(keywords)) are included in every tribe's
     member pool because they are every creature type simultaneously — e.g.
@@ -521,11 +523,15 @@ async def compute_tribal_typeline_synergy() -> None:
                     OR {ALL_TYPES_SQL}
                 )
             """))).fetchall()
+            # Only commanders whose oracle text explicitly mentions the tribe name
+            # qualify for commander→member edges.  Matching solely on type_line
+            # would pair every Legendary Human with all Humans, etc., even when
+            # the card has no Human-matters text — a major source of false positives.
             commanders = (await db.execute(text(f"""
                 SELECT id::text FROM cards
-                WHERE lower(type_line) LIKE '%{t}%'
-                  AND lower(type_line) LIKE '%creature%'
+                WHERE lower(type_line) LIKE '%creature%'
                   AND lower(type_line) LIKE '%legendary%'
+                  AND lower(oracle_text) LIKE '%{t}%'
             """))).fetchall()
 
         member_ids = [r[0] for r in all_members]
