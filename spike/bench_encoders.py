@@ -169,7 +169,7 @@ def _device_name(model) -> str:
 
 def print_results_table(results: list[dict]) -> None:
     header = f"{'Model':<14} {'Dim':>4}  {'Pos sim':>7}  {'Neg sim':>7}  {'Separation':>10}  {'Throughput':>13}  Device"
-    sep    = "─" * len(header)
+    sep    = "-" * len(header)
     print(f"\n{sep}")
     print(header)
     print(sep)
@@ -231,7 +231,7 @@ def main():
     run_names = {r["model"] for r in results}
     merged = [r for r in existing if r["model"] not in run_names] + results
     out_path.write_text(json.dumps(merged, indent=2))
-    print(f"Results saved → {out_path}")
+    print(f"Results saved -> {out_path}")
 
 
 if __name__ == "__main__":
