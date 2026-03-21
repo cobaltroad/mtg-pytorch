@@ -10,6 +10,7 @@ param(
 
     [Nullable[int]]$Epochs = $null,
     [Nullable[double]]$LearningRate = $null,
+    [int]$BatchSize = 512,
 
     [Nullable[bool]]$Resume = $null,
     [bool]$FreezeEncoder = $false,
@@ -158,7 +159,7 @@ if ($Mode -eq 'train') {
     $env:CHECKPOINT_DIR = $checkpointsDir
 
     if ($null -eq $Epochs) {
-        if ($Phase -eq 2) { $Epochs = 20 }
+        if ($Phase -eq 2) { $Epochs = 30 }
         elseif ($Phase -eq 3) { $Epochs = 50 }
         else { $Epochs = 50 }
     }
@@ -176,7 +177,8 @@ if ($Mode -eq 'train') {
         'train.py',
         '--phase', $Phase,
         '--epochs', $Epochs,
-        '--lr', $LearningRate
+        '--lr', $LearningRate,
+        '--batch-size', $BatchSize
     )
 
     if ($Resume) {
