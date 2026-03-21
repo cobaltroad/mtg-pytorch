@@ -575,7 +575,7 @@ def recall_at_k(
     n_decks: int = 50,
     positions_per_deck: int = 5,
     n_neg: int = 99,
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    embedding_model: str = "sentence-transformers/all-mpnet-base-v2",
 ) -> dict:
     """Compute Recall@K on a random sample of decks.
 

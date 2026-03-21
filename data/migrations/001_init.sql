@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS card_embeddings (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     card_id         UUID NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
     model           TEXT NOT NULL,          -- embedding model identifier
-    embedding       vector(384),            -- dim matches all-MiniLM-L6-v2; alter per model
+    embedding       vector(384),            -- dim matches all-mpnet-base-v2 (768-d after migration 004); alter per model
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (card_id, model)
 );

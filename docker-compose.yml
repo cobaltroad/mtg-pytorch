@@ -28,14 +28,11 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
       MODEL_CHECKPOINT_DIR: /app/checkpoints
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      WANDB_API_KEY: ${WANDB_API_KEY:-}
-      WANDB_PROJECT: ${WANDB_PROJECT:-edh-builder}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     volumes:
       - ./services/api:/app:cached
       - model_checkpoints:/app/checkpoints
       - ./services/ingest/card_name_aliases.csv:/app/card_name_aliases.csv:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       db:
         condition: service_healthy
@@ -82,8 +79,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
       # MTGJSON is used as primary; Scryfall only as fallback
       SCRYFALL_BULK_TYPE: ${SCRYFALL_BULK_TYPE:-oracle_cards}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-mpnet-base-v2}
       BATCH_SIZE: ${INGEST_BATCH_SIZE:-256}
+      HF_HOME: /data/hf_cache
     volumes:
       - ./services/ingest:/app:cached
       - ingest_cache:/data
@@ -93,38 +91,17 @@ services:
     networks:
       - internal
 
-  # ── Trainer ─────────────────────────────────────────────────────────────────
-  trainer:
-    build: ./services/trainer
-    image: mtg-pytorch-trainer:latest
-    restart: "no"
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
-      CHECKPOINT_DIR: /checkpoints
-      WANDB_API_KEY: ${WANDB_API_KEY:-}
-      WANDB_PROJECT: ${WANDB_PROJECT:-edh-builder}
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
-    volumes:
-      - ./services/trainer:/app:cached
-      - ./models:/app/models:cached
-      - model_checkpoints:/checkpoints
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - internal
-
   # ── Jupyter Lab ─────────────────────────────────────────────────────────────
   jupyter:
-    build: ./services/trainer
-    image: mtg-pytorch-trainer:latest
+    build: ./services/jupyter
+    image: mtg-pytorch-jupyter:latest
     restart: unless-stopped
-    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --NotebookApp.token=${JUPYTER_TOKEN:-} --notebook-dir=/notebooks
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=${JUPYTER_TOKEN:-} --notebook-dir=/notebooks
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mtg}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-mtg}
     volumes:
       - ./notebooks:/notebooks:cached
-      - ./models:/app/models:cached
+      - ./models:/notebooks/models:cached
       - model_checkpoints:/checkpoints:ro
     depends_on:
       db:
