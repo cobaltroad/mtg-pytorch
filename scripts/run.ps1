@@ -2,7 +2,7 @@ param(
     [ValidateSet('train', 'ingest')]
     [string]$Mode = 'train',
 
-    [ValidateSet(2, 3, 4)]
+    [ValidateSet(1, 2, 3, 4)]
     [int]$Phase = 3,
 
     [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'backfill_roles', 'all')]
@@ -159,9 +159,10 @@ if ($Mode -eq 'train') {
     $env:CHECKPOINT_DIR = $checkpointsDir
 
     if ($null -eq $Epochs) {
-        if ($Phase -eq 2) { $Epochs = 30 }
+        if ($Phase -eq 1)    { $Epochs = 50 }
+        elseif ($Phase -eq 2) { $Epochs = 30 }
         elseif ($Phase -eq 3) { $Epochs = 50 }
-        else { $Epochs = 30 }
+        else                  { $Epochs = 30 }
     }
 
     if ($null -eq $LearningRate) {
@@ -169,7 +170,8 @@ if ($Mode -eq 'train') {
     }
 
     if ($null -eq $Resume) {
-        if ($Phase -eq 4) { $Resume = $false }
+        if ($Phase -le 1) { $Resume = $false }
+        elseif ($Phase -eq 4) { $Resume = $false }
         else { $Resume = $true }
     }
 
