@@ -33,6 +33,12 @@ services:
       - ./services/api:/app:cached
       - model_checkpoints:/app/checkpoints
       - ./services/ingest/card_name_aliases.csv:/app/card_name_aliases.csv:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       db:
         condition: service_healthy
@@ -56,7 +62,10 @@ services:
     environment:
       API_URL: http://api:8000
     depends_on:
-      - api
+      db:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     networks:
       - internal
       - traefik-public
