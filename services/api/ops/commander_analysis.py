@@ -173,6 +173,15 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
         "mechanic", "Clue tokens (draw / investigate matters)",
         "high", "clues",
     ),
+    # Discover / cascade (exile-cast mechanics)
+    "discover": _RulesTerm(
+        "mechanic", "discover (cascade-style: exile until you hit a castable card, cast free)",
+        "high", "play_from_exile",
+    ),
+    "cascade": _RulesTerm(
+        "keyword", "cascade (cast a free spell from exile when this spell is cast)",
+        "high", "play_from_exile",
+    ),
     # Legendary matters (Gandalf the White, Sisay, Jodah, etc.)
     # Triggered by oracle text that references casting or caring about legendary spells/permanents.
     "legendary spell": _RulesTerm(
@@ -520,6 +529,13 @@ _LOW_MV_LABEL = "low mana-value commander (CMC ≤ 2) — commander-value cards 
 # Checked in order; first match wins.  More specific combos go first.
 
 _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
+    # ── Multicolor matters ────────────────────────────────────────────────────
+    # Checked before tribal/tokens so multicolor commanders aren't misclassified
+    # as tribal simply because their oracle text mentions a creature type in a
+    # token-creation clause (e.g. Aragorn creating "Human Soldier" tokens).
+    ({"multicolor", "tokens"},                  "multicolor token engine (multicolor spells trigger token creation)"),
+    ({"multicolor", "spellslinger"},            "multicolor spellslinger (multicolor spells trigger multiple color-based abilities)"),
+    ({"multicolor"},                            "multicolor matters (run multicolor spells to maximize color-based triggers)"),
     # ── Legendary matters pairings ────────────────────────────────────────────
     ({"legendary_matters", "etb_triggers", "ltb_triggers"}, "legendary/artifact ETB+LTB trigger doubling (Gandalf-style)"),
     ({"legendary_matters", "play_from_exile"},      "legendary cascade (casting legendaries chains into more legendaries for free)"),
@@ -550,6 +566,7 @@ _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     ({"weenie", "extra_triggers"},                 "weenie + trigger doubling (small-creature abilities fire twice)"),
     ({"weenie"},                                   "weenie / small-creature matters"),
     ({"extra_triggers"},                           "extra triggers (abilities trigger an additional time)"),
+    ({"tribal", "play_from_exile"},             "tribal cascade / discover (ETB chain of tribal members, each casting a free spell)"),
     ({"tribal", "mana_producers"},              "elf tribal + elfball (mana-dork matters)"),
     ({"tribal", "aristocrats"},                 "tribal aristocrats"),
     ({"tribal", "tokens"},                      "tribal token swarm"),
@@ -756,6 +773,25 @@ def analyze_commander_oracle_text(
                 boost_applied=True,
             ))
             seen_boosts.add("commander_value")
+
+    # ── 3d. Multi-color oracle text detection ────────────────────────────────
+    # When oracle text references 2+ distinct MTG color names (white/blue/black/
+    # red/green), the commander cares about spell color — i.e. multicolor spells
+    # will trigger multiple abilities simultaneously (Aragorn, the Uniter style).
+    _COLOR_WORDS = ["white", "blue", "black", "red", "green"]
+    colors_in_text = [c for c in _COLOR_WORDS if c in text_lower]
+    if len(colors_in_text) >= 2:
+        label = f"multicolor synergy ({', '.join(colors_in_text)} spells referenced)"
+        if label not in seen_labels:
+            seen_labels.add(label)
+            signals.append(SignalResult(
+                signal_type="mechanic",
+                label=label,
+                confidence="high",
+                phrase=" / ".join(colors_in_text),
+                boost_applied=True,
+            ))
+            seen_boosts.add("multicolor")
 
     # ── 4. Gap detection — unrecognized "whenever … / if … / each …" clauses ──
     trigger_phrases = re.findall(
