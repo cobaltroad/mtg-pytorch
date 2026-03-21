@@ -268,15 +268,20 @@ async def import_file(
     if not commanders:
         return "skip", "no commander section found"
 
-    # Resolve commander — use first name that matches
+    # Resolve all commanders — first match becomes primary commander_id;
+    # remaining resolved IDs are stored as partner_commander_ids so the
+    # trainer can compute the correct union color identity for partner pairs.
     cmd_id: str | None = None
     cmd_name: str | None = None
+    partner_commander_ids: list[str] = []
     for cname in commanders:
         cid = name_index.get(cname.lower())
         if cid:
-            cmd_id   = cid
-            cmd_name = cname
-            break
+            if cmd_id is None:
+                cmd_id   = cid
+                cmd_name = cname
+            else:
+                partner_commander_ids.append(cid)
 
     if cmd_id is None:
         return "skip", f"commander not in DB: {', '.join(commanders)}"
@@ -318,10 +323,11 @@ async def import_file(
         None,           # no URL available from a local file export
         card_ids,
         json.dumps({
-            "deck_name":        deck_name,
-            "file":             path.name,
-            "commanders":       commanders,
-            "unresolved_cards": unresolved,
+            "deck_name":            deck_name,
+            "file":                 path.name,
+            "commanders":           commanders,
+            "partner_commander_ids": partner_commander_ids,
+            "unresolved_cards":     unresolved,
             **arch_meta,
         }),
     )

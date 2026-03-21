@@ -595,6 +595,10 @@ def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
         metadata = row["metadata"] or {}
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
+        # Partner commanders: union color identities so negatives are sampled
+        # from the full legal pool (e.g. Krark+Sakashima → R∪U, not just R).
+        for pid in metadata.get("partner_commander_ids", []):
+            cmd_ci = cmd_ci | color_ids.get(pid, frozenset())
         decks.append({
             "commander_id":      cmd_id,
             "card_ids":          card_ids,

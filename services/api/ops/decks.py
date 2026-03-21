@@ -151,6 +151,7 @@ async def generate(
     checkpoint: str,
     boost_overrides: list[str] | None = None,
     combo_boost: float = 0.3,
+    partner_oracle_id: UUID | None = None,
 ) -> dict | None:
     """Generate a 99-card deck using the DeckConstructor model.
 
@@ -182,7 +183,21 @@ async def generate(
         return None
 
     commander_id = str(commander_row[0])
-    color_identity = commander_row[5] or []
+    color_identity = list(commander_row[5] or [])
+
+    # Partner commander: union color identities
+    partner_id: str | None = None
+    if partner_oracle_id is not None:
+        partner_result = await db.execute(
+            text("SELECT id, color_identity FROM cards WHERE oracle_id = :oid"),
+            {"oid": str(partner_oracle_id)},
+        )
+        partner_row = partner_result.fetchone()
+        if partner_row:
+            partner_id = str(partner_row[0])
+            for c in (partner_row[1] or []):
+                if c not in color_identity:
+                    color_identity.append(c)
 
     db_url = DATABASE_URL
 
@@ -244,6 +259,7 @@ async def generate(
                     lambda: inference.score_cards(
                         commander_id, context_ids, embeddings, model, all_ids,
                         color_identities=color_identities,
+                        partner_ids=[partner_id] if partner_id else None,
                     ),
                 )
 

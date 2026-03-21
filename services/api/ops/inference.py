@@ -278,9 +278,16 @@ def legal_card_ids(
     commander_id: str,
     all_ids: list[str],
     color_identities: dict[str, frozenset],
+    partner_ids: list[str] | None = None,
 ) -> list[str]:
-    """Return card IDs whose color identity is a subset of the commander's."""
+    """Return card IDs whose color identity is a subset of the commander's.
+
+    Pass partner_ids for partner-commander pairs so the full union color
+    identity is used (e.g. Krark+Sakashima → R∪U, not just R).
+    """
     cmd_ci = color_identities.get(commander_id, frozenset())
+    for pid in (partner_ids or []):
+        cmd_ci = cmd_ci | color_identities.get(pid, frozenset())
     return [
         cid for cid in all_ids
         if color_identities.get(cid, frozenset()) <= cmd_ci
@@ -469,6 +476,7 @@ def score_cards(
     all_ids: list[str],
     color_identities: dict[str, frozenset] | None = None,
     batch_size: int = 512,
+    partner_ids: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     """Score color-legal cards given commander + context, return sorted (card_id, score).
 
@@ -476,11 +484,14 @@ def score_cards(
     Excludes the commander itself and any cards already in context_ids.
     If context is empty, uses the commander embedding as the single context token
     (the DeckConstructor requires at least 1 token in the sequence).
+    Pass partner_ids for partner-commander pairs to use the union color identity.
     """
     exclude = {commander_id} | set(context_ids)
 
     if color_identities:
         cmd_ci = color_identities.get(commander_id, frozenset())
+        for pid in (partner_ids or []):
+            cmd_ci = cmd_ci | color_identities.get(pid, frozenset())
         candidate_ids = [
             cid for cid in all_ids
             if cid not in exclude
