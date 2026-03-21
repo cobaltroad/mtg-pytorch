@@ -139,6 +139,10 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
         "mechanic", "cast from exile matters",
         "high", "play_from_exile",
     ),
+    "you may play that card": _RulesTerm(
+        "mechanic", "play exiled card matters",
+        "high", "play_from_exile",
+    ),
     # Food / artifact tokens
     "food token": _RulesTerm(
         "mechanic", "Food artifact tokens (lifegain + sacrifice synergy)",
@@ -347,6 +351,10 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
                    re.compile(r"(deal(s)? \d+ damage|lose(s)? \d+ life).{0,30}(target|each) (opponent|player)", re.I)),
     _PatternSignal("mechanic", "punisher / drain (reversed phrasing)", "high", "punisher",
                    re.compile(r"(target|each) (opponent|player).{0,30}(lose(s)? \d+ life|deal(s)? \d+ damage)", re.I)),
+    # Punisher payoff — commander rewards when opponents lose exactly 1 life (Ob Nixilis-style).
+    # Same deckbuilding signal: stock the 99 with pingers.
+    _PatternSignal("mechanic", "punisher payoff (triggers when opponents lose exactly 1 life)", "high", "punisher",
+                   re.compile(r"whenever\b.{0,60}(opponent|player)(s)?.{0,30}lose(s)? exactly \d+ life", re.I)),
     # General LTB / death payoff trigger — "whenever … dies/dying" or the rules-text
     # equivalent "put into a graveyard from the battlefield" are the same event.
     _PatternSignal("mechanic", "LTB / death payoff trigger", "high", "ltb_triggers",
