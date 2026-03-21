@@ -18,6 +18,13 @@ param(
     [double]$TempStart = 0.5,
     [double]$TempEnd = 0.05,
 
+    # Phase 4 synergy-guided training weights
+    [int]$SynPerEpoch = 1000,
+    [double]$ComboWeight = 3.0,
+    [double]$AbilityWeight = 2.0,
+    [double]$TribalWeight = 1.5,
+    [int]$P4SynergyLimit = 300,
+
     [int]$Sample = 500000,
     [int]$RoleDemandSample = 100000,
     [int]$ComboSample = 200000,
@@ -200,7 +207,14 @@ if ($Mode -eq 'train') {
         if (-not $FreezeEncoder) {
             $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $EncoderLrScale)
         }
-        $cmd += @('--temp-start', $TempStart, '--temp-end', $TempEnd)
+        $cmd += @(
+            '--temp-start', $TempStart, '--temp-end', $TempEnd,
+            '--syn-per-epoch', $SynPerEpoch,
+            '--combo-weight', $ComboWeight,
+            '--ability-weight', $AbilityWeight,
+            '--tribal-weight', $TribalWeight,
+            '--synergy-limit', $P4SynergyLimit
+        )
     }
 
     Write-Host "Running trainer with args: $($cmd -join ' ')"

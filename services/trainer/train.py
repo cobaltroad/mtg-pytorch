@@ -708,6 +708,156 @@ def train_deck_phase(
     save_checkpoint(model, f"phase3_epoch{epochs}")
 
 
+# ── Phase 4: Synergy-guided synthetic positions ───────────────────────────────
+
+def load_synergy_positions(
+    decks: list[dict],
+    embeddings: dict[str, np.ndarray],
+    combo_weight: float = 3.0,
+    ability_weight: float = 2.0,
+    tribal_weight: float = 1.5,
+    synergy_limit_per_commander: int = 300,
+) -> list[dict]:
+    """Build synthetic training positions from combo packages and synergy edges.
+
+    These positions teach the model *why* cards belong together based on
+    oracle-text semantics, rather than just what humans happened to put
+    together.  A brand new commander the model has never seen will produce a
+    text embedding in the same neighbourhood as commanders it was trained on;
+    those neighbourhood relationships are what makes the synergy signal
+    generalise.
+
+    Position types
+    ──────────────
+    Combo completions (combo_weight):
+        For each deck that contains ≥2 cards from a known combo package,
+        create one position per package card: context = sibling combo cards
+        already in the deck, target = this card.  Teaches "if you see these
+        cards in context, the missing piece of the combo should score high."
+
+    Ability-trigger pairings (ability_weight):
+        For each commander in the training set, load its ability_trigger edges
+        from synergy_edges.  The training position has an EMPTY card context so
+        the model must score the target card using only the commander embedding.
+        Teaches "this commander's text implies this card type belongs here."
+
+    Tribal inclusions (tribal_weight):
+        Same structure as ability-trigger but for tribal_typeline edges.
+        Teaches tribe membership regardless of whether any stored deck
+        happened to include that tribal card.
+
+    Each position dict contains:
+        commander_id      – str UUID (must be in embeddings)
+        context_card_ids  – list[str]  (may be empty)
+        target_card_id    – str UUID
+        weight            – float  (loss multiplier for this position)
+        legal_neg_indices – np.ndarray  (color-legal negative pool)
+    """
+    from collections import Counter, defaultdict
+
+    log.info(
+        "Building synergy positions "
+        "(combo=%.1f×, ability=%.1f×, tribal=%.1f×, limit=%d/commander)…",
+        combo_weight, ability_weight, tribal_weight, synergy_limit_per_commander,
+    )
+
+    emb_set = set(embeddings.keys())
+    cmd_legal: dict[str, np.ndarray] = {
+        d["commander_id"]: d["legal_neg_indices"] for d in decks
+    }
+    commander_ids = list(cmd_legal.keys())
+    # Index deck card sets once for fast lookup
+    deck_card_sets = {d["commander_id"]: set(d["card_ids"]) for d in decks}
+
+    positions: list[dict] = []
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+
+            # ── Combo completions ────────────────────────────────────────────
+            # Find packages whose cards appear (≥2) in any training deck.
+            # Context = sibling package cards that are also in the deck;
+            # target  = each individual package card in turn.
+            cur.execute("""
+                SELECT cpc.combo_package_id, cpc.card_id::text
+                FROM combo_package_cards cpc
+                JOIN combo_packages cp ON cp.id = cpc.combo_package_id
+                WHERE cpc.card_id IS NOT NULL
+                  AND cpc.is_template = FALSE
+                  AND cp.legal_commander = TRUE
+            """)
+            pkg_map: dict[str, list[str]] = defaultdict(list)
+            for pkg_id, card_id in cur.fetchall():
+                if card_id in emb_set:
+                    pkg_map[pkg_id].append(card_id)
+
+        combo_count = 0
+        for deck in decks:
+            cmd_id   = deck["commander_id"]
+            in_deck  = deck_card_sets[cmd_id]
+            legal    = cmd_legal[cmd_id]
+            for pkg_card_list in pkg_map.values():
+                overlap = [c for c in pkg_card_list if c in in_deck]
+                if len(overlap) < 2:
+                    continue
+                for target in overlap:
+                    positions.append({
+                        "commander_id":      cmd_id,
+                        "context_card_ids":  [c for c in overlap if c != target],
+                        "target_card_id":    target,
+                        "weight":            combo_weight,
+                        "legal_neg_indices": legal,
+                    })
+                    combo_count += 1
+
+        log.info("  %d combo completion positions", combo_count)
+
+        with conn.cursor() as cur:
+            # ── Ability-trigger and tribal synergy positions ─────────────────
+            # Empty context: the model must learn to score the target card
+            # from the commander embedding alone.  This is what generalises to
+            # unseen commanders — the embedding neighbourhood does the work.
+            cur.execute("""
+                SELECT card_a::text, card_b::text, score_type
+                FROM synergy_edges
+                WHERE score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND card_a::text = ANY(%s)
+            """, (commander_ids,))
+            fwd = list(cur.fetchall())
+
+            cur.execute("""
+                SELECT card_b::text AS card_a, card_a::text AS card_b, score_type
+                FROM synergy_edges
+                WHERE score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND card_b::text = ANY(%s)
+            """, (commander_ids,))
+            rev = list(cur.fetchall())
+
+        cmd_count: Counter = Counter()
+        syn_count = 0
+        for card_a, card_b, score_type in fwd + rev:
+            if card_a not in cmd_legal or card_b not in emb_set:
+                continue
+            if cmd_count[card_a] >= synergy_limit_per_commander:
+                continue
+            weight = ability_weight if score_type == "ability_trigger" else tribal_weight
+            positions.append({
+                "commander_id":      card_a,
+                "context_card_ids":  [],
+                "target_card_id":    card_b,
+                "weight":            weight,
+                "legal_neg_indices": cmd_legal[card_a],
+            })
+            cmd_count[card_a] += 1
+            syn_count += 1
+
+        log.info("  %d ability/tribal positions across %d commanders",
+                 syn_count, len(cmd_count))
+
+    log.info("Total synergy positions: %d", len(positions))
+    return positions
+
+
 # ── Phase 4: Autoregressive deck construction ─────────────────────────────────
 
 def train_deck_constructor_phase(
@@ -716,6 +866,8 @@ def train_deck_constructor_phase(
     embeddings: dict[str, np.ndarray],
     epochs: int,
     lr: float,
+    synergy_positions: list[dict] | None = None,
+    syn_per_epoch: int = 1000,
     n_neg: int = 64,
     positions_per_deck: int = 10,
     temp_start: float = 0.5,
@@ -725,23 +877,29 @@ def train_deck_constructor_phase(
 ):
     """Phase 4: autoregressive deck construction via transformer decoder + InfoNCE.
 
-    For each deck, randomly sample `positions_per_deck` positions K (1 ≤ K < deck_len).
-    At each position the model sees [commander, cards[0:K]] and must rank cards[K]
-    above n_neg random cards drawn from the full 33k pool.
+    Each epoch interleaves two types of training steps:
 
-    InfoNCE loss over (1 + n_neg) candidates — sharper than BPR, better suited to
-    the multi-candidate ranking setting.
+    Deck steps (from DeckDataset):
+        The model sees [commander, cards[0:K]] and must rank cards[K] above
+        n_neg random color-legal cards.  Teaches sequence-level deck construction
+        from human examples.
 
-    Temperature is cosine-annealed from temp_start (epoch 1) to temp_end (final epoch).
-    Starting high softens the distribution early to prevent mode collapse; ending low
-    sharpens the geometry for precise nearest-neighbour retrieval at inference time.
+    Synergy steps (from synergy_positions, optional):
+        The model sees [commander, (optional combo context)] and must rank a known
+        synergy partner above n_neg negatives.  These positions are derived purely
+        from oracle-text analysis (synergy_edges + combo_package_cards), so they
+        generalise to brand-new commanders — a commander the model has never seen
+        will have an embedding in the neighbourhood of commanders it was trained on,
+        and those neighbourhood relationships carry the synergy signal forward.
 
-    The full card pool is pre-projected at the start of each epoch so negative
-    sampling is O(1); projections are refreshed each epoch as encoder weights update.
+    The weighted InfoNCE loss for synergy steps uses the position's `weight` field
+    to scale gradient magnitude relative to deck steps (weight=1.0 for each deck
+    position).  Combo completions (weight=3.0) dominate; ability/tribal (1.5–2.0)
+    supplement; human decks provide context and balance.
 
-    When freeze_encoder=False, the encoder is updated at lr * encoder_lr_scale
-    (default 0.1×) to prevent it from collapsing Phase 3 representations while the
-    decoder learns quickly at the full lr.
+    Temperature is cosine-annealed from temp_start → temp_end.
+    When freeze_encoder=False the encoder trains at lr * encoder_lr_scale (default
+    0.1×) to prevent collapsing Phase 3 representations.
     """
     if freeze_encoder:
         model.card_encoder.requires_grad_(False)
@@ -763,10 +921,17 @@ def train_deck_constructor_phase(
     all_raw = torch.from_numpy(
         np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
     )
+    # Pre-build raw tensors for synergy positions (looked up by card id)
+    id_to_idx = {card_id: i for i, card_id in enumerate(all_ids)}
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
     all_raw = all_raw.to(device)
+
+    n_syn_total = len(synergy_positions) if synergy_positions else 0
+    n_syn_epoch = min(n_syn_total, syn_per_epoch) if synergy_positions else 0
+    log.info("Phase 4: %d deck sequences + %d/%d synergy positions per epoch",
+             len(dataset), n_syn_epoch, n_syn_total)
 
     best_loss = float("inf")
     for epoch in range(epochs):
@@ -778,60 +943,106 @@ def train_deck_constructor_phase(
             all_proj = torch.cat([
                 model.card_encoder(all_raw[i: i + 512])
                 for i in range(0, all_raw.size(0), 512)
-            ], dim=0)  # (N, 256), L2-normalised, no grad
+            ], dim=0)  # (N, D), L2-normalised, no grad
         model.train()
 
         total_loss = 0.0
-        n_steps = 0
-        deck_indices = list(range(len(dataset)))
-        random.shuffle(deck_indices)
+        n_steps    = 0
 
-        for idx in deck_indices:
-            cmd_raw, card_raw, legal_neg_idx = dataset[idx]  # (384,), (K, 384), int array
-            card_raw = card_raw.to(device)
-            cmd_raw  = cmd_raw.to(device)
-            K = card_raw.size(0)
-            if K < 2:
-                continue
+        # ── Build unified shuffle of deck + synergy steps ─────────────────────
+        # Sample a fresh random subset of synergy positions each epoch so the
+        # model sees different positions over time while keeping epoch length
+        # manageable.  Over many epochs the full synergy pool is covered.
+        syn_sample = (
+            random.sample(range(n_syn_total), n_syn_epoch)
+            if synergy_positions else []
+        )
+        step_list: list[tuple[str, int]] = (
+            [("deck", i) for i in range(len(dataset))]
+            + [("syn",  i) for i in syn_sample]
+        )
+        random.shuffle(step_list)
 
-            # Sample positions: always K ≥ 1 so there is at least one card in context
-            n_pos = min(positions_per_deck, K - 1)
-            positions = random.sample(range(1, K), n_pos)
+        for step_type, step_idx in step_list:
 
-            # Legal negative pool: indices into all_proj restricted to commander's color identity
-            legal_pool = legal_neg_idx if isinstance(legal_neg_idx, np.ndarray) else legal_neg_idx.numpy()
+            # ── Deck step ─────────────────────────────────────────────────────
+            if step_type == "deck":
+                cmd_raw, card_raw, legal_neg_idx = dataset[step_idx]
+                card_raw = card_raw.to(device)
+                cmd_raw  = cmd_raw.to(device)
+                K = card_raw.size(0)
+                if K < 2:
+                    continue
 
-            deck_loss = torch.tensor(0.0, device=device)
-            for pos in positions:
-                # Project context + target through encoder (gradients flow)
-                z_cmd     = model.card_encoder(cmd_raw.unsqueeze(0))          # (1, 256)
-                z_context = model.card_encoder(card_raw[:pos])                # (pos, 256)
-                z_target  = model.card_encoder(card_raw[pos].unsqueeze(0))   # (1, 256)
+                n_pos      = min(positions_per_deck, K - 1)
+                pos_list   = random.sample(range(1, K), n_pos)
+                legal_pool = (legal_neg_idx if isinstance(legal_neg_idx, np.ndarray)
+                              else legal_neg_idx.numpy())
 
-                # Random negatives from the pre-projected pool, color-identity filtered
+                deck_loss = torch.tensor(0.0, device=device)
+                for pos in pos_list:
+                    z_cmd     = model.card_encoder(cmd_raw.unsqueeze(0))         # (1, D)
+                    z_context = model.card_encoder(card_raw[:pos])               # (pos, D)
+                    z_target  = model.card_encoder(card_raw[pos].unsqueeze(0))   # (1, D)
+
+                    chosen  = np.random.choice(legal_pool, size=n_neg, replace=True)
+                    z_neg   = all_proj[torch.from_numpy(chosen).to(device)].detach()
+
+                    candidates = torch.cat([z_target, z_neg], dim=0)             # (1+n_neg, D)
+                    scores = model(
+                        z_cmd,
+                        z_context.unsqueeze(0),
+                        candidates.unsqueeze(0),
+                    ).squeeze(0)
+                    deck_loss = deck_loss + (-F.log_softmax(scores / temperature, dim=0)[0])
+
+                step_loss = deck_loss / n_pos
+
+            # ── Synergy step ──────────────────────────────────────────────────
+            else:
+                sp = synergy_positions[step_idx]
+                cmd_id    = sp["commander_id"]
+                target_id = sp["target_card_id"]
+                if cmd_id not in id_to_idx or target_id not in id_to_idx:
+                    continue
+
+                cmd_raw_t    = all_raw[id_to_idx[cmd_id]]
+                target_raw_t = all_raw[id_to_idx[target_id]]
+                legal_pool   = sp["legal_neg_indices"]
+
+                z_cmd    = model.card_encoder(cmd_raw_t.unsqueeze(0))    # (1, D)
+                z_target = model.card_encoder(target_raw_t.unsqueeze(0)) # (1, D)
+
+                # Context: combo siblings projected live; empty context uses
+                # commander as the seed token so the decoder has something to attend to.
+                ctx_ids = sp["context_card_ids"]
+                if ctx_ids:
+                    ctx_raw = torch.stack(
+                        [all_raw[id_to_idx[c]] for c in ctx_ids if c in id_to_idx]
+                    )  # (C, D)
+                    z_context = model.card_encoder(ctx_raw)              # (C, D)
+                else:
+                    z_context = z_cmd.detach()                           # (1, D) — commander as seed
+
                 chosen  = np.random.choice(legal_pool, size=n_neg, replace=True)
-                neg_idx = torch.from_numpy(chosen).to(device)
-                z_neg   = all_proj[neg_idx].detach()                          # (n_neg, 256)
+                z_neg   = all_proj[torch.from_numpy(chosen).to(device)].detach()
 
-                # Candidate set: [positive, neg_0, ..., neg_{n_neg-1}]
-                candidates = torch.cat([z_target, z_neg], dim=0)             # (1+n_neg, 256)
-
-                # Score via transformer decoder
+                candidates = torch.cat([z_target, z_neg], dim=0)        # (1+n_neg, D)
                 scores = model(
-                    z_cmd,                        # (1, 256)
-                    z_context.unsqueeze(0),       # (1, pos, 256)
-                    candidates.unsqueeze(0),      # (1, 1+n_neg, 256)
-                ).squeeze(0)                      # (1+n_neg,)
+                    z_cmd,
+                    z_context.unsqueeze(0),
+                    candidates.unsqueeze(0),
+                ).squeeze(0)
 
-                # InfoNCE: positive is always index 0
-                deck_loss = deck_loss + (-F.log_softmax(scores / temperature, dim=0)[0])
+                raw_loss  = -F.log_softmax(scores / temperature, dim=0)[0]
+                step_loss = raw_loss * sp["weight"]
 
-            avg_deck_loss = deck_loss / n_pos
             optimizer.zero_grad()
-            avg_deck_loss.backward()
+            step_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            total_loss += avg_deck_loss.item()
+            # Log unweighted loss so the curve stays interpretable
+            total_loss += (step_loss / sp["weight"]).item() if step_type == "syn" else step_loss.item()
             n_steps += 1
 
         scheduler.step()
@@ -939,6 +1150,22 @@ def main():
     parser.add_argument("--encoder-lr-scale", type=float, default=0.1,
                         help="Phase 4 --no-freeze-encoder: encoder lr as fraction of decoder lr "
                              "(default 0.1 — encoder updates 10× slower to prevent collapse)")
+    parser.add_argument("--syn-per-epoch", type=int, default=1000,
+                        help="Phase 4: max synergy positions sampled per epoch "
+                             "(default 1000; fresh random sample each epoch covers "
+                             "the full pool over many epochs)")
+    parser.add_argument("--combo-weight", type=float, default=3.0,
+                        help="Phase 4: loss multiplier for combo-completion synergy positions "
+                             "(default 3.0 — combo pieces must be played together, high signal)")
+    parser.add_argument("--ability-weight", type=float, default=2.0,
+                        help="Phase 4: loss multiplier for ability_trigger synergy positions "
+                             "(default 2.0 — oracle-text derived trigger/payoff relationships)")
+    parser.add_argument("--tribal-weight", type=float, default=1.5,
+                        help="Phase 4: loss multiplier for tribal_typeline synergy positions "
+                             "(default 1.5 — type-based membership, slightly softer signal)")
+    parser.add_argument("--synergy-limit", type=int, default=300,
+                        help="Phase 4: max synergy positions per commander "
+                             "(default 300; increase if commanders have sparse edge coverage)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1064,6 +1291,18 @@ def main():
         dataset = DeckDataset(decks, embeddings)
         log.info("Dataset: %d decks", len(dataset))
 
+        # Build synergy positions from oracle-text derived signals.
+        # These teach the model *why* cards belong with a commander rather than
+        # just *that* they appeared together in human decklists — the key to
+        # generalising to commanders the model has never seen a deck for.
+        syn_positions = load_synergy_positions(
+            decks, embeddings,
+            combo_weight=args.combo_weight,
+            ability_weight=args.ability_weight,
+            tribal_weight=args.tribal_weight,
+            synergy_limit_per_commander=args.synergy_limit,
+        )
+
         input_dim = len(next(iter(embeddings.values())))
         model = DeckConstructor(input_dim=input_dim).to(device)
         if args.resume and (CHECKPOINT_DIR / "phase4_best.pt").exists():
@@ -1080,6 +1319,8 @@ def main():
 
         train_deck_constructor_phase(
             model, dataset, embeddings, args.epochs, args.lr,
+            synergy_positions=syn_positions,
+            syn_per_epoch=args.syn_per_epoch,
             n_neg=64, positions_per_deck=10,
             temp_start=args.temp_start,
             temp_end=args.temp_end,
