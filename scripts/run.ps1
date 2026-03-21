@@ -10,7 +10,7 @@ param(
 
     [Nullable[int]]$Epochs = $null,
     [Nullable[double]]$LearningRate = $null,
-    [int]$BatchSize = 512,
+    [Nullable[int]]$BatchSize = $null,
 
     [Nullable[bool]]$Resume = $null,
     [bool]$FreezeEncoder = $false,
@@ -25,7 +25,7 @@ param(
 
     [int]$SynergyLimit = 500000,
     [int]$TribalMemberLimit = 80000,
-    [int]$CommanderValueLimit = 200000
+    [int]$CommanderValueLimit = 20000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -171,6 +171,11 @@ if ($Mode -eq 'train') {
     if ($null -eq $Resume) {
         if ($Phase -eq 4) { $Resume = $false }
         else { $Resume = $true }
+    }
+
+    if ($null -eq $BatchSize) {
+        if ($Phase -le 2) { $BatchSize = 512 }
+        else              { $BatchSize = 32  }
     }
 
     $cmd = @(
