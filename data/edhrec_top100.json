@@ -1,0 +1,602 @@
+[
+  {
+    "rank": 1,
+    "commander": "Ashling, the Limitless",
+    "url": "https://edhrec.com/commanders/ashling-the-limitless",
+    "last_scraped_at": "2026-03-04 18:16:39 +0000"
+  },
+  {
+    "rank": 2,
+    "commander": "Maralen, Fae Ascendant",
+    "url": "https://edhrec.com/commanders/maralen-fae-ascendant",
+    "last_scraped_at": "2026-03-04 18:13:44 +0000"
+  },
+  {
+    "rank": 3,
+    "commander": "Y'shtola, Night's Blessed",
+    "url": "https://edhrec.com/commanders/yshtola-nights-blessed",
+    "last_scraped_at": "2026-03-04 18:26:35 +0000"
+  },
+  {
+    "rank": 4,
+    "commander": "Fire Lord Azula",
+    "url": "https://edhrec.com/commanders/fire-lord-azula",
+    "last_scraped_at": "2026-03-04 18:41:40 +0000"
+  },
+  {
+    "rank": 5,
+    "commander": "The Wise Mothman",
+    "url": "https://edhrec.com/commanders/the-wise-mothman",
+    "last_scraped_at": "2026-03-04 18:56:45 +0000"
+  },
+  {
+    "rank": 6,
+    "commander": "Auntie Ool, Cursewretch",
+    "url": "https://edhrec.com/commanders/auntie-ool-cursewretch",
+    "last_scraped_at": "2026-03-04 19:11:50 +0000"
+  },
+  {
+    "rank": 7,
+    "commander": "Teval, the Balanced Scale",
+    "url": "https://edhrec.com/commanders/teval-the-balanced-scale",
+    "last_scraped_at": "2026-03-04 19:26:54 +0000"
+  },
+  {
+    "rank": 8,
+    "commander": "Toph, the First Metalbender",
+    "url": "https://edhrec.com/commanders/toph-the-first-metalbender",
+    "last_scraped_at": "2026-03-04 19:41:58 +0000"
+  },
+  {
+    "rank": 9,
+    "commander": "The Ur-Dragon",
+    "url": "https://edhrec.com/commanders/the-ur-dragon",
+    "last_scraped_at": "2026-03-04 19:57:02 +0000"
+  },
+  {
+    "rank": 10,
+    "commander": "High Perfect Morcant",
+    "url": "https://edhrec.com/commanders/high-perfect-morcant",
+    "last_scraped_at": "2026-03-04 20:12:07 +0000"
+  },
+  {
+    "rank": 11,
+    "commander": "Hearthhull, the Worldseed",
+    "url": "https://edhrec.com/commanders/hearthhull-the-worldseed",
+    "last_scraped_at": "2026-03-04 20:27:11 +0000"
+  },
+  {
+    "rank": 12,
+    "commander": "Edgar Markov",
+    "url": "https://edhrec.com/commanders/edgar-markov",
+    "last_scraped_at": "2026-03-04 20:42:15 +0000"
+  },
+  {
+    "rank": 13,
+    "commander": "Ms. Bumbleflower",
+    "url": "https://edhrec.com/commanders/ms-bumbleflower",
+    "last_scraped_at": "2026-03-04 20:57:20 +0000"
+  },
+  {
+    "rank": 14,
+    "commander": "Pantlaza, Sun-Favored",
+    "url": "https://edhrec.com/commanders/pantlaza-sun-favored",
+    "last_scraped_at": "2026-03-04 21:12:25 +0000"
+  },
+  {
+    "rank": 15,
+    "commander": "Sephiroth, Fabled SOLDIER",
+    "url": "https://edhrec.com/commanders/sephiroth-fabled-soldier",
+    "last_scraped_at": "2026-03-04 21:27:29 +0000"
+  },
+  {
+    "rank": 16,
+    "commander": "Krenko, Mob Boss",
+    "url": "https://edhrec.com/commanders/krenko-mob-boss",
+    "last_scraped_at": "2026-03-04 21:42:34 +0000"
+  },
+  {
+    "rank": 17,
+    "commander": "Vivi Ornitier",
+    "url": "https://edhrec.com/commanders/vivi-ornitier",
+    "last_scraped_at": "2026-03-04 21:57:38 +0000"
+  },
+  {
+    "rank": 18,
+    "commander": "Cloud, Ex-SOLDIER",
+    "url": "https://edhrec.com/commanders/cloud-ex-soldier",
+    "last_scraped_at": "2026-03-04 22:12:42 +0000"
+  },
+  {
+    "rank": 19,
+    "commander": "Kefka, Court Mage",
+    "url": "https://edhrec.com/commanders/kefka-court-mage",
+    "last_scraped_at": "2026-03-04 22:27:47 +0000"
+  },
+  {
+    "rank": 20,
+    "commander": "Lathril, Blade of the Elves",
+    "url": "https://edhrec.com/commanders/lathril-blade-of-the-elves",
+    "last_scraped_at": "2026-03-04 22:42:50 +0000"
+  },
+  {
+    "rank": 21,
+    "commander": "Atraxa, Praetors' Voice",
+    "url": "https://edhrec.com/commanders/atraxa-praetors-voice",
+    "last_scraped_at": "2026-03-04 22:57:55 +0000"
+  },
+  {
+    "rank": 22,
+    "commander": "Sauron, the Dark Lord",
+    "url": "https://edhrec.com/commanders/sauron-the-dark-lord",
+    "last_scraped_at": "2026-03-04 23:13:00 +0000"
+  },
+  {
+    "rank": 23,
+    "commander": "Kaalia of the Vast",
+    "url": "https://edhrec.com/commanders/kaalia-of-the-vast",
+    "last_scraped_at": "2026-03-04 23:28:04 +0000"
+  },
+  {
+    "rank": 24,
+    "commander": "Doran, Besieged by Time",
+    "url": "https://edhrec.com/commanders/doran-besieged-by-time",
+    "last_scraped_at": "2026-03-04 23:43:09 +0000"
+  },
+  {
+    "rank": 25,
+    "commander": "Isshin, Two Heavens as One",
+    "url": "https://edhrec.com/commanders/isshin-two-heavens-as-one",
+    "last_scraped_at": "2026-03-04 23:58:13 +0000"
+  },
+  {
+    "rank": 26,
+    "commander": "Leonardo, the Balance // Michelangelo, the Heart",
+    "url": "https://edhrec.com/commanders/leonardo-the-balance-michelangelo-the-heart",
+    "last_scraped_at": "2026-03-05 00:13:18 +0000"
+  },
+  {
+    "rank": 27,
+    "commander": "Valgavoth, Harrower of Souls",
+    "url": "https://edhrec.com/commanders/valgavoth-harrower-of-souls",
+    "last_scraped_at": "2026-03-05 00:28:22 +0000"
+  },
+  {
+    "rank": 28,
+    "commander": "Nekusar, the Mindrazer",
+    "url": "https://edhrec.com/commanders/nekusar-the-mindrazer",
+    "last_scraped_at": "2026-03-05 00:43:26 +0000"
+  },
+  {
+    "rank": 29,
+    "commander": "Giada, Font of Hope",
+    "url": "https://edhrec.com/commanders/giada-font-of-hope",
+    "last_scraped_at": "2026-03-05 00:58:30 +0000"
+  },
+  {
+    "rank": 30,
+    "commander": "Yuriko, the Tiger's Shadow",
+    "url": "https://edhrec.com/commanders/yuriko-the-tigers-shadow",
+    "last_scraped_at": "2026-03-05 01:13:35 +0000"
+  },
+  {
+    "rank": 31,
+    "commander": "Tidus, Yuna's Guardian",
+    "url": "https://edhrec.com/commanders/tidus-yunas-guardian",
+    "last_scraped_at": "2026-03-05 01:28:40 +0000"
+  },
+  {
+    "rank": 32,
+    "commander": "Bello, Bard of the Brambles",
+    "url": "https://edhrec.com/commanders/bello-bard-of-the-brambles",
+    "last_scraped_at": "2026-03-05 01:43:44 +0000"
+  },
+  {
+    "rank": 33,
+    "commander": "Jodah, the Unifier",
+    "url": "https://edhrec.com/commanders/jodah-the-unifier",
+    "last_scraped_at": "2026-03-05 01:58:48 +0000"
+  },
+  {
+    "rank": 34,
+    "commander": "Caesar, Legion's Emperor",
+    "url": "https://edhrec.com/commanders/caesar-legions-emperor",
+    "last_scraped_at": "2026-03-05 02:13:52 +0000"
+  },
+  {
+    "rank": 35,
+    "commander": "Betor, Ancestor's Voice",
+    "url": "https://edhrec.com/commanders/betor-ancestors-voice",
+    "last_scraped_at": "2026-03-05 02:28:56 +0000"
+  },
+  {
+    "rank": 36,
+    "commander": "Terra, Herald of Hope",
+    "url": "https://edhrec.com/commanders/terra-herald-of-hope",
+    "last_scraped_at": "2026-03-05 02:44:01 +0000"
+  },
+  {
+    "rank": 37,
+    "commander": "Ureni of the Unwritten",
+    "url": "https://edhrec.com/commanders/ureni-of-the-unwritten",
+    "last_scraped_at": "2026-03-05 02:59:05 +0000"
+  },
+  {
+    "rank": 38,
+    "commander": "Chatterfang, Squirrel General",
+    "url": "https://edhrec.com/commanders/chatterfang-squirrel-general",
+    "last_scraped_at": "2026-03-05 03:14:10 +0000"
+  },
+  {
+    "rank": 39,
+    "commander": "Jin Sakai, Ghost of Tsushima",
+    "url": "https://edhrec.com/commanders/jin-sakai-ghost-of-tsushima",
+    "last_scraped_at": "2026-03-05 03:29:14 +0000"
+  },
+  {
+    "rank": 40,
+    "commander": "Hakbal of the Surging Soul",
+    "url": "https://edhrec.com/commanders/hakbal-of-the-surging-soul",
+    "last_scraped_at": "2026-03-05 03:36:25 +0000"
+  },
+  {
+    "rank": 41,
+    "commander": "Miirym, Sentinel Wyrm",
+    "url": "https://edhrec.com/commanders/miirym-sentinel-wyrm",
+    "last_scraped_at": "2026-03-05 03:41:29 +0000"
+  },
+  {
+    "rank": 42,
+    "commander": "Baylen, the Haymaker",
+    "url": "https://edhrec.com/commanders/baylen-the-haymaker",
+    "last_scraped_at": "2026-03-05 03:46:33 +0000"
+  },
+  {
+    "rank": 43,
+    "commander": "Kinnan, Bonder Prodigy",
+    "url": "https://edhrec.com/commanders/kinnan-bonder-prodigy",
+    "last_scraped_at": "2026-03-05 03:51:37 +0000"
+  },
+  {
+    "rank": 44,
+    "commander": "Frodo, Adventurous Hobbit // Sam, Loyal Attendant",
+    "url": "https://edhrec.com/commanders/frodo-adventurous-hobbit-sam-loyal-attendant",
+    "last_scraped_at": "2026-03-05 03:56:42 +0000"
+  },
+  {
+    "rank": 45,
+    "commander": "Zurgo Stormrender",
+    "url": "https://edhrec.com/commanders/zurgo-stormrender",
+    "last_scraped_at": "2026-03-05 04:01:46 +0000"
+  },
+  {
+    "rank": 46,
+    "commander": "Avatar Aang",
+    "url": "https://edhrec.com/commanders/avatar-aang",
+    "last_scraped_at": "2026-03-05 04:06:50 +0000"
+  },
+  {
+    "rank": 47,
+    "commander": "Felothar the Steadfast",
+    "url": "https://edhrec.com/commanders/felothar-the-steadfast",
+    "last_scraped_at": "2026-03-05 04:11:54 +0000"
+  },
+  {
+    "rank": 48,
+    "commander": "Kenrith, the Returned King",
+    "url": "https://edhrec.com/commanders/kenrith-the-returned-king",
+    "last_scraped_at": "2026-03-05 04:16:58 +0000"
+  },
+  {
+    "rank": 49,
+    "commander": "Muldrotha, the Gravetide",
+    "url": "https://edhrec.com/commanders/muldrotha-the-gravetide",
+    "last_scraped_at": "2026-03-05 04:22:02 +0000"
+  },
+  {
+    "rank": 50,
+    "commander": "Ygra, Eater of All",
+    "url": "https://edhrec.com/commanders/ygra-eater-of-all",
+    "last_scraped_at": "2026-03-05 04:27:06 +0000"
+  },
+  {
+    "rank": 51,
+    "commander": "Kuja, Genome Sorcerer",
+    "url": "https://edhrec.com/commanders/kuja-genome-sorcerer",
+    "last_scraped_at": "2026-03-05 04:32:11 +0000"
+  },
+  {
+    "rank": 52,
+    "commander": "Norman Osborn",
+    "url": "https://edhrec.com/commanders/norman-osborn",
+    "last_scraped_at": "2026-03-05 04:37:15 +0000"
+  },
+  {
+    "rank": 53,
+    "commander": "Terra, Magical Adept",
+    "url": "https://edhrec.com/commanders/terra-magical-adept",
+    "last_scraped_at": "2026-03-05 04:42:19 +0000"
+  },
+  {
+    "rank": 54,
+    "commander": "Henzie \"Toolbox\" Torre",
+    "url": "https://edhrec.com/commanders/henzie-toolbox-torre",
+    "last_scraped_at": "2026-03-05 04:47:23 +0000"
+  },
+  {
+    "rank": 55,
+    "commander": "Sisay, Weatherlight Captain",
+    "url": "https://edhrec.com/commanders/sisay-weatherlight-captain",
+    "last_scraped_at": "2026-03-05 04:52:27 +0000"
+  },
+  {
+    "rank": 56,
+    "commander": "Ulalek, Fused Atrocity",
+    "url": "https://edhrec.com/commanders/ulalek-fused-atrocity",
+    "last_scraped_at": "2026-03-05 04:57:32 +0000"
+  },
+  {
+    "rank": 57,
+    "commander": "Kilo, Apogee Mind",
+    "url": "https://edhrec.com/commanders/kilo-apogee-mind",
+    "last_scraped_at": "2026-03-05 05:02:36 +0000"
+  },
+  {
+    "rank": 58,
+    "commander": "Meren of Clan Nel Toth",
+    "url": "https://edhrec.com/commanders/meren-of-clan-nel-toth",
+    "last_scraped_at": "2026-03-05 05:07:40 +0000"
+  },
+  {
+    "rank": 59,
+    "commander": "Mr. House, President and CEO",
+    "url": "https://edhrec.com/commanders/mr-house-president-and-ceo",
+    "last_scraped_at": "2026-03-05 05:12:45 +0000"
+  },
+  {
+    "rank": 60,
+    "commander": "Hashaton, Scarab's Fist",
+    "url": "https://edhrec.com/commanders/hashaton-scarabs-fist",
+    "last_scraped_at": "2026-03-05 05:17:49 +0000"
+  },
+  {
+    "rank": 61,
+    "commander": "Animar, Soul of Elements",
+    "url": "https://edhrec.com/commanders/animar-soul-of-elements",
+    "last_scraped_at": "2026-03-05 05:22:53 +0000"
+  },
+  {
+    "rank": 62,
+    "commander": "Wilhelt, the Rotcleaver",
+    "url": "https://edhrec.com/commanders/wilhelt-the-rotcleaver",
+    "last_scraped_at": "2026-03-05 05:27:57 +0000"
+  },
+  {
+    "rank": 63,
+    "commander": "Glarb, Calamity's Augur",
+    "url": "https://edhrec.com/commanders/glarb-calamitys-augur",
+    "last_scraped_at": "2026-03-05 05:33:01 +0000"
+  },
+  {
+    "rank": 64,
+    "commander": "Breya, Etherium Shaper",
+    "url": "https://edhrec.com/commanders/breya-etherium-shaper",
+    "last_scraped_at": "2026-03-05 05:38:06 +0000"
+  },
+  {
+    "rank": 65,
+    "commander": "Splinter, Radical Rat",
+    "url": "https://edhrec.com/commanders/splinter-radical-rat",
+    "last_scraped_at": "2026-03-05 05:43:10 +0000"
+  },
+  {
+    "rank": 66,
+    "commander": "Alela, Cunning Conqueror",
+    "url": "https://edhrec.com/commanders/alela-cunning-conqueror",
+    "last_scraped_at": "2026-03-05 05:48:14 +0000"
+  },
+  {
+    "rank": 67,
+    "commander": "Teysa Karlov",
+    "url": "https://edhrec.com/commanders/teysa-karlov",
+    "last_scraped_at": "2026-03-05 05:53:18 +0000"
+  },
+  {
+    "rank": 68,
+    "commander": "Oloro, Ageless Ascetic",
+    "url": "https://edhrec.com/commanders/oloro-ageless-ascetic",
+    "last_scraped_at": "2026-03-05 05:58:22 +0000"
+  },
+  {
+    "rank": 69,
+    "commander": "Esika, God of the Tree",
+    "url": "https://edhrec.com/commanders/esika-god-of-the-tree",
+    "last_scraped_at": "2026-03-05 06:03:27 +0000"
+  },
+  {
+    "rank": 70,
+    "commander": "Helga, Skittish Seer",
+    "url": "https://edhrec.com/commanders/helga-skittish-seer",
+    "last_scraped_at": "2026-03-05 14:12:16 +0000"
+  },
+  {
+    "rank": 71,
+    "commander": "Korvold, Fae-Cursed King",
+    "url": "https://edhrec.com/commanders/korvold-fae-cursed-king",
+    "last_scraped_at": "2026-03-05 14:17:20 +0000"
+  },
+  {
+    "rank": 72,
+    "commander": "Atreus, Impulsive Son // Kratos, Stoic Father",
+    "url": "https://edhrec.com/commanders/atreus-impulsive-son-kratos-stoic-father",
+    "last_scraped_at": "2026-03-05 14:22:25 +0000"
+  },
+  {
+    "rank": 73,
+    "commander": "Gishath, Sun's Avatar",
+    "url": "https://edhrec.com/commanders/gishath-suns-avatar",
+    "last_scraped_at": "2026-03-05 14:27:29 +0000"
+  },
+  {
+    "rank": 74,
+    "commander": "The Wandering Minstrel",
+    "url": "https://edhrec.com/commanders/the-wandering-minstrel",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 75,
+    "commander": "The Necrobloom",
+    "url": "https://edhrec.com/commanders/the-necrobloom",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 76,
+    "commander": "Rin and Seri, Inseparable",
+    "url": "https://edhrec.com/commanders/rin-and-seri-inseparable",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 77,
+    "commander": "Ragost, Deft Gastronaut",
+    "url": "https://edhrec.com/commanders/ragost-deft-gastronaut",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 78,
+    "commander": "Etali, Primal Conqueror",
+    "url": "https://edhrec.com/commanders/etali-primal-conqueror",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 79,
+    "commander": "Fire Lord Zuko",
+    "url": "https://edhrec.com/commanders/fire-lord-zuko",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 80,
+    "commander": "Urza, Lord High Artificer",
+    "url": "https://edhrec.com/commanders/urza-lord-high-artificer",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 81,
+    "commander": "Choco, Seeker of Paradise",
+    "url": "https://edhrec.com/commanders/choco-seeker-of-paradise",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 82,
+    "commander": "Voja, Jaws of the Conclave",
+    "url": "https://edhrec.com/commanders/voja-jaws-of-the-conclave",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 83,
+    "commander": "Aragorn, the Uniter",
+    "url": "https://edhrec.com/commanders/aragorn-the-uniter",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 84,
+    "commander": "Arabella, Abandoned Doll",
+    "url": "https://edhrec.com/commanders/arabella-abandoned-doll",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 85,
+    "commander": "Atla Palani, Nest Tender",
+    "url": "https://edhrec.com/commanders/atla-palani-nest-tender",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 86,
+    "commander": "Flubs, the Fool",
+    "url": "https://edhrec.com/commanders/flubs-the-fool",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 87,
+    "commander": "Zinnia, Valley's Voice",
+    "url": "https://edhrec.com/commanders/zinnia-valleys-voice",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 88,
+    "commander": "Shorikai, Genesis Engine",
+    "url": "https://edhrec.com/commanders/shorikai-genesis-engine",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 89,
+    "commander": "Kraum, Ludevic's Opus // Tymna the Weaver",
+    "url": "https://edhrec.com/commanders/kraum-ludevics-opus-tymna-the-weaver",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 90,
+    "commander": "K'rrik, Son of Yawgmoth",
+    "url": "https://edhrec.com/commanders/krrik-son-of-yawgmoth",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 91,
+    "commander": "Aloy, Savior of Meridian",
+    "url": "https://edhrec.com/commanders/aloy-savior-of-meridian",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 92,
+    "commander": "Marneus Calgar",
+    "url": "https://edhrec.com/commanders/marneus-calgar",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 93,
+    "commander": "Galadriel, Light of Valinor",
+    "url": "https://edhrec.com/commanders/galadriel-light-of-valinor",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 94,
+    "commander": "Xyris, the Writhing Storm",
+    "url": "https://edhrec.com/commanders/xyris-the-writhing-storm",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 95,
+    "commander": "Ghyrson Starn, Kelermorph",
+    "url": "https://edhrec.com/commanders/ghyrson-starn-kelermorph",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 96,
+    "commander": "Inspirit, Flagship Vessel",
+    "url": "https://edhrec.com/commanders/inspirit-flagship-vessel",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 97,
+    "commander": "Zhulodok, Void Gorger",
+    "url": "https://edhrec.com/commanders/zhulodok-void-gorger",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 98,
+    "commander": "Aesi, Tyrant of Gyre Strait",
+    "url": "https://edhrec.com/commanders/aesi-tyrant-of-gyre-strait",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 99,
+    "commander": "Tom Bombadil",
+    "url": "https://edhrec.com/commanders/tom-bombadil",
+    "last_scraped_at": null
+  },
+  {
+    "rank": 100,
+    "commander": "Magda, Brazen Outlaw",
+    "url": "https://edhrec.com/commanders/magda-brazen-outlaw",
+    "last_scraped_at": null
+  }
+]
