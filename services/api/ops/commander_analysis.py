@@ -40,6 +40,9 @@ class CommanderAnalysis(BaseModel):
     archetype_hint: str | None   # e.g. "elf tribal + elfball"
     generation_confidence: str   # "high" | "medium" | "low" | "none"
     boost_overrides: list[str]   # Boost keys active for this commander (e.g. ["mana_producers"])
+    # Partner fields — None when analyzing a solo commander
+    partner_name: str | None = None
+    partner_relationship: str | None = None  # "symbiotic" | "additive" | "color_access"
 
 
 # ── Internal rule representation ──────────────────────────────────────────────
@@ -614,4 +617,116 @@ def analyze_commander_oracle_text(
         archetype_hint=archetype_hint,
         generation_confidence=generation_confidence,
         boost_overrides=sorted(seen_boosts),
+    )
+
+
+# ── Partner pair analysis ──────────────────────────────────────────────────────
+
+def _detect_partner_relationship(
+    a: CommanderAnalysis,
+    b: CommanderAnalysis,
+    oracle_text_a: str,
+    oracle_text_b: str,
+) -> str:
+    """Classify the deckbuilding relationship between two partner commanders.
+
+    Rules (checked in order):
+    1. Symbiotic  — either oracle text contains "partner with [name]", meaning
+                    the two were specifically designed as a pair.
+    2. Color access — both have non-empty boost_override sets AND their
+                      intersection is empty; each partner pulls the deck in a
+                      completely different direction, so one is effectively just
+                      providing color identity.
+    3. Additive   — default; both are generic value/midrange engines whose
+                    signals complement rather than conflict.
+    """
+    # 1. Named-partner pairs are always symbiotic
+    if "partner with" in oracle_text_a.lower() or "partner with" in oracle_text_b.lower():
+        return "symbiotic"
+
+    # 2. Disjoint non-empty boost sets → one partner is a color-access passenger
+    boosts_a = set(a.boost_overrides)
+    boosts_b = set(b.boost_overrides)
+    if boosts_a and boosts_b and not (boosts_a & boosts_b):
+        return "color_access"
+
+    # 3. Default: additive value engines
+    return "additive"
+
+
+def combine_partner_analyses(
+    a: CommanderAnalysis,
+    b: CommanderAnalysis,
+    oracle_text_a: str,
+    oracle_text_b: str,
+) -> CommanderAnalysis:
+    """Merge two solo CommanderAnalysis objects into a single partner-pair analysis.
+
+    Signals and color identity are always unioned.  Which boost_overrides are
+    included depends on the detected relationship:
+
+    - symbiotic:     union of both boost sets — the engine requires both halves.
+    - additive:      union of both boost sets — each half contributes independently.
+    - color_access:  only the boost set of the partner with *more* boosts is used,
+                     since the other partner is not driving deckbuilding goals.
+
+    The archetype hint and generation confidence are re-derived from whichever
+    boost set is chosen.
+    """
+    relationship = _detect_partner_relationship(a, b, oracle_text_a, oracle_text_b)
+
+    # ── Union signals, deduplicating by label ─────────────────────────────────
+    seen_labels: set[str] = set()
+    merged_signals: list[SignalResult] = []
+    for sig in list(a.signals) + list(b.signals):
+        if sig.label not in seen_labels:
+            seen_labels.add(sig.label)
+            merged_signals.append(sig)
+
+    # ── Union gaps ────────────────────────────────────────────────────────────
+    merged_gaps: list[str] = list(dict.fromkeys(list(a.gaps) + list(b.gaps)))
+
+    # ── Union color identity ──────────────────────────────────────────────────
+    merged_ci: list[str] = list(dict.fromkeys(list(a.color_identity) + list(b.color_identity)))
+
+    # ── Choose boost set by relationship ──────────────────────────────────────
+    if relationship == "color_access":
+        # Use only the primary commander's boosts (argument `a`).  The caller
+        # is responsible for passing the "real" commander as the first argument;
+        # the second commander is the color-access passenger whose signals should
+        # not drive deck construction.
+        active_boosts = set(a.boost_overrides)
+    else:
+        # symbiotic / additive: union both
+        active_boosts = set(a.boost_overrides) | set(b.boost_overrides)
+
+    # ── Re-derive archetype hint from the active boost set ────────────────────
+    archetype_hint: str | None = None
+    for required_boosts, hint in _ARCHETYPE_HINTS:
+        if required_boosts.issubset(active_boosts):
+            archetype_hint = hint
+            break
+
+    # ── Re-derive generation confidence from merged signals ───────────────────
+    high_count = sum(1 for s in merged_signals if s.confidence == "high")
+    gap_count  = len(merged_gaps)
+    if high_count >= 3 and gap_count == 0:
+        generation_confidence = "high"
+    elif high_count >= 1 or (len(merged_signals) >= 2 and gap_count <= 1):
+        generation_confidence = "medium"
+    elif merged_signals:
+        generation_confidence = "low"
+    else:
+        generation_confidence = "none"
+
+    return CommanderAnalysis(
+        commander_name=f"{a.commander_name} + {b.commander_name}",
+        color_identity=merged_ci,
+        signals=merged_signals,
+        gaps=merged_gaps,
+        archetype_hint=archetype_hint,
+        generation_confidence=generation_confidence,
+        boost_overrides=sorted(active_boosts),
+        partner_name=b.commander_name,
+        partner_relationship=relationship,
     )

@@ -16,7 +16,12 @@ from sqlalchemy import text
 from db import get_db, AsyncSession
 from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
 from ops import deck_browser as browser_ops
-from ops.commander_analysis import analyze_commander_oracle_text, CommanderAnalysis, SignalResult
+from ops.commander_analysis import (
+    analyze_commander_oracle_text,
+    combine_partner_analyses,
+    CommanderAnalysis,
+    SignalResult,
+)
 
 log = logging.getLogger(__name__)
 
@@ -105,18 +110,25 @@ async def similar_cards(
 # ── Commander analysis ───────────────────────────────────────────────────────
 
 @app.get("/commanders/{oracle_id}/analyze", response_model=CommanderAnalysis)
-async def analyze_commander(oracle_id: UUID, db: AsyncSession = Depends(get_db)):
+async def analyze_commander(
+    oracle_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    partner_oracle_id: UUID | None = Query(None, description="Second commander oracle_id for partner pairs"),
+):
     """Parse a commander's oracle text and return structured deckbuilding signals.
 
     Returns detected signals (tribal, combat, counters, MTG rules terms, etc.),
     gaps the parser couldn't interpret, an archetype hint, and a generation
     confidence label.  Pure heuristics — no model inference involved.
+
+    Pass partner_oracle_id for partner-commander pairs; the response will include
+    merged signals, a partner_relationship classification (symbiotic / additive /
+    color_access), and boost_overrides appropriate for the pair as a unit.
     """
+    _CARD_COLS = "name, oracle_text, color_identity, keywords, type_line, cmc"
+
     result = await db.execute(
-        text("""
-            SELECT name, oracle_text, color_identity, keywords, type_line, cmc
-            FROM cards WHERE oracle_id = :oid
-        """),
+        text(f"SELECT {_CARD_COLS} FROM cards WHERE oracle_id = :oid"),
         {"oid": str(oracle_id)},
     )
     row = result.fetchone()
@@ -124,13 +136,40 @@ async def analyze_commander(oracle_id: UUID, db: AsyncSession = Depends(get_db))
         raise HTTPException(404, "Card not found")
 
     name, oracle_text, color_identity, keywords, type_line, cmc = row
-    return analyze_commander_oracle_text(
+    analysis = analyze_commander_oracle_text(
         oracle_text=oracle_text or "",
         commander_name=name,
         color_identity=list(color_identity or []),
         keywords=list(keywords or []),
         type_line=type_line or "",
         cmc=float(cmc) if cmc is not None else None,
+    )
+
+    if partner_oracle_id is None:
+        return analysis
+
+    # ── Partner pair: fetch second commander and merge ─────────────────────────
+    p_result = await db.execute(
+        text(f"SELECT {_CARD_COLS} FROM cards WHERE oracle_id = :oid"),
+        {"oid": str(partner_oracle_id)},
+    )
+    p_row = p_result.fetchone()
+    if not p_row:
+        raise HTTPException(404, f"Partner card not found: {partner_oracle_id}")
+
+    p_name, p_oracle_text, p_color_identity, p_keywords, p_type_line, p_cmc = p_row
+    partner_analysis = analyze_commander_oracle_text(
+        oracle_text=p_oracle_text or "",
+        commander_name=p_name,
+        color_identity=list(p_color_identity or []),
+        keywords=list(p_keywords or []),
+        type_line=p_type_line or "",
+        cmc=float(p_cmc) if p_cmc is not None else None,
+    )
+
+    return combine_partner_analyses(
+        analysis, partner_analysis,
+        oracle_text or "", p_oracle_text or "",
     )
 
 
