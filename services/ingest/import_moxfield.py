@@ -316,7 +316,9 @@ async def import_file(
     result = await conn.execute("""
         INSERT INTO decks (commander_id, source, source_url, card_ids, metadata)
         VALUES ($1::uuid, $2, $3, $4::uuid[], $5::jsonb)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (commander_id, (metadata->>'file'))
+            WHERE metadata->>'file' IS NOT NULL
+        DO NOTHING
     """,
         cmd_id,
         "moxfield",
