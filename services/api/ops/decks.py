@@ -630,7 +630,7 @@ async def generate(
                 AND (s.card_a = c.id OR s.card_b = c.id)
                 AND s.score_type = 'ability_trigger'
             WHERE c.id != :cid
-              AND c.color_identity <@ :ci::text[]
+              AND c.color_identity <@ CAST(:ci AS text[])
               AND c.legalities->>'commander' = 'legal'
             ORDER BY c.oracle_id, score DESC
             LIMIT 99
