@@ -92,7 +92,7 @@ async def get_card(oracle_id: UUID, db: AsyncSession = Depends(get_db)):
 async def similar_cards(
     oracle_id: UUID,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
-    model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    model: str = "sentence-transformers/all-mpnet-base-v2",
     db: AsyncSession = Depends(get_db),
 ):
     """Vector nearest-neighbour search for semantically similar cards."""
