@@ -82,7 +82,6 @@ services:
       # MTGJSON is used as primary; Scryfall only as fallback
       SCRYFALL_BULK_TYPE: ${SCRYFALL_BULK_TYPE:-oracle_cards}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
-      EDHREC_CACHE_DIR: /data/edhrec
       BATCH_SIZE: ${INGEST_BATCH_SIZE:-256}
     volumes:
       - ./services/ingest:/app:cached

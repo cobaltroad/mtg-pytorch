@@ -7,13 +7,17 @@ Look up the MTG card "$ARGUMENTS" in the MTGJSON AtomicCards cache by running th
 
 ```bash
 docker compose run --rm --no-deps ingest python3 -c "
-import json, sys
-path = '/data/mtgjson_AtomicCards.json'
-try:
-    data = json.load(open(path))['data']
-except FileNotFoundError:
+import json, sys, subprocess
+
+result = subprocess.run(['find', '/data', '-name', 'mtgjson_AtomicCards.json'],
+                       capture_output=True, text=True)
+candidates = [p for p in result.stdout.strip().split('\n') if p]
+if not candidates:
     print('AtomicCards cache not found — run: docker compose run --rm ingest')
     sys.exit(1)
+path = candidates[0]
+
+data = json.load(open(path))['data']
 
 query = '$ARGUMENTS'.lower()
 matches = [k for k in data if k.lower() == query]
@@ -34,13 +38,13 @@ if face.get(\"power\"):
     print(f'P/T       : {face[\"power\"]}/{face[\"toughness\"]}')
 if face.get(\"loyalty\"):
     print(f'Loyalty   : {face[\"loyalty\"]}')
-kw = face.get(\"keywords\", [])
+kw = face.get('keywords', [])
 if kw:
     print(f'Keywords  : {\", \".join(kw)}')
-legal = face.get(\"legalities\", {}).get(\"commander\", \"unknown\")
+legal = face.get('legalities', {}).get('commander', 'unknown')
 print(f'Commander : {legal}')
 print()
-print(face.get(\"text\") or \"(no oracle text)\")
+print(face.get('text') or '(no oracle text)')
 "
 ```
 

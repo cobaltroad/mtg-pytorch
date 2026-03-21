@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
-CACHE_DIR = Path(os.environ.get("EDHREC_CACHE_DIR", "/data"))
+CACHE_DIR = Path(os.environ.get("MTGJSON_CACHE_DIR", "/data"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "256"))
 
 # MTGJSON — primary, no rate limits

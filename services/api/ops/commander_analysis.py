@@ -116,6 +116,19 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
         "keyword", "populate (copy a token) / token wide",
         "high", "tokens",
     ),
+    # Combat keywords
+    "raid": _RulesTerm(
+        "keyword", "raid (reward for attacking this turn)",
+        "high", "attack_triggers",
+    ),
+    "if you attacked this turn": _RulesTerm(
+        "keyword", "raid condition (reward for attacking this turn)",
+        "high", "attack_triggers",
+    ),
+    "exert": _RulesTerm(
+        "keyword", "exert (attack-matters mechanic)",
+        "high", "attack_triggers",
+    ),
     # Ramp / Eldrazi
     "annihilator": _RulesTerm(
         "keyword", "annihilator (Eldrazi aggro / ramp)",
@@ -141,6 +154,10 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
     ),
     "you may play that card": _RulesTerm(
         "mechanic", "play exiled card matters",
+        "high", "play_from_exile",
+    ),
+    "without paying its mana cost": _RulesTerm(
+        "mechanic", "free cast (cast without paying mana cost)",
         "high", "play_from_exile",
     ),
     # Food / artifact tokens
@@ -171,6 +188,12 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
     "with power 2 or less": _RulesTerm(
         "mechanic", "weenie / small-creature matters (power 2 or less)",
         "high", "weenie",
+    ),
+    # Small-creature reanimation target (Terra-style: up to power 3).
+    # Distinct from weenie — the threshold is higher and it's a reanimation constraint.
+    "with power 3 or less": _RulesTerm(
+        "mechanic", "small-creature target (power 3 or less)",
+        "high", "small_creatures",
     ),
     # Artifact matters (any artifact — Clues, Treasures, Food, etc.)
     # Broader than artifact_creatures; fires when non-creature artifacts are
@@ -370,14 +393,14 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
     # Generic ETB matters — commander rewards permanents/artifacts/creatures entering.
     # (distinct from etb_triggers; this is for commanders with their own ETB payoffs).
     _PatternSignal("mechanic", "ETB matters (permanents entering payoff)", "high", "etb_matters",
-                   re.compile(r"whenever (a|an|another|one or more) (artifact|creature|permanent)(s)? (you control )?(enters|enter)\b", re.I)),
+                   re.compile(r"whenever (a|an|another|one or more) (other )?(artifact|creature|permanent)(s)? (you control )?(enters|enter)\b", re.I)),
     # Equipment / voltron — search for an Equipment card, or ability cares about
     # being equipped (Cloud, Syr Gwyn, etc.).
     _PatternSignal("mechanic", "Equipment tutor / voltron", "high", "voltron",
                    re.compile(r"search.{0,40}equipment card", re.I)),
     _PatternSignal("mechanic", "equipped matters", "high", "voltron",
                    re.compile(r"as long as .{0,30}is equipped", re.I)),
-    _PatternSignal("combat", "attack-oriented trigger", "high", None,
+    _PatternSignal("combat", "attack-oriented trigger", "high", "attack_triggers",
                    re.compile(r"\bwhenever\b.{0,60}\battack(s|ed|ing)?\b", re.I)),
     _PatternSignal("combat", "combat damage trigger", "high", None,
                    re.compile(r"\bdeal(s)? combat damage\b", re.I)),
@@ -450,7 +473,7 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
 
     # ── Graveyard ─────────────────────────────────────────────────────────────
     _PatternSignal("graveyard", "return from graveyard to battlefield", "high", "graveyard",
-                   re.compile(r"return .{0,40} from (your |a |the )?graveyard to (the )?battlefield", re.I)),
+                   re.compile(r"return .{0,100} from (your |a |the )?graveyard to (the )?battlefield", re.I)),
     # Two word-orderings: "from your graveyard … cast" (most cards) and
     # "cast … from your graveyard" (Muldrotha-style).  Both emit graveyard + self_mill
     # because any deck that casts from the graveyard needs to fill it first.
@@ -460,8 +483,16 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
                    re.compile(r"cast.{0,60}from (your |a )?graveyard", re.I)),
     _PatternSignal("graveyard", "self-mill enabler (graveyard as resource)", "high", "self_mill",
                    re.compile(r"(from (your |a )?graveyard.{0,30}cast|cast.{0,60}from (your |a )?graveyard)", re.I)),
+    # Self-mill without cast-from-graveyard (Terra, mill-to-reanimate commanders).
+    # "mill N" with no target = the controller mills themselves.
+    _PatternSignal("graveyard", "self-mill (mills own library as graveyard fuel)", "high", "self_mill",
+                   re.compile(r"\bmill(s)? \w+( card(s)?)?\b(?!.{0,30}(opponent|player|target))", re.I)),
     _PatternSignal("graveyard", "flashback / unearth", "medium", "graveyard",
                    re.compile(r"\bflashback\b|\bunearth\b", re.I)),
+    # Self-discard (looting) — discarding cards to fill the graveyard as a resource.
+    # Celes, Faithless Looting, etc.: "discard … then draw" or "discard any number of cards".
+    _PatternSignal("graveyard", "self-discard / looting (fills graveyard as resource)", "high", "self_discard",
+                   re.compile(r"discard (any number of|\d+) (card(s)?).{0,40}draw", re.I)),
 
     # ── Lifegain ──────────────────────────────────────────────────────────────
     _PatternSignal("lifegain", "gain life effect", "medium", "lifegain",
@@ -491,6 +522,7 @@ _LOW_MV_LABEL = "low mana-value commander (CMC ≤ 2) — commander-value cards 
 _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     # ── Legendary matters pairings ────────────────────────────────────────────
     ({"legendary_matters", "etb_triggers", "ltb_triggers"}, "legendary/artifact ETB+LTB trigger doubling (Gandalf-style)"),
+    ({"legendary_matters", "play_from_exile"},      "legendary cascade (casting legendaries chains into more legendaries for free)"),
     ({"legendary_matters", "etb_triggers"},        "legendary matters + ETB trigger doubling"),
     ({"legendary_matters", "ltb_triggers"},        "legendary matters + LTB trigger doubling"),
     ({"legendary_matters", "extra_triggers"},      "legendary matters + trigger doubling"),
@@ -509,6 +541,8 @@ _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     ({"extra_triggers", "tribal"},                 "tribal trigger doubling (abilities of that creature type fire twice)"),
     ({"etb_triggers", "extra_triggers"},           "ETB trigger doubling (entering triggers fire twice)"),
     ({"etb_matters", "extra_triggers"},            "ETB matters + extra triggers"),
+    ({"attack_triggers", "graveyard"},             "attack-to-reanimate (attacking fuels or unlocks graveyard recursion — Alesha-style)"),
+    ({"etb_matters", "graveyard"},                 "graveyard ETB matters (creatures entering from graveyard is the payoff)"),
     ({"etb_matters"},                              "ETB matters / value creatures"),
     ({"combat_damage_triggers", "extra_triggers"}, "combat damage trigger doubling (Felix-style: damage triggers fire twice)"),
     ({"attack_triggers", "extra_triggers"},        "attack trigger doubling (Isshin-style: attack triggers fire twice)"),
@@ -541,6 +575,13 @@ _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     ({"spellslinger"},                          "spellslinger / storm"),
     ({"counters", "proliferate"},               "proliferate / counter matters"),
     ({"counters"},                              "counters matters"),
+    ({"self_discard", "graveyard"},            "looting reanimator (discard to fill graveyard, then recur — Celes-style)"),
+    ({"self_discard", "self_mill"},            "looting + self-mill (multiple graveyard-fill vectors)"),
+    ({"self_discard"},                         "looting / self-discard (graveyard as resource)"),
+    ({"self_mill", "small_creatures"},         "self-mill reanimator (mill into small-creature recursion — Terra-style)"),
+    ({"graveyard", "small_creatures"},         "small-creature reanimator (graveyard recursion of low-power creatures)"),
+    ({"self_mill", "graveyard"},               "self-mill reanimator (mill own library to fuel graveyard recursion)"),
+    ({"self_mill", "weenie"},                  "self-mill + weenie reanimator (mill into power-2-or-less recursion)"),
     ({"self_mill"},                             "self-mill matters (fill graveyard as a resource)"),
     ({"graveyard"},                             "reanimator / graveyard"),
     ({"lifegain"},                              "lifegain payoff"),
