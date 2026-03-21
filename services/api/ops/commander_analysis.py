@@ -340,6 +340,13 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
                    re.compile(r"(leaving the battlefield|dying).{0,30}causes a triggered ability", re.I)),
     _PatternSignal("mechanic", "LTB trigger doubling (extra triggers context)", "high", "extra_triggers",
                    re.compile(r"(leaving the battlefield|dying).{0,30}causes a triggered ability", re.I)),
+    # Punisher / drain — small pings to each/target opponent that stack when
+    # many sources are in play (Syr Konrad, Blood Artist, Zulaport Cutthroat, etc.).
+    # "(deals|loses) 1 (damage|life)" near "(target|each) (opponent|player)".
+    _PatternSignal("mechanic", "punisher / drain (pings each opponent, stacks with similar effects)", "high", "punisher",
+                   re.compile(r"(deal(s)? \d+ damage|lose(s)? \d+ life).{0,30}(target|each) (opponent|player)", re.I)),
+    _PatternSignal("mechanic", "punisher / drain (reversed phrasing)", "high", "punisher",
+                   re.compile(r"(target|each) (opponent|player).{0,30}(lose(s)? \d+ life|deal(s)? \d+ damage)", re.I)),
     # General LTB / death payoff trigger — "whenever … dies/dying" or the rules-text
     # equivalent "put into a graveyard from the battlefield" are the same event.
     _PatternSignal("mechanic", "LTB / death payoff trigger", "high", "ltb_triggers",
@@ -436,8 +443,15 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
     # ── Graveyard ─────────────────────────────────────────────────────────────
     _PatternSignal("graveyard", "return from graveyard to battlefield", "high", "graveyard",
                    re.compile(r"return .{0,40} from (your |a |the )?graveyard to (the )?battlefield", re.I)),
+    # Two word-orderings: "from your graveyard … cast" (most cards) and
+    # "cast … from your graveyard" (Muldrotha-style).  Both emit graveyard + self_mill
+    # because any deck that casts from the graveyard needs to fill it first.
     _PatternSignal("graveyard", "cast from graveyard", "high", "graveyard",
                    re.compile(r"from (your |a )?graveyard.{0,30}cast", re.I)),
+    _PatternSignal("graveyard", "cast from graveyard (reversed phrasing)", "high", "graveyard",
+                   re.compile(r"cast.{0,60}from (your |a )?graveyard", re.I)),
+    _PatternSignal("graveyard", "self-mill enabler (graveyard as resource)", "high", "self_mill",
+                   re.compile(r"(from (your |a )?graveyard.{0,30}cast|cast.{0,60}from (your |a )?graveyard)", re.I)),
     _PatternSignal("graveyard", "flashback / unearth", "medium", "graveyard",
                    re.compile(r"\bflashback\b|\bunearth\b", re.I)),
 
@@ -473,6 +487,7 @@ _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     ({"legendary_matters", "ltb_triggers"},        "legendary matters + LTB trigger doubling"),
     ({"legendary_matters", "extra_triggers"},      "legendary matters + trigger doubling"),
     ({"legendary_matters", "tribal"},              "legendary tribal matters"),
+    ({"punisher", "ltb_triggers", "aristocrats"},  "aristocrats + punisher drain (each death pings opponents — Syr Konrad-style)"),
     ({"ltb_triggers", "aristocrats"},              "aristocrats (creature deaths are the primary payoff engine)"),
     ({"ltb_triggers", "tribal"},                   "tribal LTB matters (deaths/exits of that creature type are the payoff)"),
     ({"artifact_matters", "etb_matters"},           "artifact ETB matters (artifacts entering is the payoff)"),
@@ -506,6 +521,9 @@ _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     ({"commander_value"},                       "low-MV commander — free-cast / commander-value staples"),
     ({"mana_producers", "counters"},            "elfball / mana-dork matters + counters"),
     ({"mana_producers"},                        "elfball / mana-dork matters"),
+    ({"punisher", "aristocrats"},               "punisher + aristocrats (death drain stacks with ping effects)"),
+    ({"punisher", "ltb_triggers"},             "punisher + LTB matters (each death/exit pings opponents)"),
+    ({"punisher"},                             "punisher / drain (repeated small damage/life-loss to opponents)"),
     ({"aristocrats", "tokens"},                 "aristocrats + token sacrifice"),
     ({"aristocrats"},                           "aristocrats"),
     ({"tokens", "go_wide"},                     "go-wide token swarm"),
@@ -516,6 +534,7 @@ _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
     ({"spellslinger"},                          "spellslinger / storm"),
     ({"counters", "proliferate"},               "proliferate / counter matters"),
     ({"counters"},                              "counters matters"),
+    ({"self_mill"},                             "self-mill matters (fill graveyard as a resource)"),
     ({"graveyard"},                             "reanimator / graveyard"),
     ({"lifegain"},                              "lifegain payoff"),
     ({"infect"},                                "infect (poison counters)"),
