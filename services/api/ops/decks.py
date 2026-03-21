@@ -246,7 +246,10 @@ async def generate(
                             len(context_ids), commander_id,
                         )
 
-                all_ids = list(embeddings.keys())
+                legal_ids = await loop.run_in_executor(
+                    None, inference.get_legal_ids, db_url
+                )
+                all_ids = [cid for cid in embeddings if cid in legal_ids]
 
                 # Load color identities (lazy, cached) and filter to legal pool
                 color_identities = await loop.run_in_executor(

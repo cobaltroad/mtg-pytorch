@@ -35,6 +35,7 @@ _type_line_cache: dict[str, dict[str, str]] = {}            # keyed by db_url
 _cmc_cache: dict[str, dict[str, float]] = {}                # keyed by db_url
 _ramp_cache: dict[str, tuple[frozenset, dict]] = {}         # keyed by db_url
 _land_staple_cache: dict[str, dict[str, str]] = {}          # keyed by db_url
+_legal_ids_cache: dict[str, frozenset[str]] = {}            # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
 
 
@@ -143,6 +144,25 @@ def get_embeddings(
 
 
 # ── Color identity ────────────────────────────────────────────────────────────
+
+def get_legal_ids(db_url: str) -> frozenset[str]:
+    """Return the set of card IDs that are legal in Commander. Cached."""
+    if db_url in _legal_ids_cache:
+        return _legal_ids_cache[db_url]
+
+    log.info("Loading commander-legal card IDs from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id::text FROM cards WHERE legalities->>'commander' = 'legal'"
+            )
+            rows = cur.fetchall()
+
+    result: frozenset[str] = frozenset(r[0] for r in rows)
+    log.info("Loaded %d commander-legal card IDs", len(result))
+    _legal_ids_cache[db_url] = result
+    return result
+
 
 def get_color_identities(db_url: str) -> dict[str, frozenset]:
     """Return {card_id: frozenset of color letters} for all cards. Cached."""
