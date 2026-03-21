@@ -355,11 +355,14 @@ def test_mana_ability_in_rules_terms():
 
 class TestTypeLineTribalDetection:
     """Verify that the commander's own creature subtypes (type_line) contribute
-    tribal signals even when the oracle text does not mention the tribe."""
+    tribal signals only when the tribe is also referenced in oracle text or keywords.
+    Type-line tribal without any oracle-text mention is suppressed to avoid false
+    positives (e.g. Isshin is a Samurai but is not a Samurai-tribal commander)."""
 
-    def test_elf_from_type_line_only(self):
-        """A commander that IS an Elf (type_line) but has minimal oracle text
-        should still receive the Elf tribal signal and boost."""
+    def test_elf_from_type_line_only_suppressed(self):
+        """A commander that IS an Elf (type_line) but whose oracle text contains no
+        tribal reference should NOT receive an Elf tribal signal — the type line alone
+        is not sufficient evidence of a tribal deckbuilding strategy."""
         analysis = analyze_commander_oracle_text(
             oracle_text="Vigilance",   # oracle text has no tribal reference
             commander_name="Vanilla Elf Legend",
@@ -367,16 +370,31 @@ class TestTypeLineTribalDetection:
             type_line="Legendary Creature — Elf Warrior",
         )
         labels = _labels(analysis)
-        assert any("Elf" in lbl for lbl in labels), (
-            f"Elf tribal signal not detected from type_line: {labels}"
+        assert not any("Elf" in lbl for lbl in labels), (
+            f"Elf tribal should be suppressed when oracle text has no tribal reference: {labels}"
         )
-        assert "tribal" in _boosts(analysis), (
-            f"tribal boost not applied from type_line, boosts={_boosts(analysis)}"
+        assert "tribal" not in _boosts(analysis), (
+            f"tribal boost should not apply when tribe absent from oracle text, boosts={_boosts(analysis)}"
         )
 
-    def test_wolf_elf_from_type_line(self):
-        """Voja-style commander: Wolf Elf in type_line → at least the Elf tribal signal
-        fires (Wolf is not in _PATTERN_SIGNALS so it is not separately flagged)."""
+    def test_elf_from_type_line_with_oracle_mention(self):
+        """When the tribe IS mentioned in oracle text the type-line path (3b) fires
+        and emits the tribal signal (same result as the oracle-text scan in step 3)."""
+        analysis = analyze_commander_oracle_text(
+            oracle_text="Other Elves you control get +1/+1.",
+            commander_name="Elf Lord",
+            color_identity=["G"],
+            type_line="Legendary Creature — Elf Warrior",
+        )
+        labels = _labels(analysis)
+        assert any("Elf" in lbl for lbl in labels), (
+            f"Elf tribal signal expected when oracle text mentions Elves: {labels}"
+        )
+        assert "tribal" in _boosts(analysis)
+
+    def test_wolf_elf_from_type_line_suppressed_without_oracle(self):
+        """A Wolf Elf commander with oracle text that never mentions wolves or elves
+        should not receive tribal — the type line is not enough on its own."""
         analysis = analyze_commander_oracle_text(
             oracle_text="Trample",
             commander_name="Test Wolf-Elf",
@@ -384,10 +402,10 @@ class TestTypeLineTribalDetection:
             type_line="Legendary Creature — Wolf Elf",
         )
         labels = _labels(analysis)
-        assert any("Elf" in lbl for lbl in labels), (
-            f"No Elf signal found from Wolf Elf type_line: {labels}"
+        assert not any("Elf" in lbl for lbl in labels), (
+            f"Elf tribal should be suppressed when oracle text has no tribal reference: {labels}"
         )
-        assert "tribal" in _boosts(analysis)
+        assert "tribal" not in _boosts(analysis)
 
     def test_planeswalker_type_line_not_boosted(self):
         """A planeswalker type-line ('Legendary Planeswalker — Tyvar') must NOT

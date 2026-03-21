@@ -152,6 +152,41 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
         "mechanic", "Clue tokens (draw / investigate matters)",
         "high", "clues",
     ),
+    # Legendary matters (Gandalf the White, Sisay, Jodah, etc.)
+    # Triggered by oracle text that references casting or caring about legendary spells/permanents.
+    "legendary spell": _RulesTerm(
+        "mechanic", "legendary matters (cast/reward legendary spells)",
+        "high", "legendary_matters",
+    ),
+    "legendary permanent": _RulesTerm(
+        "mechanic", "legendary matters (legendary permanent payoff)",
+        "high", "legendary_matters",
+    ),
+    # Weenie / small-creature matters (Delney, Streetwise Lookout; Isamaru, etc.)
+    # "power 2 or less" is the canonical MTG phrasing for weenie-matters effects.
+    "with power 2 or less": _RulesTerm(
+        "mechanic", "weenie / small-creature matters (power 2 or less)",
+        "high", "weenie",
+    ),
+    # Artifact matters (any artifact — Clues, Treasures, Food, etc.)
+    # Broader than artifact_creatures; fires when non-creature artifacts are
+    # explicitly part of the payoff (Agent of the Iron Throne, Breya, etc.).
+    "artifact or creature": _RulesTerm(
+        "mechanic", "artifacts matter (any artifact, not just artifact creatures)",
+        "high", "artifact_matters",
+    ),
+    # Artifact creatures matter (Nick Valentine, Breya, Daretti, etc.)
+    # More specific than generic "artifact card" — the strategy revolves around
+    # artifact creatures specifically (e.g. dying, entering, being sacrificed).
+    "artifact creature": _RulesTerm(
+        "mechanic", "artifact creatures matter",
+        "high", "artifact_creatures",
+    ),
+    # Equipment / voltron
+    "equip": _RulesTerm(
+        "keyword", "equip — voltron / Equipment strategy",
+        "high", "voltron",
+    ),
     # Deathtouch payoff (e.g. Fynn)
     "deathtouch": _RulesTerm(
         "keyword", "deathtouch — wants other deathtouch creatures",
@@ -267,10 +302,66 @@ _PATTERN_SIGNALS: list[_PatternSignal] = [
                    re.compile(r"\brogue(s)?\b", re.I)),
     _PatternSignal("tribal", "Tribal: Dinosaur", "high", "tribal",
                    re.compile(r"\bdinosaur(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Ninja", "high", "tribal",
+                   re.compile(r"\bninja(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Rat", "high", "tribal",
+                   re.compile(r"\brat(s)?\b", re.I)),
+    _PatternSignal("tribal", "Tribal: Insect", "high", "tribal",
+                   re.compile(r"\binsect(s)?\b", re.I)),
     _PatternSignal("tribal", "Tribal: Changeling (all types)", "high", "tribal",
                    re.compile(r"\bchangeling\b", re.I)),
 
     # ── Combat ────────────────────────────────────────────────────────────────
+    # Extra-trigger doublers — any card that makes abilities fire an additional time
+    # (Isshin, Teysa Karlov, Cloud, Panharmonicon-style effects on commanders, etc.).
+    _PatternSignal("mechanic", "triggers an additional time", "high", "extra_triggers",
+                   re.compile(r"triggers? an additional time", re.I)),
+    # Attack-trigger doublers (Isshin, Two Heavens as One) — narrower: only when the
+    # "additional time" condition is specifically caused by a creature attacking.
+    _PatternSignal("combat", "attack trigger doubling", "high", "attack_triggers",
+                   re.compile(r"attacking causes a triggered ability", re.I)),
+    # Combat-damage-trigger doublers (Felix Five-Boots) — narrower: only when the
+    # "additional time" condition is specifically caused by dealing combat damage to a player.
+    _PatternSignal("combat", "combat damage trigger doubling", "high", "combat_damage_triggers",
+                   re.compile(r"dealing combat damage to a player causes a triggered ability", re.I)),
+    # ETB-trigger doublers (Naban, Dean of Iteration; Gandalf the White, etc.)
+    # Pattern is flexible enough to match "entering or leaving ... causes" (Gandalf)
+    # as well as the plain "entering causes" form (Naban).
+    # Emits two boosts: etb_triggers (the doubling mechanic) and etb_matters
+    # (what is entering matters — e.g. Wizard ETBs, artifact ETBs, etc.).
+    _PatternSignal("mechanic", "ETB trigger doubling", "high", "etb_triggers",
+                   re.compile(r"\bentering\b.{0,60}causes a triggered ability", re.I)),
+    _PatternSignal("mechanic", "ETB matters (entering context)", "high", "etb_matters",
+                   re.compile(r"\bentering\b.{0,60}causes a triggered ability", re.I)),
+    # LTB-trigger doublers (Teysa Karlov, Gandalf the White) — leaving the battlefield
+    # or dying causes a triggered ability to trigger an additional time.
+    # Emits two boosts: ltb_triggers (the LTB doubling) and extra_triggers (general).
+    _PatternSignal("mechanic", "LTB trigger doubling", "high", "ltb_triggers",
+                   re.compile(r"(leaving the battlefield|dying).{0,30}causes a triggered ability", re.I)),
+    _PatternSignal("mechanic", "LTB trigger doubling (extra triggers context)", "high", "extra_triggers",
+                   re.compile(r"(leaving the battlefield|dying).{0,30}causes a triggered ability", re.I)),
+    # General LTB / death payoff trigger — "whenever … dies/dying" or the rules-text
+    # equivalent "put into a graveyard from the battlefield" are the same event.
+    _PatternSignal("mechanic", "LTB / death payoff trigger", "high", "ltb_triggers",
+                   re.compile(r"whenever\b.{0,60}(dies|dying|put into a graveyard from the battlefield)\b", re.I)),
+    # Artifact matters — any artifact going to graveyard is the payoff
+    # (Ich-Tekik, Daretti, etc.). Broader than artifact_creatures.
+    _PatternSignal("mechanic", "artifacts matter (artifact LTB payoff)", "high", "artifact_matters",
+                   re.compile(r"whenever\b.{0,30}\bartifact\b.{0,40}(dies|put into a graveyard)", re.I)),
+    # Artifact matters — any artifact entering is the payoff
+    # (Mm'menon, Uthros Exile; Breya; Daretti, etc.).
+    _PatternSignal("mechanic", "artifacts matter (artifact ETB payoff)", "high", "artifact_matters",
+                   re.compile(r"whenever\b.{0,30}\bartifact\b.{0,40}enters", re.I)),
+    # Generic ETB matters — commander rewards permanents/artifacts/creatures entering.
+    # (distinct from etb_triggers; this is for commanders with their own ETB payoffs).
+    _PatternSignal("mechanic", "ETB matters (permanents entering payoff)", "high", "etb_matters",
+                   re.compile(r"whenever (a|an|another|one or more) (artifact|creature|permanent)(s)? (you control )?(enters|enter)\b", re.I)),
+    # Equipment / voltron — search for an Equipment card, or ability cares about
+    # being equipped (Cloud, Syr Gwyn, etc.).
+    _PatternSignal("mechanic", "Equipment tutor / voltron", "high", "voltron",
+                   re.compile(r"search.{0,40}equipment card", re.I)),
+    _PatternSignal("mechanic", "equipped matters", "high", "voltron",
+                   re.compile(r"as long as .{0,30}is equipped", re.I)),
     _PatternSignal("combat", "attack-oriented trigger", "high", None,
                    re.compile(r"\bwhenever\b.{0,60}\battack(s|ed|ing)?\b", re.I)),
     _PatternSignal("combat", "combat damage trigger", "high", None,
@@ -376,6 +467,32 @@ _LOW_MV_LABEL = "low mana-value commander (CMC ≤ 2) — commander-value cards 
 # Checked in order; first match wins.  More specific combos go first.
 
 _ARCHETYPE_HINTS: list[tuple[set[str], str]] = [
+    # ── Legendary matters pairings ────────────────────────────────────────────
+    ({"legendary_matters", "etb_triggers", "ltb_triggers"}, "legendary/artifact ETB+LTB trigger doubling (Gandalf-style)"),
+    ({"legendary_matters", "etb_triggers"},        "legendary matters + ETB trigger doubling"),
+    ({"legendary_matters", "ltb_triggers"},        "legendary matters + LTB trigger doubling"),
+    ({"legendary_matters", "extra_triggers"},      "legendary matters + trigger doubling"),
+    ({"legendary_matters", "tribal"},              "legendary tribal matters"),
+    ({"ltb_triggers", "aristocrats"},              "aristocrats (creature deaths are the primary payoff engine)"),
+    ({"ltb_triggers", "tribal"},                   "tribal LTB matters (deaths/exits of that creature type are the payoff)"),
+    ({"artifact_matters", "etb_matters"},           "artifact ETB matters (artifacts entering is the payoff)"),
+    ({"ltb_triggers", "artifact_matters"},         "artifact LTB matters (any artifact dying/leaving is the payoff)"),
+    ({"ltb_triggers", "artifact_creatures"},       "artifact creature death matters (dying artifacts are the engine)"),
+    ({"legendary_matters"},                        "legendary matters"),
+    # ── ETB / LTB trigger pairings ────────────────────────────────────────────
+    ({"etb_triggers", "ltb_triggers"},             "ETB + LTB trigger doubling (entering and leaving both fire twice)"),
+    ({"ltb_triggers", "extra_triggers"},           "LTB trigger doubling (leaving-the-battlefield triggers fire twice)"),
+    ({"etb_matters", "tribal"},                    "tribal ETB matters (specific creature type entering is the payoff)"),
+    ({"extra_triggers", "tribal"},                 "tribal trigger doubling (abilities of that creature type fire twice)"),
+    ({"etb_triggers", "extra_triggers"},           "ETB trigger doubling (entering triggers fire twice)"),
+    ({"etb_matters", "extra_triggers"},            "ETB matters + extra triggers"),
+    ({"etb_matters"},                              "ETB matters / value creatures"),
+    ({"combat_damage_triggers", "extra_triggers"}, "combat damage trigger doubling (Felix-style: damage triggers fire twice)"),
+    ({"attack_triggers", "extra_triggers"},        "attack trigger doubling (Isshin-style: attack triggers fire twice)"),
+    ({"voltron", "extra_triggers"},                "voltron + trigger doubling (equipment abilities fire twice)"),
+    ({"weenie", "extra_triggers"},                 "weenie + trigger doubling (small-creature abilities fire twice)"),
+    ({"weenie"},                                   "weenie / small-creature matters"),
+    ({"extra_triggers"},                           "extra triggers (abilities trigger an additional time)"),
     ({"tribal", "mana_producers"},              "elf tribal + elfball (mana-dork matters)"),
     ({"tribal", "aristocrats"},                 "tribal aristocrats"),
     ({"tribal", "tokens"},                      "tribal token swarm"),
@@ -530,8 +647,11 @@ def analyze_commander_oracle_text(
         creature_subtypes = type_line.split("\u2014", 1)[1].split()
         for subtype in creature_subtypes:
             # Check against the pattern signals to see if this subtype has a known tribal label.
+            # Only emit a type-line tribal signal when the tribe is also mentioned in the oracle
+            # text or keywords — otherwise a commander like Isshin (Samurai) whose strategy has
+            # nothing to do with Samurais would incorrectly receive a tribal signal.
             for ps in _PATTERN_SIGNALS:
-                if ps.signal_type == "tribal" and ps.pattern.search(subtype):
+                if ps.signal_type == "tribal" and ps.pattern.search(subtype) and ps.pattern.search(combined):
                     if ps.label not in seen_labels:
                         seen_labels.add(ps.label)
                         signals.append(SignalResult(
