@@ -21,10 +21,10 @@ mtg-pytorch/
 │   │   └── ops/
 │   │       ├── commander_analysis.py  # Pure oracle-text signal extractor (no DB)
 │   │       └── decks.py               # Deck generation + tribal/heuristic boosts
-│   ├── ingest/                 # Pipeline: Scryfall → pgvector embeddings
-│   ├── trainer/                # PyTorch training (also runs Jupyter Lab)
+│   ├── ingest/                 # Pipeline: MTGJSON → pgvector embeddings
+│   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
 │   └── ui/                     # Streamlit interface
-├── models/                     # Model architecture files (shared into trainer)
+├── models/                     # Model architecture files (shared into jupyter)
 ├── notebooks/                  # Jupyter notebooks (mounted into jupyter service)
 └── mage/                       # XMage reference: Java rules engine (read-only)
 ```
@@ -35,36 +35,43 @@ mtg-pytorch/
 |-----------|----------------------------------------------|----------------------------|
 | `db`      | pgvector/pgvector:pg16                       | internal only              |
 | `api`     | FastAPI REST API                             | `$API_HOST`                |
-| `ui`      | Streamlit card search + deck builder         | `$UI_HOST`                 |
-| `jupyter` | JupyterLab for research (uses trainer image) | `$JUPYTER_HOST`            |
-| `ingest`  | One-shot Scryfall → DB pipeline              | internal only              |
-| `trainer` | PyTorch training (one-shot / GPU)            | internal only              |
+| `ui`      | Streamlit deck builder                       | `$UI_HOST`                 |
+| `jupyter` | JupyterLab for research and inference        | `$JUPYTER_HOST`            |
+| `ingest`  | One-shot MTGJSON → DB pipeline               | internal only              |
 
 ## Development workflow
 
 ```bash
 # 1. Bootstrap
-cp .env.example .env      # edit POSTGRES_PASSWORD, hosts, WANDB_API_KEY
+cp .env.example .env      # edit POSTGRES_PASSWORD, hosts, ADMIN_TOKEN
 
-# 2. Start DB + API + UI
+# 2. Start services
 docker compose up -d db api ui jupyter
 
-# 3. Run ingest (downloads ~90 MB Scryfall bulk JSON, embeds all cards)
+# 3. Run ingest (downloads MTGJSON, embeds all cards, builds synergy edges)
 docker compose run --rm ingest
 
-# 4. Train (stub until ingest has run at least once)
-docker compose run --rm trainer python train.py --phase 2 --epochs 20
-
-# 5. Open UI
+# 4. Open UI
 open https://$UI_HOST
 ```
 
-## Windows local (no Docker)
+## Training
 
-For native Windows development without Docker/WSL (using `.venv`, local
-Postgres, and PowerShell runners), see:
+Training runs on a separate GPU machine using `services/trainer/` (not part of
+this compose setup).  After a training run, upload the resulting checkpoint via
+the **Upload Model** tab in the UI, or directly:
 
-- `docs/windows-non-docker-setup.md`
+```bash
+curl -X POST https://$API_HOST/admin/checkpoint \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -F "file=@phase4_best.pt" \
+  -F "name=phase4_best"
+```
+
+The API hot-swaps the model immediately (no restart needed).
+
+Checkpoint files live in the `model_checkpoints` Docker volume, mounted at
+`/app/checkpoints` in the API and `/checkpoints` in Jupyter (read-only).
 
 ## Training progression
 
@@ -105,7 +112,7 @@ The model is trained in four phases, each building on the last:
 
 | Table              | Purpose                                      |
 |--------------------|----------------------------------------------|
-| `cards`            | Oracle card data from Scryfall               |
+| `cards`            | Oracle card data from MTGJSON/Scryfall       |
 | `card_embeddings`  | Per-model vector embeddings (pgvector)       |
 | `card_abilities`   | Structured ability tags (keyword/triggered)  |
 | `synergy_edges`    | Pairwise synergy scores, multiple score types|
@@ -117,13 +124,16 @@ The model is trained in four phases, each building on the last:
 - **Python 3.12** everywhere in Python services.
 - **SQLAlchemy async** with `asyncpg` in API and ingest; sync `psycopg2` in
   trainer (PyTorch DataLoader workers are synchronous).
-- Embeddings dimension is **384** (all-MiniLM-L6-v2 default).  If you change
-  the model, update the `vector(384)` column in the migration and add a new
-  `model` row in `card_embeddings` — do not alter existing embeddings.
-- The `ingest` and `trainer` services run to completion (`restart: "no"`).
-  Restart them manually with `docker compose run --rm <service>`.
+- Embeddings dimension is **768** (all-mpnet-base-v2).  If you change the
+  model, update the `vector(768)` column in the migration and add a new `model`
+  row in `card_embeddings` — do not alter existing embeddings.
+- The `ingest` service runs to completion (`restart: "no"`).  Restart manually
+  with `docker compose run --rm ingest`.
 - Traefik TLS is handled externally; services only need the labels already in
   `docker-compose.yml`.  Do not add TLS config inside containers.
+- The `traefik-public` network is declared `external: true`.  Docker Compose v5
+  requires the network to exist before `docker compose up` — it is created and
+  managed by the Traefik stack, not this project.
 - Never commit `.env`; only commit `.env.example`.
 
 ## Decklist import
