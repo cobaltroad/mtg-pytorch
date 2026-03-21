@@ -30,9 +30,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       WANDB_API_KEY: ${WANDB_API_KEY:-}
       WANDB_PROJECT: ${WANDB_PROJECT:-edh-builder}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     volumes:
       - ./services/api:/app:cached
-      - model_checkpoints:/app/checkpoints:ro
+      - model_checkpoints:/app/checkpoints
       - ./services/ingest/card_name_aliases.csv:/app/card_name_aliases.csv:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:

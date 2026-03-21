@@ -8,7 +8,7 @@ import os
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import FastAPI, Query, HTTPException, Depends
+from fastapi import FastAPI, Query, HTTPException, Depends, UploadFile, File, Header
 from pydantic import BaseModel
 
 from sqlalchemy import text
@@ -26,6 +26,7 @@ from ops.commander_analysis import (
 log = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "")
 
 app = FastAPI(
     title="MTG Commander AI",
@@ -401,3 +402,35 @@ async def stop_training(container_id: str):
     if not result.get("ok"):
         raise HTTPException(500, result.get("error", "Unknown error"))
     return result
+
+
+# ── Checkpoint upload ─────────────────────────────────────────────────────────
+
+@app.post("/admin/checkpoint")
+async def upload_checkpoint(
+    file: UploadFile = File(...),
+    x_admin_token: str = Header(default=""),
+    name: str = "phase4_best",
+):
+    """Upload a .pt checkpoint file and hot-swap it into the model cache."""
+    if ADMIN_TOKEN and x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Invalid admin token")
+    if not file.filename or not file.filename.endswith(".pt"):
+        raise HTTPException(400, "File must be a .pt checkpoint")
+
+    from ops import inference
+    dest = inference.CHECKPOINT_DIR / f"{name}.pt"
+    tmp  = dest.with_suffix(".pt.tmp")
+
+    try:
+        data = await file.read()
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(500, f"Write failed: {exc}")
+
+    # Evict cached model so next inference loads the new weights
+    inference._model_cache.pop(name, None)
+    log.info("Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data))
+    return {"saved": str(dest), "bytes": len(data), "cache_cleared": True}
