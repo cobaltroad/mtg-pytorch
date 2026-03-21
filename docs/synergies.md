@@ -415,10 +415,10 @@ Covers cards that reward or react to spells being cast from exile, including imp
 
 ## Tribal Synergies
 
-15 tribes × 3 pattern types = 45 trigger events, all generated programmatically from `TRIBES`.
+16 tribes × 3 pattern types = 48 trigger events, all generated programmatically from `TRIBES`.
 
 **Tribes (in rough Commander popularity order):**
-Dragon, Elf, Zombie, Vampire, Eldrazi, Human, Dinosaur, Goblin, Angel, Pirate, Wizard, Assassin, Merfolk, Cat, Sliver
+Dragon, Elf, Zombie, Vampire, Eldrazi, Human, Dinosaur, Goblin, Angel, Pirate, Wizard, Assassin, Merfolk, Cat, Sliver, Wolf
 
 ### Pattern types per tribe
 
@@ -432,15 +432,19 @@ All three patterns for a tribe share the same producer pool — creature cards o
 
 ### Type-line tribal edges (compute_tribal_typeline_synergy)
 
-A separate pipeline stage (`compute_tribal_typeline_synergy`) generates edges based purely on the `type_line` column — no oracle text involved. This is the critical signal for tribal commanders like Wilhelt whose synergy partners are identified entirely by creature type, not by what their abilities say.
+A separate pipeline stage (`compute_tribal_typeline_synergy`) generates commander→member and member→member synergy edges for each tribe.
 
-**Changeling support:** Cards with `'Changeling' = ANY(keywords)` are every creature type simultaneously, so they are included in every tribe's member pool. This ensures cards like Mothdust Changeling and Graveshifter appear as Zombie members (and Dragon members, Elf members, etc.) even though their `type_line` only shows "Creature — Shapeshifter". The same changeling extension applies to the PRODUCER_MAP tribal entries used in `compute_synergy`.
+**Commander qualification (oracle-text gating):** A Legendary creature qualifies as a tribal commander only if the tribe name appears in its `oracle_text`. Matching solely on `type_line` caused false positives — every Legendary Human would have been paired with all Humans, every Legendary Zombie with all Zombies, etc., even for commanders with no tribal-matters text (e.g. Kenrith, the Returned King; Kraum, Ludevic's Opus). The oracle-text requirement eliminates these spurious edges while preserving genuine tribal commanders like Wilhelt (Zombie in oracle text) and The Scarab God (not a Zombie by type, but references Zombies in oracle text).
+
+**Member qualification (type-line only):** Tribe members are still identified purely by `type_line` — a card is a Zombie member if its type_line contains "Zombie". This side of the query is unchanged.
+
+**Changeling support:** Cards with `'Changeling' = ANY(keywords)` are every creature type simultaneously, so they are included in every tribe's member pool. This ensures cards like Mothdust Changeling appear as Zombie members (and Dragon members, Elf members, etc.) even though their `type_line` only shows "Creature — Shapeshifter". The same changeling extension applies to the PRODUCER_MAP tribal entries used in `compute_synergy`.
 
 Two edge classes per tribe, both stored as `score_type = 'ability_trigger'`:
 
 | Class | card_a | card_b | Cap |
 |---|---|---|---|
-| `commander_member` | Legendary creature of that tribe | Any creature of that tribe (+ changelings) | Uncapped |
+| `commander_member` | Legendary creature whose `oracle_text` mentions the tribe name | Any creature of that tribe (+ changelings) | Uncapped |
 | `member_member` | Any creature of that tribe (+ changelings) | Any creature of that tribe (+ changelings) | `TRIBAL_MEMBER_LIMIT` (default 50 000) |
 
 `TRIBAL_MEMBER_LIMIT` env var controls the member→member cap. Increase it (or set to 0 to disable) per tribe if needed. Commander→member edges are always inserted in full because those sets are small.
@@ -490,6 +494,38 @@ These tag cards that have on-board activated abilities, creating edges with card
 4. **Cross-tribal coupling**: Zombie↔Reanimator and Angel↔Lifegain cross-synergies are encoded at the producer level, not the consumer level. This means the edges are directional: reanimation spells count as zombie producers, but zombie cards are not automatically reanimator producers.
 
 5. **Theme overlap is intentional**: Equipment cards are producers for both `equipment_matters` and `artifact_matters`. An Equipment deck commander will see both equipment-specific and artifact-general payoffs as synergistic, which reflects actual deckbuilding.
+
+---
+
+## Commander-Value Synergies
+
+Cards that gain a direct mechanical benefit from having a commander in play — either free casts, persistent in-play bonuses, or mana scaled by a legendary permanent's characteristics.  Edges use `score_type = 'commander_value'` (separate from `ability_trigger`) so Phase 2 training and the deck-scoring layer can query them independently.
+
+### Trigger events
+
+| Event | Consumer regex | Producer SQL | Score |
+|---|---|---|---|
+| `commander_free_cast` | `if you control a commander … without paying its mana cost / costs less / free` | Legendary creature or planeswalker with CMC ≤ 2 | 1.0 |
+| `commander_in_play_payoff` | `as long as / while you control a commander` or `if you control a commander, [do something]` | Legendary creature or planeswalker with CMC ≤ 2 | 0.8 |
+| `commander_mana_value` | `legendary (creature\|planeswalker) … (mana\|add)`, `add … legendary (creature\|planeswalker)`, or `mana value … legendary (creature\|planeswalker)` | Any legendary creature or planeswalker (no CMC cap) | 0.6 |
+
+### Why CMC ≤ 2 for producers
+
+`commander_free_cast` and `commander_in_play_payoff` cards scale in value with how often the commander is actually in play.  A CMC-0 or CMC-1 commander (Rograkh, Yoshimaru, Isamaru) is almost always available; CMC-2 (Thrasios, Kraum, Lurrus) recasts cheaply after removal.  CMC-3+ commanders spend meaningful resources on the command-zone tax, so the synergy is weaker and those commanders are excluded from the producer pool for these two events.
+
+`commander_mana_value` (Mox Amber, Jeska's Will) works with any legend on the battlefield, so there is no CMC cap for that event.
+
+### Canonical examples
+
+| Card | Event tagged |
+|---|---|
+| Deflecting Swat, Fierce Guardianship, Flawless Maneuver, Deadly Rollick, Obscuring Haze | `commander_free_cast` |
+| Loyal Apprentice, Jeska's Will (second mode) | `commander_in_play_payoff` |
+| Mox Amber, cards referencing "legendary creature … mana" | `commander_mana_value` |
+
+### Archetype hint integration
+
+When a commander has CMC ≤ 2, the `analyze_commander_oracle_text()` endpoint adds `commander_value` to `boost_overrides` and includes a `"low-MV commander / commander-value staples"` note in `archetype_hint`.  This hint combines additively with tribal hints (e.g. a CMC-1 Elf tribal commander receives both hints).
 
 ---
 

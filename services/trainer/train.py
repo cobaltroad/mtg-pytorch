@@ -145,11 +145,13 @@ def load_synergy_pairs(
     hard_neg_frac: float = 0.5,
     role_demand_sample: int = 100_000,
     combo_sample: int = 200_000,
+    commander_value_sample: int = 200_000,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
     Positives: synergy_edges rows with score_type='ability_trigger' (label=1.0)
-               plus score_type='role_demand' (label=stored score, 0–1).
+               plus score_type='role_demand' (label=stored score, 0–1)
+               plus score_type='commander_value' (label=stored score: 1.0/0.8/0.6).
                Role-demand edges encode human-observed role frequency × archetype
                weight, so their score is a meaningful soft label.
                plus combo_package pairs: cards sharing a combo package are
@@ -158,8 +160,8 @@ def load_synergy_pairs(
                in embedding space that are NOT synergistic), the rest random.
     Total negatives = neg_ratio × len(positives).
     """
-    log.info("Loading synergy pairs (ability_trigger sample=%d, role_demand sample=%d, combo sample=%d)…",
-             sample, role_demand_sample, combo_sample)
+    log.info("Loading synergy pairs (ability_trigger sample=%d, role_demand sample=%d, combo sample=%d, commander_value sample=%d)…",
+             sample, role_demand_sample, combo_sample, commander_value_sample)
     with get_conn() as conn:
         with conn.cursor() as cur:
             # TABLESAMPLE avoids a full sort — safe even on large tables
@@ -216,6 +218,23 @@ def load_synergy_pairs(
                 ]
                 log.info("  + %d combo_package pairs", len(combo_pairs))
                 positives = positives + combo_pairs
+
+            # Commander-value edges: low-MV commander → free-cast / in-play payoff
+            # / mana-value cards.  Stored score used as soft label (1.0/0.8/0.6)
+            # reflecting strength of the payoff.
+            if commander_value_sample > 0:
+                cur.execute("""
+                    SELECT card_a::text, card_b::text, score
+                    FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                    WHERE score_type = 'commander_value'
+                    LIMIT %s
+                """, (commander_value_sample,))
+                cv_pairs = [
+                    (r[0], r[1], float(r[2])) for r in cur.fetchall()
+                    if r[0] in embeddings and r[1] in embeddings
+                ]
+                log.info("  + %d commander_value pairs", len(cv_pairs))
+                positives = positives + cv_pairs
 
     log.info("  %d total positive pairs", len(positives))
 
@@ -883,6 +902,9 @@ def main():
     parser.add_argument("--combo-sample", type=int, default=200_000,
                         help="Max combo_package card pairs to include as hard positives "
                              "(0 to disable; requires import_spellbook.py to have run)")
+    parser.add_argument("--commander-value-sample", type=int, default=200_000,
+                        help="Max commander_value edges to include as soft-label positives "
+                             "(0 to disable; uses stored score 1.0/0.8/0.6 as label)")
     parser.add_argument("--label-smoothing", type=float, default=0.1,
                         help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2")
     parser.add_argument("--noise", type=float, default=0.05,
@@ -956,6 +978,7 @@ def main():
             hard_neg_frac=args.hard_neg_frac,
             role_demand_sample=args.role_demand_sample,
             combo_sample=args.combo_sample,
+            commander_value_sample=args.commander_value_sample,
         )
         if not pairs:
             log.error("No synergy pairs found — run compute_synergy stage first.")
