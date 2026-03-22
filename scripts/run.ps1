@@ -5,7 +5,11 @@ param(
     [ValidateSet(1, 2, 3, 4)]
     [int]$Phase = 3,
 
-    [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'backfill_roles', 'all')]
+    # Path to a pre-built training artifact (.pt from export_dataset stage).
+    # When set, no DATABASE_URL is required — all data is loaded from the file.
+    [string]$Dataset = '',
+
+    [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'import_spellbook', 'export_dataset', 'backfill_roles', 'all')]
     [string]$Stage = 'compute_synergy',
 
     [Nullable[int]]$Epochs = $null,
@@ -95,30 +99,46 @@ function Assert-Prerequisites {
         [string]$mode,
         [int]$phase,
         [System.Nullable[bool]]$resume,
-        [string]$checkpointsDir
+        [string]$checkpointsDir,
+        [string]$dataset
     )
     $ok = $true
     Write-Host ""
     Write-Host "Pre-flight checks:" -ForegroundColor Cyan
 
-    # ── PostgreSQL reachable? ──────────────────────────────────────────────
-    Write-Host -NoNewline "  PostgreSQL localhost:5432  "
-    $connected = $false
-    try {
-        $tcp = [System.Net.Sockets.TcpClient]::new()
-        $ar  = $tcp.BeginConnect('127.0.0.1', 5432, $null, $null)
-        $connected = $ar.AsyncWaitHandle.WaitOne(2000)
-        $tcp.Close()
-    } catch { $connected = $false }
-
-    if ($connected) {
-        Write-Host "[OK]" -ForegroundColor Green
+    # ── Dataset artifact (skips DB check when provided) ────────────────────
+    if ($dataset) {
+        Write-Host -NoNewline "  Dataset artifact           "
+        if (Test-Path $dataset) {
+            $sizeMb = [math]::Round((Get-Item $dataset).Length / 1MB, 0)
+            Write-Host "[found — ${sizeMb} MB, DB check skipped]" -ForegroundColor Green
+        } else {
+            Write-Host "[NOT FOUND]" -ForegroundColor Red
+            Write-Host "    Expected: $dataset" -ForegroundColor Yellow
+            Write-Host "    Run: .\scripts\download_dataset.ps1" -ForegroundColor Yellow
+            $ok = $false
+        }
     } else {
-        Write-Host "[NOT REACHABLE]" -ForegroundColor Red
-        Write-Host "    PostgreSQL is not listening on localhost:5432." -ForegroundColor Yellow
-        Write-Host "    Find your service:  Get-Service | Where-Object { `$_.DisplayName -like '*postgres*' }" -ForegroundColor Yellow
-        Write-Host "    Start it:           Start-Service <service-name>" -ForegroundColor Yellow
-        $ok = $false
+        # ── PostgreSQL reachable? ──────────────────────────────────────────
+        Write-Host -NoNewline "  PostgreSQL localhost:5432  "
+        $connected = $false
+        try {
+            $tcp = [System.Net.Sockets.TcpClient]::new()
+            $ar  = $tcp.BeginConnect('127.0.0.1', 5432, $null, $null)
+            $connected = $ar.AsyncWaitHandle.WaitOne(2000)
+            $tcp.Close()
+        } catch { $connected = $false }
+
+        if ($connected) {
+            Write-Host "[OK]" -ForegroundColor Green
+        } else {
+            Write-Host "[NOT REACHABLE]" -ForegroundColor Red
+            Write-Host "    PostgreSQL is not listening on localhost:5432." -ForegroundColor Yellow
+            Write-Host "    Download the artifact instead:" -ForegroundColor Yellow
+            Write-Host "        .\scripts\download_dataset.ps1" -ForegroundColor Yellow
+            Write-Host "    Then train with: -Dataset .\ingest_cache\mtg_dataset.pt" -ForegroundColor Yellow
+            $ok = $false
+        }
     }
 
     # ── W&B API key (train only, soft warning) ────────────────────────────
@@ -157,12 +177,15 @@ function Assert-Prerequisites {
     }
 }
 
-Assert-Prerequisites -mode $Mode -phase $Phase -resume $Resume -checkpointsDir $checkpointsDir
+Assert-Prerequisites -mode $Mode -phase $Phase -resume $Resume -checkpointsDir $checkpointsDir -dataset $Dataset
 
 $env:PYTHONUNBUFFERED = '1'
 
 if ($Mode -eq 'train') {
-    $env:DATABASE_URL = Ensure-SyncDbUrl
+    # DATABASE_URL is only required when not using a pre-built dataset artifact.
+    if (-not $Dataset) {
+        $env:DATABASE_URL = Ensure-SyncDbUrl
+    }
     $env:CHECKPOINT_DIR = $checkpointsDir
 
     if ($null -eq $Epochs) {
@@ -197,6 +220,10 @@ if ($Mode -eq 'train') {
 
     if ($Resume) {
         $cmd += '--resume'
+    }
+
+    if ($Dataset) {
+        $cmd += @('--dataset', $Dataset)
     }
 
     if ($Phase -eq 2) {

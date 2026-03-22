@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import FastAPI, Query, HTTPException, Depends, UploadFile, File, Header
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from sqlalchemy import text
@@ -24,8 +27,10 @@ from ops.commander_analysis import (
 
 log = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "")
+DATABASE_URL      = os.environ.get("DATABASE_URL", "")
+ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
+DATASET_PATH      = Path(os.environ.get("DATASET_PATH",      "/data/mtg_dataset.pt"))
+DATASET_META_PATH = Path(os.environ.get("DATASET_META_PATH", "/data/mtg_dataset.json"))
 
 app = FastAPI(
     title="MTG Commander AI",
@@ -356,3 +361,38 @@ async def upload_checkpoint(
     inference._model_cache.pop(name, None)
     log.info("Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data))
     return {"saved": str(dest), "bytes": len(data), "cache_cleared": True}
+
+
+# ── Training dataset ──────────────────────────────────────────────────────────
+
+@app.get("/dataset/info")
+async def dataset_info():
+    """Return metadata about the current training artifact (no auth required)."""
+    if not DATASET_META_PATH.exists():
+        raise HTTPException(
+            404,
+            "No training dataset available — run the export_dataset pipeline stage first",
+        )
+    meta = json.loads(DATASET_META_PATH.read_text())
+    size_bytes = DATASET_PATH.stat().st_size if DATASET_PATH.exists() else 0
+    return {**meta, "size_bytes": size_bytes}
+
+
+@app.get("/dataset/download")
+async def dataset_download():
+    """Stream the training artifact (.pt) to the caller (no auth required).
+
+    The artifact is ~100–300 MB and contains embeddings, synergy pairs,
+    decks, and pre-computed Phase 4 positions.  The GPU trainer loads it
+    with --dataset <path> to train all phases without a database connection.
+    """
+    if not DATASET_PATH.exists():
+        raise HTTPException(
+            404,
+            "No training dataset available — run the export_dataset pipeline stage first",
+        )
+    return FileResponse(
+        DATASET_PATH,
+        media_type="application/octet-stream",
+        filename="mtg_dataset.pt",
+    )

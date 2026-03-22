@@ -48,18 +48,19 @@ cp .env.example .env      # edit POSTGRES_PASSWORD, hosts, ADMIN_TOKEN
 # 2. Start services
 docker compose up -d db api ui jupyter
 
-# 3. Run ingest (downloads MTGJSON, embeds all cards, builds synergy edges)
+# 3. Run full ingest pipeline (MTGJSON + Commander Spellbook + training artifact)
 #    Stages: fetch_cards → load_cards → embed_cards → tag_abilities →
-#            compute_synergy → compute_commander_value_synergy → compute_tribal_typeline_synergy
+#            compute_synergy → compute_commander_value_synergy →
+#            compute_tribal_typeline_synergy → import_spellbook → export_dataset
 #    Takes ~30–60 min depending on hardware.
 docker compose run --rm ingest
 
-# 4. Import combo packages (Commander Spellbook — separate from main ingest)
-docker compose run --rm ingest python import_spellbook.py
-
-# 5. Import decklists (required for Phase 3/4 training and proxy context in inference)
+# 4. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
 docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python import_moxfield.py
+
+# 5. Re-export the artifact after importing new decklists (fast — ~5 min)
+docker compose run --rm ingest python export_dataset.py
 
 # 6. Restart API to clear in-process embedding cache
 docker compose restart api
@@ -98,30 +99,41 @@ The system is split across two machines that must stay in sync:
 | **Key files** | `services/trainer/train.py`, `scripts/*.ps1` | `docker-compose.yml`, `services/api/` |
 | **docker-compose** | Not used | Primary entrypoint |
 | **Setup doc** | `docs/windows-non-docker-setup.md` | This file |
-| **Data source** | Reads embeddings from the Docker DB via `DATABASE_URL` | Runs ingest to populate DB |
+| **Data source** | Downloads `mtg_dataset.pt` artifact from Docker host | Runs ingest to populate DB |
 | **Output** | `.pt` checkpoint file | Serves deck generation via API |
 
 ### Sync requirements
 
 These two must always agree or deck generation will silently fail:
 
-- **Embedding model** — `EMBEDDING_MODEL` in `.env` on the Docker host must match
-  whatever model the GPU trainer loaded from the DB at training time.
+- **Embedding model** — the artifact's `meta.model` field records which model was
+  used.  The `input_dim` of `CardEncoder` in any checkpoint must match `meta.dim`.
   Current: `sentence-transformers/all-mpnet-base-v2` (768-dim).
 
-- **Embedding dimension** — the `vector(N)` column in `card_embeddings` and the
-  `input_dim` of `CardEncoder` in the checkpoint must match.
-  Current: 768.
-
-- **Card universe** — the trainer reads card IDs from the Docker DB.  If ingest is
-  re-run on the Docker host (e.g. after a MTGJSON update), retrain or verify that
-  no card IDs changed before uploading a new checkpoint.
+- **Card universe** — if ingest is re-run on the Docker host (e.g. after a MTGJSON
+  update), re-export the artifact and re-download it on the GPU machine before
+  the next training run.
 
 ### Workflow for updating the model
 
-1. Run ingest on the Docker host (steps 3–7 above) to refresh DB data.
-2. Train on the GPU machine against the same DB (trainer connects via `DATABASE_URL`).
-3. Upload the resulting checkpoint to the Docker host via the UI or:
+1. Run full ingest on the Docker host (produces a fresh `mtg_dataset.pt`).
+2. Import new decklists if any, then re-export: `docker compose run --rm ingest python export_dataset.py`
+3. On the GPU machine, download the artifact:
+
+```powershell
+.\scripts\download_dataset.ps1
+```
+
+4. Train all phases:
+
+```powershell
+.\scripts\run.ps1 -Mode train -Phase 1 -Dataset .\ingest_cache\mtg_dataset.pt
+.\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt
+.\scripts\run.ps1 -Mode train -Phase 3 -Dataset .\ingest_cache\mtg_dataset.pt
+.\scripts\run.ps1 -Mode train -Phase 4 -Dataset .\ingest_cache\mtg_dataset.pt
+```
+
+5. Upload the resulting checkpoint to the Docker host via the UI, or:
 
 ```bash
 curl -X POST https://$API_HOST/admin/checkpoint \

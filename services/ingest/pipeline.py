@@ -789,6 +789,18 @@ async def compute_synergy() -> None:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+async def import_spellbook_stage() -> None:
+    """Import Commander Spellbook combos into combo_packages / combo_package_cards."""
+    import import_spellbook
+    await import_spellbook.main()
+
+
+def export_dataset_stage() -> None:
+    """Serialize the full training artifact to /data/mtg_dataset.pt."""
+    import export_dataset
+    export_dataset.main()
+
+
 async def run_all():
     path, source = await fetch_cards()
     await load_cards(path, source)
@@ -797,6 +809,8 @@ async def run_all():
     await compute_synergy()
     await compute_commander_value_synergy()
     await compute_tribal_typeline_synergy()
+    await import_spellbook_stage()
+    export_dataset_stage()
 
 
 async def _load_cards_stage():
@@ -808,9 +822,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--stage",
-        choices=["fetch_cards", "load_cards", "embed_cards", "tag_abilities",
-                 "compute_synergy", "compute_commander_value_synergy",
-                 "compute_tribal_typeline_synergy"],
+        choices=[
+            "fetch_cards", "load_cards", "embed_cards", "tag_abilities",
+            "compute_synergy", "compute_commander_value_synergy",
+            "compute_tribal_typeline_synergy",
+            "import_spellbook", "export_dataset",
+        ],
         default=None,
     )
     args = parser.parse_args()
@@ -829,5 +846,9 @@ if __name__ == "__main__":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":
         asyncio.run(compute_tribal_typeline_synergy())
+    elif args.stage == "import_spellbook":
+        asyncio.run(import_spellbook_stage())
+    elif args.stage == "export_dataset":
+        export_dataset_stage()
     else:
         asyncio.run(run_all())

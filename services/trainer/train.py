@@ -1097,10 +1097,77 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
     return model
 
 
+# ── Artifact loaders (--dataset mode, no DB required) ─────────────────────────
+
+def load_artifact(path: str) -> dict:
+    """Load the training artifact produced by export_dataset.py."""
+    log.info("Loading training artifact: %s", path)
+    data = torch.load(path, map_location="cpu", weights_only=False)
+    meta = data.get("meta", {})
+    log.info(
+        "Artifact: %d cards, %d pairs, %d decks, %d positions (created %s)",
+        meta.get("card_count", 0), meta.get("synergy_count", 0),
+        meta.get("deck_count", 0), meta.get("position_count", 0),
+        meta.get("created_at", "?")[:19],
+    )
+    return data
+
+
+def load_embeddings_from_artifact(data: dict) -> dict[str, np.ndarray]:
+    """Reconstruct {card_id: np.ndarray} from artifact tensors."""
+    card_ids = data["card_ids"]
+    emb_matrix = data["embeddings"].numpy()
+    return {cid: emb_matrix[i] for i, cid in enumerate(card_ids)}
+
+
+def load_synergy_pairs_from_artifact(data: dict) -> list[tuple[str, str, float]]:
+    """Reconstruct [(card_a_id, card_b_id, label)] from artifact."""
+    card_ids = data["card_ids"]
+    syn = data["synergy"]
+    a_list = syn["a_idx"].tolist()
+    b_list = syn["b_idx"].tolist()
+    l_list = syn["labels"].tolist()
+    return [(card_ids[a], card_ids[b], float(l)) for a, b, l in zip(a_list, b_list, l_list)]
+
+
+def load_decks_from_artifact(data: dict) -> list[dict]:
+    """Reconstruct deck list (same schema as load_decks) from artifact."""
+    card_ids = data["card_ids"]
+    decks = []
+    for d in data["decks"]:
+        cmd_idx = d["commander_idx"]
+        decks.append({
+            "commander_id":      card_ids[cmd_idx],
+            "card_ids":          [card_ids[i] for i in d["card_idxs"]],
+            "color_identity":    frozenset(d.get("color_identity", [])),
+            "legal_neg_indices": d["legal_neg_indices"].numpy(),
+            "archetype":         d.get("archetype", "unknown"),
+        })
+    return decks
+
+
+def load_synergy_positions_from_artifact(data: dict) -> list[dict]:
+    """Reconstruct Phase 4 positions (same schema as load_synergy_positions)."""
+    card_ids = data["card_ids"]
+    positions = []
+    for p in data.get("synergy_positions", []):
+        positions.append({
+            "commander_id":     card_ids[p["commander_idx"]],
+            "context_card_ids": [card_ids[i] for i in p["context_card_idxs"]],
+            "target_card_id":   card_ids[p["target_card_idx"]],
+            "weight":           float(p["weight"]),
+            "legal_neg_indices": p["legal_neg_indices"].numpy(),
+        })
+    return positions
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="",
+                        help="Path to pre-built training artifact (.pt from export_dataset.py). "
+                             "When set, all DB queries are skipped — no DATABASE_URL required.")
     parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4], default=2)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -1177,8 +1244,13 @@ def main():
             config=vars(args),
         )
 
+    # Artifact mode: load all data from a pre-built .pt file instead of DB.
+    _artifact: dict | None = None
+    if args.dataset:
+        _artifact = load_artifact(args.dataset)
+
     if args.phase == 1:
-        embeddings = load_embeddings()
+        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
         if not embeddings:
             log.error("No embeddings found — run the ingest pipeline first.")
             return
@@ -1197,20 +1269,23 @@ def main():
         )
 
     elif args.phase == 2:
-        embeddings = load_embeddings()
+        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
         if not embeddings:
             log.error("No embeddings found — run the ingest pipeline first.")
             return
 
-        pairs = load_synergy_pairs(
-            embeddings,
-            neg_ratio=args.neg_ratio,
-            sample=args.sample,
-            hard_neg_frac=args.hard_neg_frac,
-            role_demand_sample=args.role_demand_sample,
-            combo_sample=args.combo_sample,
-            commander_value_sample=args.commander_value_sample,
-        )
+        if _artifact:
+            pairs = load_synergy_pairs_from_artifact(_artifact)
+        else:
+            pairs = load_synergy_pairs(
+                embeddings,
+                neg_ratio=args.neg_ratio,
+                sample=args.sample,
+                hard_neg_frac=args.hard_neg_frac,
+                role_demand_sample=args.role_demand_sample,
+                combo_sample=args.combo_sample,
+                commander_value_sample=args.commander_value_sample,
+            )
         if not pairs:
             log.error("No synergy pairs found — run compute_synergy stage first.")
             return
@@ -1236,12 +1311,12 @@ def main():
         )
 
     elif args.phase == 3:
-        embeddings = load_embeddings()
+        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
         if not embeddings:
             log.error("No embeddings found — run the ingest pipeline first.")
             return
 
-        decks = load_decks(embeddings)
+        decks = load_decks_from_artifact(_artifact) if _artifact else load_decks(embeddings)
         if not decks:
             log.error("No decks found — run import_decklists.py first.")
             return
@@ -1278,12 +1353,12 @@ def main():
         )
 
     elif args.phase == 4:
-        embeddings = load_embeddings()
+        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
         if not embeddings:
             log.error("No embeddings found — run the ingest pipeline first.")
             return
 
-        decks = load_decks(embeddings)
+        decks = load_decks_from_artifact(_artifact) if _artifact else load_decks(embeddings)
         if not decks:
             log.error("No decks found — run import_decklists.py first.")
             return
@@ -1291,17 +1366,16 @@ def main():
         dataset = DeckDataset(decks, embeddings)
         log.info("Dataset: %d decks", len(dataset))
 
-        # Build synergy positions from oracle-text derived signals.
-        # These teach the model *why* cards belong with a commander rather than
-        # just *that* they appeared together in human decklists — the key to
-        # generalising to commanders the model has never seen a deck for.
-        syn_positions = load_synergy_positions(
-            decks, embeddings,
-            combo_weight=args.combo_weight,
-            ability_weight=args.ability_weight,
-            tribal_weight=args.tribal_weight,
-            synergy_limit_per_commander=args.synergy_limit,
-        )
+        if _artifact:
+            syn_positions = load_synergy_positions_from_artifact(_artifact)
+        else:
+            syn_positions = load_synergy_positions(
+                decks, embeddings,
+                combo_weight=args.combo_weight,
+                ability_weight=args.ability_weight,
+                tribal_weight=args.tribal_weight,
+                synergy_limit_per_commander=args.synergy_limit,
+            )
 
         input_dim = len(next(iter(embeddings.values())))
         model = DeckConstructor(input_dim=input_dim).to(device)

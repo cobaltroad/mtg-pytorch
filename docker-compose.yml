@@ -29,9 +29,12 @@ services:
       MODEL_CHECKPOINT_DIR: /app/checkpoints
       LOG_LEVEL: ${LOG_LEVEL:-info}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      DATASET_PATH: /data/mtg_dataset.pt
+      DATASET_META_PATH: /data/mtg_dataset.json
     volumes:
       - ./services/api:/app:cached
       - model_checkpoints:/app/checkpoints
+      - ingest_cache:/data:ro
       - ./services/ingest/card_name_aliases.csv:/app/card_name_aliases.csv:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
@@ -61,6 +64,7 @@ services:
     restart: unless-stopped
     environment:
       API_URL: http://api:8000
+      EXTERNAL_API_URL: ${EXTERNAL_API_URL:-https://${API_HOST:-edh-api.cardtrak.app}}
     depends_on:
       db:
         condition: service_healthy

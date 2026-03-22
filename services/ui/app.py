@@ -6,7 +6,8 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-API_URL = os.environ.get("API_URL", "http://api:8000")
+API_URL          = os.environ.get("API_URL", "http://api:8000")
+EXTERNAL_API_URL = os.environ.get("EXTERNAL_API_URL", API_URL)
 
 st.set_page_config(page_title="MTG Commander AI", page_icon="🃏", layout="wide")
 st.title("🃏 MTG Commander AI")
@@ -65,7 +66,7 @@ _GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-tab_deck, tab_train = st.tabs(["Deck Builder", "Upload Model"])
+tab_deck, tab_dataset, tab_train = st.tabs(["Deck Builder", "Training Data", "Upload Model"])
 
 with tab_deck:
     st.subheader("Commander deck builder")
@@ -280,6 +281,56 @@ with tab_deck:
                 )
             except httpx.HTTPError as e:
                 st.error(f"Generation failed: {e}")
+
+with tab_dataset:
+    st.subheader("Training Data Artifact")
+    st.markdown(
+        "After the full ingest pipeline completes (including `export_dataset`), "
+        "a self-contained `.pt` artifact is available here.  "
+        "Download it to the GPU machine and point the trainer at it — "
+        "no database connection required."
+    )
+
+    try:
+        info_r = httpx.get(f"{API_URL}/dataset/info", timeout=10)
+        if info_r.status_code == 404:
+            st.warning(
+                "No artifact found. Run the full ingest pipeline to generate one:\n\n"
+                "```\ndocker compose run --rm ingest\n```"
+            )
+        else:
+            info_r.raise_for_status()
+            info = info_r.json()
+
+            size_mb = info.get("size_bytes", 0) / 1e6
+            created = info.get("created_at", "unknown")[:19].replace("T", " ")
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Cards", f"{info.get('card_count', 0):,}")
+            col2.metric("Training pairs", f"{info.get('synergy_count', 0):,}")
+            col3.metric("Decks", f"{info.get('deck_count', 0):,}")
+            col4.metric("Phase 4 positions", f"{info.get('position_count', 0):,}")
+
+            st.caption(
+                f"Model: `{info.get('model', '?')}`  |  "
+                f"Dim: {info.get('dim', '?')}  |  "
+                f"Size: {size_mb:.0f} MB  |  "
+                f"Created: {created} UTC"
+            )
+
+            download_url = f"{EXTERNAL_API_URL}/dataset/download"
+            st.markdown(f"**Download URL:** `{download_url}`")
+            st.markdown(
+                "Use this URL with `download_dataset.ps1` on the GPU machine:\n\n"
+                "```powershell\n"
+                ".\\scripts\\download_dataset.ps1\n"
+                "```\n\n"
+                "Or download directly from your browser:"
+            )
+            st.link_button("Download mtg_dataset.pt", download_url, type="primary")
+
+    except httpx.HTTPError as e:
+        st.error(f"Could not reach API: {e}")
 
 with tab_train:
     st.subheader("Upload Phase 4 Checkpoint")
