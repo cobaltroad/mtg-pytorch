@@ -1,10 +1,11 @@
-# Windows Local Setup (No Docker / No WSL)
+# Windows GPU Setup (No Docker / No WSL)
 
-This guide runs the project natively on Windows using a Python `.venv`, local PostgreSQL, and PowerShell scripts.
+This is the permanent training environment.  The GPU machine runs natively on
+Windows using a Python `.venv`, a remote PostgreSQL connection to the Docker
+host, and PowerShell scripts.  There is no Docker on the GPU machine.
 
-> Scope: temporary local workflow while GPU/container setup is pending.
-> 
-> Future update: replace/augment with GPU-enabled flow when hardware arrives.
+See `CLAUDE.md → Two-environment setup` for the full picture of how this
+machine relates to the Docker host.
 
 ---
 
@@ -198,10 +199,42 @@ psql -h localhost -p 5432 -U mtg -d mtg -c "SELECT COUNT(*) FROM synergy_edges;"
 
 ---
 
-## 10) Planned GPU transition
+## 10) GPU setup
 
-When GPU arrives, this document should be updated to include:
-- CUDA-capable PyTorch install choice
-- native-vs-container GPU workflow decision
-- checkpoint compatibility and migration notes
-- recommended training command presets for GPU memory limits
+The GPU machine is now active. PyTorch with CUDA support is required for training.
+
+### Install CUDA-capable PyTorch
+
+Replace the CPU-only PyTorch that may have been installed via `requirements.txt`:
+
+```powershell
+.\.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+Adjust `cu121` to match your installed CUDA version (`cu118`, `cu124`, etc.).
+Verify: `.\.venv\Scripts\python -c "import torch; print(torch.cuda.is_available())"` should print `True`.
+
+### Training on GPU
+
+No changes to the training commands — PyTorch detects CUDA automatically.
+The trainer moves tensors to `cuda` when available:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 -Mode train -Phase 4 -Epochs 50 -LearningRate 1e-4
+```
+
+### Checkpoint compatibility
+
+Checkpoints are saved with `torch.save` and are CPU/GPU agnostic — the API
+loads them with `map_location=cpu`, so a checkpoint trained on GPU uploads
+and runs on the Docker host without conversion.
+
+### Recommended presets by phase
+
+| Phase | Key flags | Notes |
+|-------|-----------|-------|
+| 1 | default | Fast; contrastive on reprints |
+| 2 | `--sample 500000 --neg-ratio 3` | Reduce if OOM |
+| 3 | `--epochs 50 --lr 1e-4` | More decks = better loss |
+| 4 | `--epochs 50 --lr 1e-4 --encoder-lr-scale 0.1 --temp-start 0.5 --temp-end 0.05` | Freeze encoder by default |
+

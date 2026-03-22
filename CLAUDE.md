@@ -49,11 +49,91 @@ cp .env.example .env      # edit POSTGRES_PASSWORD, hosts, ADMIN_TOKEN
 docker compose up -d db api ui jupyter
 
 # 3. Run ingest (downloads MTGJSON, embeds all cards, builds synergy edges)
+#    Stages: fetch_cards → load_cards → embed_cards → tag_abilities →
+#            compute_synergy → compute_commander_value_synergy → compute_tribal_typeline_synergy
+#    Takes ~30–60 min depending on hardware.
 docker compose run --rm ingest
 
-# 4. Open UI
+# 4. Import combo packages (Commander Spellbook — separate from main ingest)
+docker compose run --rm ingest python import_spellbook.py
+
+# 5. Import decklists (required for Phase 3/4 training and proxy context in inference)
+#    See "Decklist import" section below for details.
+docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python import_moxfield.py
+
+# 6. Restart API to clear in-process embedding cache
+docker compose restart api
+
+# 7. Rebuild pgvector index for full recall quality
+docker compose exec db psql -U mtg -d mtg -c \
+  "REINDEX INDEX CONCURRENTLY idx_card_embeddings_vec;"
+
+# 8. Open UI
 open https://$UI_HOST
 ```
+
+### Embedding model
+
+The embedding model must match between ingest and the trained checkpoint.
+Current model: `sentence-transformers/all-mpnet-base-v2` (768-dim).
+Set via `EMBEDDING_MODEL` in `.env` — must match `.env.example`.
+
+If you ever need to switch models, delete the old rows first:
+```bash
+docker compose exec db psql -U mtg -d mtg -c \
+  "DELETE FROM card_embeddings WHERE model = '<old-model-name>';"
+docker compose exec db psql -U mtg -d mtg -c \
+  "ALTER TABLE card_embeddings ALTER COLUMN embedding TYPE vector(<new-dim>);"
+# then re-run ingest
+```
+
+## Two-environment setup
+
+The system is split across two machines that must stay in sync:
+
+| | GPU machine (training) | Docker host (serving) |
+|---|---|---|
+| **OS** | Windows (native, no Docker) | Linux |
+| **Purpose** | Train the model | Host API, UI, DB |
+| **Key files** | `services/trainer/train.py`, `scripts/*.ps1` | `docker-compose.yml`, `services/api/` |
+| **docker-compose** | Not used | Primary entrypoint |
+| **Setup doc** | `docs/windows-non-docker-setup.md` | This file |
+| **Data source** | Reads embeddings from the Docker DB via `DATABASE_URL` | Runs ingest to populate DB |
+| **Output** | `.pt` checkpoint file | Serves deck generation via API |
+
+### Sync requirements
+
+These two must always agree or deck generation will silently fail:
+
+- **Embedding model** — `EMBEDDING_MODEL` in `.env` on the Docker host must match
+  whatever model the GPU trainer loaded from the DB at training time.
+  Current: `sentence-transformers/all-mpnet-base-v2` (768-dim).
+
+- **Embedding dimension** — the `vector(N)` column in `card_embeddings` and the
+  `input_dim` of `CardEncoder` in the checkpoint must match.
+  Current: 768.
+
+- **Card universe** — the trainer reads card IDs from the Docker DB.  If ingest is
+  re-run on the Docker host (e.g. after a MTGJSON update), retrain or verify that
+  no card IDs changed before uploading a new checkpoint.
+
+### Workflow for updating the model
+
+1. Run ingest on the Docker host (steps 3–7 above) to refresh DB data.
+2. Train on the GPU machine against the same DB (trainer connects via `DATABASE_URL`).
+3. Upload the resulting checkpoint to the Docker host via the UI or:
+
+```bash
+curl -X POST https://$API_HOST/admin/checkpoint \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -F "file=@phase4_best.pt" \
+  -F "name=phase4_best"
+```
+
+The API hot-swaps the model immediately (no restart needed).
+
+Checkpoint files live in the `model_checkpoints` Docker volume, mounted at
+`/app/checkpoints` in the API and `/checkpoints` in Jupyter (read-only).
 
 ## Training
 
