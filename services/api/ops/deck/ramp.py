@@ -35,9 +35,13 @@ _SPEND_ONLY_RE = re.compile(r"[Ss]pend this mana only to cast ([^.]+)", re.I)
 # Capitalised words likely to be creature type names within a restriction clause
 _TYPE_WORD_RE = re.compile(r"\b[A-Z][a-z]+")
 
+# Unconditionally enters tapped — "unless …" and "If you don't …" variants are excluded
+_UNCONDITIONAL_TAPPED_RE = re.compile(r"^This land enters tapped\.", re.M)
+
 MANA_PRODUCER_BOOST = 1.35
 COLORLESS_LAND_PENALTY = 0.25
 DUAL_LAND_BOOST = 1.6
+TAPPED_LAND_PENALTY = 0.8
 
 
 def _type_restricted_mana_is_useful(
@@ -155,6 +159,7 @@ def score_land_mana_quality(
         colors_produced = _count_commander_colors_produced(
             oracle_texts.get(cid, ""), signals.real_colors, deck_creature_types
         )
+        ot = oracle_texts.get(cid, "")
         if colors_produced >= 2:
             sc = sc * DUAL_LAND_BOOST
             if tags is not None:
@@ -163,6 +168,10 @@ def score_land_mana_quality(
             sc = sc * COLORLESS_LAND_PENALTY
             if tags is not None:
                 tags.setdefault(cid, []).append("land:colorless_penalty")
+        if _UNCONDITIONAL_TAPPED_RE.search(ot):
+            sc = sc * TAPPED_LAND_PENALTY
+            if tags is not None:
+                tags.setdefault(cid, []).append("land:tapped_penalty")
         result.append((cid, sc))
     return result
 
