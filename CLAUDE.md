@@ -55,12 +55,24 @@ docker compose up -d db api ui jupyter
 #    Takes ~30–60 min depending on hardware.
 docker compose run --rm ingest
 
+# 3a. Run a single ingest stage (useful after code changes or partial failures)
+docker compose run --rm ingest python pipeline.py --stage tag_abilities
+docker compose run --rm ingest python pipeline.py --stage compute_synergy
+docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
+docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
+docker compose run --rm ingest python pipeline.py --stage import_spellbook
+docker compose run --rm ingest python pipeline.py --stage export_dataset
+#    All valid --stage values:
+#      fetch_cards, load_cards, embed_cards, tag_abilities,
+#      compute_synergy, compute_commander_value_synergy,
+#      compute_tribal_typeline_synergy, import_spellbook, export_dataset
+
 # 4. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
 docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python import_moxfield.py
 
 # 5. Re-export the artifact after importing new decklists (fast — ~5 min)
-docker compose run --rm ingest python export_dataset.py
+docker compose run --rm ingest python pipeline.py --stage export_dataset
 
 # 6. Restart API to clear in-process embedding cache
 docker compose restart api
