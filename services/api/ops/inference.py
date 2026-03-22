@@ -254,8 +254,9 @@ def get_ramp_info(db_url: str) -> tuple[frozenset, dict[str, str]]:
     ramp_ids: frozenset = frozenset(card_id for card_id, _ in rows)
     guaranteed: dict[str, str] = {}
     for card_id, name in rows:
-        if name in ("Sol Ring", "Arcane Signet") and name not in guaranteed:
-            guaranteed[name] = card_id
+        canonical = name.split(" // ")[0]
+        if canonical in ("Sol Ring", "Arcane Signet") and canonical not in guaranteed:
+            guaranteed[canonical] = card_id
 
     log.info("Found %d ramp cards (%d guaranteed)", len(ramp_ids), len(guaranteed))
     result = (ramp_ids, guaranteed)
@@ -279,16 +280,17 @@ def get_land_staple_ids(db_url: str) -> dict[str, str]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT DISTINCT ON (name) name, id::text
+                SELECT DISTINCT ON (split_part(name, ' // ', 1))
+                    split_part(name, ' // ', 1) AS canonical, id::text
                 FROM cards
-                WHERE name = ANY(%s)
-                ORDER BY name, id
+                WHERE split_part(name, ' // ', 1) = ANY(%s)
+                ORDER BY split_part(name, ' // ', 1), id
                 """,
                 (list(_LAND_STAPLE_NAMES),),
             )
             rows = cur.fetchall()
 
-    result: dict[str, str] = {name: card_id for name, card_id in rows}
+    result: dict[str, str] = {canonical: card_id for canonical, card_id in rows}
     log.info("Loaded %d land staple IDs", len(result))
     _land_staple_cache[db_url] = result
     return result

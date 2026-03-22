@@ -519,12 +519,13 @@ async def generate(
                     if basic_names:
                         basic_result = await db.execute(
                             text("""
-                                SELECT DISTINCT ON (name)
-                                    name, id::text, oracle_id, type_line, oracle_text,
+                                SELECT DISTINCT ON (split_part(name, ' // ', 1))
+                                    split_part(name, ' // ', 1) AS canonical,
+                                    id::text, oracle_id, type_line, oracle_text,
                                     color_identity, mana_cost, cmc
                                 FROM cards
-                                WHERE name = ANY(:names)
-                                ORDER BY name, id
+                                WHERE split_part(name, ' // ', 1) = ANY(:names)
+                                ORDER BY split_part(name, ' // ', 1), id
                             """),
                             {"names": basic_names},
                         )
