@@ -314,6 +314,14 @@ class DeckConstructor(nn.Module):
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.scorer = nn.Linear(embed_dim, 1)
+        # Learnable query token for synergy-only Phase 4 training.
+        # Replaces the degenerate z_cmd-as-tgt pattern: instead of the decoder
+        # attending to the commander from itself (tgt=memory=z_cmd), this token
+        # is a free variable that learns "what does a commander need?" via
+        # cross-attention to z_cmd as memory.  At inference, real deck cards
+        # serve as tgt — training with query_token is compatible because both
+        # cases use commander-as-memory.
+        self.query_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
     def forward(
         self,
@@ -1050,10 +1058,11 @@ def train_synergy_positions_phase(
                 z_cmd = model.card_encoder(all_raw[cmd_indices])  # (B, D)
                 z_tgt = model.card_encoder(all_raw[tgt_indices])  # (B, D)
 
-            # Commander as the sole context token: (B, 1, D).
-            # The decoder attends to this seed and learns to summarise what the
-            # commander needs — directly mirroring inference-time behaviour.
-            z_ctx = z_cmd.unsqueeze(1)
+            # Learnable query token as the decoder tgt: (B, 1, D).
+            # The decoder cross-attends this token to the commander (memory),
+            # learning "what does this commander need?" without the degenerate
+            # tgt=memory=z_cmd pattern that produced near-random InfoNCE scores.
+            z_ctx = model.query_token.expand(B, -1, -1)
 
             # Sample color-legal negatives from the pre-projected pool: (B, n_neg, D).
             neg_idx = np.vstack([
@@ -1364,7 +1373,7 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
             log.info("Extracting card_encoder weights from DeckConstructor checkpoint: %s", path)
             state = extracted
 
-    model.load_state_dict(state)
+    model.load_state_dict(state, strict=False)
     log.info("Loaded checkpoint: %s", path)
     return model
 
