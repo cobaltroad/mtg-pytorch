@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -31,6 +32,7 @@ DATABASE_URL      = os.environ.get("DATABASE_URL", "")
 ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
 DATASET_PATH      = Path(os.environ.get("DATASET_PATH",      "/data/mtg_dataset.pt"))
 DATASET_META_PATH = Path(os.environ.get("DATASET_META_PATH", "/data/mtg_dataset.json"))
+DECK_SAVE_DIR     = Path(os.environ.get("DECK_SAVE_DIR",     "/app/generated_decks"))
 
 app = FastAPI(
     title="MTG Commander AI",
@@ -228,6 +230,24 @@ class DeckOut(BaseModel):
     combo_packages_triggered: list[ComboPackageOut] = []
 
 
+def _save_deck(result: dict) -> None:
+    """Persist a generated deck to DECK_SAVE_DIR as a timestamped JSON file."""
+    try:
+        DECK_SAVE_DIR.mkdir(parents=True, exist_ok=True)
+        commander_name = (
+            result.get("commander", {}).get("name", "unknown")
+            .replace(" ", "_")
+            .replace(",", "")
+            .replace("'", "")
+        )
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        save_path = DECK_SAVE_DIR / f"{timestamp}_{commander_name}.json"
+        save_path.write_text(json.dumps(result, indent=2, default=str))
+        log.info("Deck saved: %s", save_path)
+    except Exception as exc:
+        log.warning("Failed to save generated deck: %s", exc)
+
+
 @app.post("/decks/generate", response_model=DeckOut)
 async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
     """Ask the model to build a 99-card commander deck."""
@@ -239,6 +259,7 @@ async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
     )
     if result is None:
         raise HTTPException(400, "Could not generate deck — commander not found or model unavailable")
+    _save_deck(result)
     return result
 
 

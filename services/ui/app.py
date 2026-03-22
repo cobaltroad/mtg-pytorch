@@ -1,6 +1,8 @@
 """MTG Commander AI — Streamlit interface."""
 
+import json as _json
 import os
+import re
 
 import httpx
 import pandas as pd
@@ -142,6 +144,25 @@ with tab_deck:
                 deck = generate_deck(str(commander["oracle_id"]), checkpoint, _boost_overrides)
                 st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
                 st.markdown(f"**Commander:** {deck['commander']['name']}")
+
+                # ── Download buttons ──────────────────────────────────────────
+                _safe_name = re.sub(r"[^\w]", "_", deck['commander']['name'])
+                _dl_cols = st.columns(2)
+                _dl_cols[0].download_button(
+                    "⬇ Download deck (JSON)",
+                    data=_json.dumps(deck, indent=2, default=str),
+                    file_name=f"{_safe_name}.json",
+                    mime="application/json",
+                )
+                _deck_lines = [f"Commander\n1 {deck['commander']['name']}\n\nDeck"]
+                for _c in deck["cards"]:
+                    _deck_lines.append(f"{_c.get('count', 1)} {_c['name']}")
+                _dl_cols[1].download_button(
+                    "⬇ Download deck (text)",
+                    data="\n".join(_deck_lines),
+                    file_name=f"{_safe_name}.txt",
+                    mime="text/plain",
+                )
 
                 # ── Context seed section ──────────────────────────────────────
                 context_cards = deck.get("context_cards", [])
