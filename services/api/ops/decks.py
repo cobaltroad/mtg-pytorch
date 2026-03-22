@@ -28,6 +28,30 @@ _ADD_ANY_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,40}any color", re.I)
 # Pushes Urza's Tower, Tomb of the Spirit Dragon, etc. to the bottom of the land pool
 # without making them impossible to include when better options are exhausted.
 _COLORLESS_LAND_PENALTY = 0.25
+
+# ── Land synergy patterns ─────────────────────────────────────────────────────
+# Lands that grant evasion to any creature (Rogue's Passage, Whispersilk Cloak
+# is not a land, but Shizo, Death's Storehouse etc.).
+_LAND_EVASION_RE = re.compile(
+    r"can't be blocked"
+    r"|becomes? unblockable"
+    r"|is unblockable",
+    re.I,
+)
+# Lands that grant evasion specifically to small creatures (Access Tunnel:
+# "Creatures with power 2 or greater can't block").
+_LAND_SMALL_EVASION_RE = re.compile(
+    r"power [12] or greater can't block"
+    r"|can't be blocked by creatures with power [12] or greater"
+    r"|only creatures? with power [12] or less can block",
+    re.I,
+)
+# Commander oracle text signals that the deck wants to attack or deal combat damage.
+_CMD_WANTS_ATTACK_RE = re.compile(r"\battack(s|ing|ers?)?\b|\bcombat damage\b", re.I)
+
+# Boost multipliers for land synergies.
+_LAND_EVASION_BOOST = 1.8        # Rogue's Passage for any attack-focused deck
+_LAND_SMALL_EVASION_BOOST = 1.5  # Access Tunnel extra on top of evasion boost for small-creature tribes
 # Score multiplier applied to mana-producing cards when "mana_producers" boost is active.
 _MANA_PRODUCER_BOOST = 1.35
 
@@ -398,13 +422,16 @@ async def generate(
                         (cid, sc) for cid, sc in scored if not _is_land(cid)
                     ]
 
-                    # ── Non-basic land color penalty ──────────────────────────
-                    # Demote lands that produce no mana in the commander's colors
-                    # (e.g. Urza's Tower, Tomb of the Spirit Dragon, Blinkmoth
-                    # Nexus) so colored duals and utility lands that tap for the
-                    # right colors rank first.  Skipped for colorless commanders.
-                    _real_colors = [c for c in color_identity if c != "C"]
-                    if _real_colors and nonbasic_scored:
+                    # ── Non-basic land scoring adjustments ───────────────────
+                    # Single pass over all non-basic lands:
+                    #   1. Colorless penalty  — demote lands that produce no mana
+                    #      in the commander's colors (Urza's Tower, Blinkmoth
+                    #      Nexus, etc.) so colored duals rank first.
+                    #   2. Evasion synergy    — boost lands that grant unblockability
+                    #      (Rogue's Passage) for decks that want to attack.
+                    #   3. Small-creature evasion — extra boost for lands like
+                    #      Access Tunnel when the commander cares about a tribe.
+                    if nonbasic_scored:
                         _land_ids = [cid for cid, _ in nonbasic_scored]
                         _land_ot_result = await db.execute(
                             text("SELECT id::text, oracle_text FROM cards WHERE id::text = ANY(:ids)"),
@@ -413,19 +440,31 @@ async def generate(
                         _land_ots: dict[str, str] = {
                             str(r[0]): (r[1] or "") for r in _land_ot_result.fetchall()
                         }
+                        _real_colors = [c for c in color_identity if c != "C"]
                         _cmd_colors = set(_real_colors)
+                        _wants_attack = bool(_CMD_WANTS_ATTACK_RE.search(cmd_oracle_text))
+                        _has_tribal = bool(cmd_tribal_types)
 
-                        def _land_produces_cmd_color(ot: str) -> bool:
-                            if _ADD_ANY_COLOR_RE.search(ot):
-                                return True
-                            return any(
-                                m.group(1) in _cmd_colors
-                                for m in _ADD_COLOR_RE.finditer(ot)
-                            )
+                        def _land_score_multiplier(ot: str) -> float:
+                            m = 1.0
+                            # 1. Colorless penalty for colored commanders
+                            if _cmd_colors:
+                                produces_color = _ADD_ANY_COLOR_RE.search(ot) or any(
+                                    hit.group(1) in _cmd_colors
+                                    for hit in _ADD_COLOR_RE.finditer(ot)
+                                )
+                                if not produces_color:
+                                    m *= _COLORLESS_LAND_PENALTY
+                            # 2. Evasion synergy for attack-focused decks
+                            if _wants_attack and _LAND_EVASION_RE.search(ot):
+                                m *= _LAND_EVASION_BOOST
+                                # 3. Extra boost for small-creature evasion in tribal decks
+                                if _has_tribal and _LAND_SMALL_EVASION_RE.search(ot):
+                                    m *= _LAND_SMALL_EVASION_BOOST
+                            return m
 
                         nonbasic_scored = [
-                            (cid, sc if _land_produces_cmd_color(_land_ots.get(cid, ""))
-                             else sc * _COLORLESS_LAND_PENALTY)
+                            (cid, sc * _land_score_multiplier(_land_ots.get(cid, "")))
                             for cid, sc in nonbasic_scored
                         ]
                         nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
@@ -438,8 +477,11 @@ async def generate(
                     selected_ramp: list[tuple[str, float]] = []
                     for name in GUARANTEED_RAMP:
                         cid = guaranteed_ramp.get(name)
-                        if cid and cid in score_lookup:
-                            selected_ramp.append((cid, score_lookup[cid]))
+                        if cid:
+                            # Use scored value if available; fall back to 0.0 for
+                            # cards that were excluded from scoring (e.g. landed in
+                            # proxy context) — they're still force-included.
+                            selected_ramp.append((cid, score_lookup.get(cid, 0.0)))
 
                     preselected_ids = {cid for cid, _ in selected_ramp}
                     ramp_candidates = [
