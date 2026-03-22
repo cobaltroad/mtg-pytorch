@@ -23,13 +23,19 @@ def search_cards(q: str) -> list[dict]:
     return r.json()
 
 
-def generate_deck(oracle_id: str, checkpoint: str = "latest", boost_overrides: list[str] | None = None) -> dict:
+def generate_deck(
+    oracle_id: str,
+    checkpoint: str = "latest",
+    boost_overrides: list[str] | None = None,
+    synergy_alpha: float = 0.4,
+) -> dict:
     r = httpx.post(
         f"{API_URL}/decks/generate",
         json={
             "commander_oracle_id": oracle_id,
             "checkpoint": checkpoint,
             "boost_overrides": boost_overrides or [],
+            "synergy_alpha": synergy_alpha,
         },
         timeout=120,
     )
@@ -136,10 +142,30 @@ with tab_deck:
                 if _boost_overrides:
                     st.caption(f"Score boosts active: {', '.join(_boost_overrides)}")
 
+    # ── Advanced options ───────────────────────────────────────────────────────
+    _synergy_alpha = 0.4
+    if commander:
+        with st.expander("Advanced options", expanded=False):
+            _synergy_alpha = st.slider(
+                "Synergy alpha (α)",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.4,
+                step=0.05,
+                help=(
+                    "Blend weight between model score and intra-deck synergy score. "
+                    "0.0 = model-only (original behaviour), "
+                    "1.0 = synergy-only, "
+                    "0.4 = recommended default (40% synergy, 60% model)."
+                ),
+            )
+
     if commander and st.button("Generate deck", type="primary"):
         with st.spinner("Generating 99-card deck…"):
             try:
-                deck = generate_deck(str(commander["oracle_id"]), "latest", _boost_overrides)
+                deck = generate_deck(
+                    str(commander["oracle_id"]), "latest", _boost_overrides, _synergy_alpha
+                )
                 st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
                 st.markdown(f"**Commander:** {deck['commander']['name']}")
 
