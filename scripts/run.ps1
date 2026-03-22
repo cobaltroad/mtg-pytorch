@@ -31,6 +31,10 @@ param(
     [bool]$SynergyOnly = $true,
     [int]$SynBatchSize = 256,
 
+    # Training path: cooccurrence (default) or compositional (see issue #71).
+    [ValidateSet('cooccurrence', 'compositional')]
+    [string]$TrainingPath = 'cooccurrence',
+
     # Phase 4 synergy-guided training weights
     [int]$SynPerEpoch = 1000,
     [double]$ComboWeight = 3.0,
@@ -174,16 +178,17 @@ function Assert-Prerequisites {
         # Mirror the default-resume logic from the train block
         $resolvedResume = if ($null -ne $resume) { [bool]$resume } else { $true }
         if ($resolvedResume) {
-            $ckptMap = @{ 3 = 'phase2_best.pt'; 4 = 'phase3_best.pt' }
+            $pfx = if ($TrainingPath -eq 'compositional') { 'comp_phase' } else { 'phase' }
+            $ckptMap = @{ 3 = "${pfx}2_best.pt"; 4 = "${pfx}3_best.pt" }
             $needed  = $ckptMap[$phase]
             if ($needed) {
-                Write-Host -NoNewline "  Checkpoint $needed      "
+                Write-Host -NoNewline "  Checkpoint $needed"
                 if (Test-Path (Join-Path $checkpointsDir $needed)) {
                     Write-Host "[found]" -ForegroundColor Green
                 } else {
                     Write-Host "[missing - will cold-start]" -ForegroundColor Yellow
                     Write-Host "    Expected: $checkpointsDir\$needed" -ForegroundColor Yellow
-                    Write-Host "    Use -Resume:`$false to suppress this warning." -ForegroundColor Yellow
+                    Write-Host "    Use -Resume:$false to suppress this warning." -ForegroundColor Yellow
                 }
             }
         }
@@ -239,6 +244,8 @@ if ($Mode -eq 'train') {
     if ($Resume) {
         $cmd += '--resume'
     }
+
+    $cmd += @('--training-path', $TrainingPath)
 
     if ($Dataset) {
         $cmd += @('--dataset', $Dataset)
