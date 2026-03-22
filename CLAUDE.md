@@ -35,7 +35,7 @@ mtg-pytorch/
 |-----------|----------------------------------------------|----------------------------|
 | `db`      | pgvector/pgvector:pg16                       | internal only              |
 | `api`     | FastAPI REST API                             | `$API_HOST`                |
-| `ui`      | Streamlit deck builder                       | `$UI_HOST`                 |
+| `ui`      | Streamlit deck builder + generated deck history | `$UI_HOST`              |
 | `jupyter` | JupyterLab for research and inference        | `$JUPYTER_HOST`            |
 | `ingest`  | One-shot MTGJSON → DB pipeline               | internal only              |
 
@@ -456,6 +456,37 @@ output.
 signal, not memorisation of deck orderings.  Freezing the encoder keeps Phase 3
 representations intact; the decoder learns to sequence within that fixed embedding
 space.
+
+---
+
+## UI tabs
+
+The Streamlit UI (`services/ui/app.py`) has two tabs:
+
+| Tab | Purpose |
+|-----|---------|
+| **Deck Builder** | Search for a commander, run analysis, generate a deck.  On completion shows a progress-complete notice and directs the user to Generated Decks. |
+| **Generated Decks** | Browse and inspect all previously generated decks.  Auto-selects the most recently generated deck when navigating from the builder. |
+
+The `app.py` is **baked into the Docker image** — changes require a rebuild:
+
+```bash
+docker compose build ui && docker compose up -d ui
+```
+
+### Generated deck persistence
+
+Completed decks are saved as timestamped JSON files under `DECK_SAVE_DIR`
+(default `/app/generated_decks` inside the API container, backed by the
+`generated_decks` Docker volume).  Two API endpoints expose this history:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /decks/generated` | List saved decks (newest first): filename, commander, checkpoint, card count |
+| `GET /decks/generated/{filename}` | Fetch full deck JSON by filename |
+
+The job result for `GET /decks/jobs/{job_id}` includes a `deck_filename` field
+once the job is complete, so the UI can deep-link directly to the saved file.
 
 ---
 
