@@ -38,6 +38,7 @@ def score_evasion_enablers(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
     signals: DeckSignals,
+    tags: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, float]]:
     """Boost any card that grants evasion when the deck wants to attack.
 
@@ -53,8 +54,12 @@ def score_evasion_enablers(
         ot = oracle_texts.get(cid, "")
         if _EVASION_RE.search(ot):
             multiplier = EVASION_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("evasion:unblockable")
             if signals.tribal_types and _SMALL_EVASION_RE.search(ot):
                 multiplier *= SMALL_EVASION_TRIBAL_BONUS
+                if tags is not None:
+                    tags.setdefault(cid, []).append("evasion:small_creature")
             sc = sc * multiplier
         result.append((cid, sc))
     return result

@@ -40,6 +40,7 @@ def score_removal(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
     signals: DeckSignals,  # noqa: ARG001 — reserved for future signal-gating
+    tags: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, float]]:
     """Boost cards that answer threats, regardless of card type.
 
@@ -52,7 +53,11 @@ def score_removal(
         ot = oracle_texts.get(cid, "")
         if _HARD_REMOVAL_RE.search(ot):
             sc = sc * HARD_REMOVAL_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("removal:hard")
         elif _SOFT_REMOVAL_RE.search(ot):
             sc = sc * SOFT_REMOVAL_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("removal:soft")
         result.append((cid, sc))
     return result

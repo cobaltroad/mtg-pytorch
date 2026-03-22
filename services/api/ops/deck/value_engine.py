@@ -32,6 +32,7 @@ def score_value_engine(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
     signals: DeckSignals,  # noqa: ARG001 — reserved for future signal-gating
+    tags: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, float]]:
     """Boost cards that generate card advantage, regardless of card type.
 
@@ -42,9 +43,15 @@ def score_value_engine(
         ot = oracle_texts.get(cid, "")
         if _TUTOR_RE.search(ot):
             sc = sc * TUTOR_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("value:tutor")
         elif _DRAW_RE.search(ot) and not _LOOT_RE.search(ot):
             sc = sc * DRAW_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("value:draw")
         elif _LOOT_RE.search(ot):
             sc = sc * LOOT_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("value:loot")
         result.append((cid, sc))
     return result

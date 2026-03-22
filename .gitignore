@@ -17,3 +17,4 @@ ingest_cache/
 checkpoints/
 *.dump
 *.tar.gz
+services/api/generated_decks/

@@ -42,6 +42,7 @@ def score_mana_producers(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
     signals: DeckSignals,
+    tags: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, float]]:
     """Boost any card with a mana-producing ability when the commander needs them.
 
@@ -50,16 +51,21 @@ def score_mana_producers(
     """
     if "mana_producers" not in signals.active_boosts:
         return scored
-    return [
-        (cid, sc * MANA_PRODUCER_BOOST if _MANA_ADD_RE.search(oracle_texts.get(cid, "")) else sc)
-        for cid, sc in scored
-    ]
+    result = []
+    for cid, sc in scored:
+        if _MANA_ADD_RE.search(oracle_texts.get(cid, "")):
+            sc = sc * MANA_PRODUCER_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("ramp:mana_producer")
+        result.append((cid, sc))
+    return result
 
 
 def score_land_mana_quality(
     nonbasic_scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
     signals: DeckSignals,
+    tags: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, float]]:
     """Penalise non-basic lands that produce no mana in the commander's colors.
 
@@ -69,14 +75,14 @@ def score_land_mana_quality(
     """
     if not signals.real_colors:
         return nonbasic_scored
-    return [
-        (
-            cid,
-            sc if produces_commander_color(oracle_texts.get(cid, ""), signals.real_colors)
-            else sc * COLORLESS_LAND_PENALTY,
-        )
-        for cid, sc in nonbasic_scored
-    ]
+    result = []
+    for cid, sc in nonbasic_scored:
+        if not produces_commander_color(oracle_texts.get(cid, ""), signals.real_colors):
+            sc = sc * COLORLESS_LAND_PENALTY
+            if tags is not None:
+                tags.setdefault(cid, []).append("land:colorless_penalty")
+        result.append((cid, sc))
+    return result
 
 
 def select_ramp(
@@ -84,6 +90,7 @@ def select_ramp(
     ramp_ids: frozenset[str],
     guaranteed_ramp: dict[str, str],
     ramp_target: int,
+    tags: dict[str, list[str]] | None = None,
 ) -> tuple[list[tuple[str, float]], set[str]]:
     """Select ramp cards, force-including Sol Ring and Arcane Signet first.
 
@@ -92,12 +99,13 @@ def select_ramp(
     """
     score_lookup = {cid: sc for cid, sc in spell_scored}
 
-    selected: list[tuple[str, float]] = [
-        (cid, score_lookup.get(cid, 0.0))
-        for cid in guaranteed_ramp.values()
-    ]
-    preselected = {cid for cid, _ in selected}
+    selected: list[tuple[str, float]] = []
+    for cid in guaranteed_ramp.values():
+        selected.append((cid, score_lookup.get(cid, 0.0)))
+        if tags is not None:
+            tags.setdefault(cid, []).append("ramp:guaranteed")
 
+    preselected = {cid for cid, _ in selected}
     candidates = [
         (cid, sc) for cid, sc in spell_scored
         if cid in ramp_ids and cid not in preselected

@@ -220,14 +220,29 @@ class ComboPackageOut(BaseModel):
     boost_applied: bool = False
 
 
+class DeckCardOut(CardOut):
+    count: int = 1
+    is_ramp: bool = False
+    roles: list[dict] = []
+    score_tags: list[str] = []
+
+
+class DeckSignalsOut(BaseModel):
+    wants_attack: bool = False
+    tribal_types: list[str] = []
+    real_colors: list[str] = []
+    active_boosts: list[str] = []
+
+
 class DeckOut(BaseModel):
     commander: CardOut
-    cards: list[CardOut]
+    cards: list[DeckCardOut]
     scores: list[float]
     checkpoint: str
     context_cards: list[str] = []
     proxy_context: bool = False
     combo_packages_triggered: list[ComboPackageOut] = []
+    deck_signals: DeckSignalsOut = DeckSignalsOut()
 
 
 def _save_deck(result: dict) -> None:

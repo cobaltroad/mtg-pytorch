@@ -261,33 +261,33 @@ async def generate(
                     # Applied to all candidates before the land/spell split.
                     # Each scorer is card-type-agnostic — it boosts whatever
                     # serves the described deckbuilding function.
-                    scored = score_mana_producers(scored, oracle_texts, signals)
-                    scored = score_removal(scored, oracle_texts, signals)
-                    scored = score_value_engine(scored, oracle_texts, signals)
-                    scored = score_evasion_enablers(scored, oracle_texts, signals)
+                    score_tags: dict[str, list[str]] = {}
+
+                    scored = score_mana_producers(scored, oracle_texts, signals, score_tags)
+                    scored = score_removal(scored, oracle_texts, signals, score_tags)
+                    scored = score_value_engine(scored, oracle_texts, signals, score_tags)
+                    scored = score_evasion_enablers(scored, oracle_texts, signals, score_tags)
 
                     # Commander-value boost (inline: Fierce Guardianship, etc.)
                     if "commander_value" in signals.active_boosts:
-                        scored = [
-                            (cid, sc * _COMMANDER_VALUE_BOOST)
-                            if (_COMMANDER_VALUE_RE.search(oracle_texts.get(cid, ""))
-                                or _LEGEND_MANA_RE.search(oracle_texts.get(cid, "")))
-                            else (cid, sc)
-                            for cid, sc in scored
-                        ]
+                        new_scored = []
+                        for cid, sc in scored:
+                            ot = oracle_texts.get(cid, "")
+                            if _COMMANDER_VALUE_RE.search(ot) or _LEGEND_MANA_RE.search(ot):
+                                sc = sc * _COMMANDER_VALUE_BOOST
+                                score_tags.setdefault(cid, []).append("commander_value")
+                            new_scored.append((cid, sc))
+                        scored = new_scored
 
                     # ── Tribal boost ──────────────────────────────────────────
                     if cmd_tribal_types:
-                        scored = [
-                            (
-                                cid,
-                                sc * TRIBAL_BOOST
-                                if _card_subtypes(type_lines.get(cid, "")) & cmd_tribal_types
-                                else sc,
-                            )
-                            for cid, sc in scored
-                        ]
-                        scored.sort(key=lambda x: x[1], reverse=True)
+                        new_scored = []
+                        for cid, sc in scored:
+                            if _card_subtypes(type_lines.get(cid, "")) & cmd_tribal_types:
+                                sc = sc * TRIBAL_BOOST
+                                score_tags.setdefault(cid, []).append("tribal")
+                            new_scored.append((cid, sc))
+                        scored = sorted(new_scored, key=lambda x: x[1], reverse=True)
 
                     # ── Combo package boost ───────────────────────────────────
                     triggered_combos: list[dict] = []
@@ -310,14 +310,16 @@ async def generate(
                     ]
 
                     # ── Land quality scoring ──────────────────────────────────
-                    # Colorless-mana penalty and evasion-land synergy run after
-                    # the split since they're land-specific adjustments.
-                    nonbasic_scored = score_land_mana_quality(nonbasic_scored, oracle_texts, signals)
+                    # Colorless-mana penalty runs after the split since it's
+                    # land-specific.
+                    nonbasic_scored = score_land_mana_quality(
+                        nonbasic_scored, oracle_texts, signals, score_tags
+                    )
                     nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 
                     # ── Ramp selection ────────────────────────────────────────
                     selected_ramp, selected_ramp_ids = select_ramp(
-                        spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET
+                        spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
                     )
 
                     # ── Mana curve enforcement ────────────────────────────────
@@ -444,6 +446,7 @@ async def generate(
                                 "oracle_text": r[4], "color_identity": r[5] or [],
                                 "mana_cost": r[6], "cmc": r[7], "count": 1,
                                 "is_ramp": cid in selected_ramp_ids,
+                                "score_tags": score_tags.get(cid, []),
                             })
                             scores.append(float(sc))
 
@@ -454,6 +457,7 @@ async def generate(
                                 "oracle_id": r[1], "name": r[2], "type_line": r[3],
                                 "oracle_text": r[4], "color_identity": r[5] or [],
                                 "mana_cost": r[6], "cmc": r[7], "count": 1,
+                                "score_tags": score_tags.get(cid, []),
                             })
                             scores.append(float(sc))
 
@@ -528,6 +532,12 @@ async def generate(
                         "combo_packages_triggered": triggered_combos,
                         "synergy_density": round(synergy_density, 4),
                         "synergy_baseline": round(synergy_baseline, 4),
+                        "deck_signals": {
+                            "wants_attack": signals.wants_attack,
+                            "tribal_types": sorted(signals.tribal_types),
+                            "real_colors": sorted(signals.real_colors),
+                            "active_boosts": sorted(signals.active_boosts),
+                        },
                     }
 
     except Exception as exc:

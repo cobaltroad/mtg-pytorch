@@ -188,6 +188,18 @@ with tab_deck:
                         "The model is flying blind — results will be poor."
                     )
 
+                # ── Deck signals ─────────────────────────────────────────────
+                dsig = deck.get("deck_signals", {})
+                if dsig:
+                    with st.expander("Deck signals (scoring inputs)", expanded=False):
+                        c1, c2 = st.columns(2)
+                        c1.markdown(f"**Wants attack:** {'✅' if dsig.get('wants_attack') else '❌'}")
+                        tribal = dsig.get("tribal_types", [])
+                        c1.markdown(f"**Tribal types:** {', '.join(tribal) if tribal else '—'}")
+                        c2.markdown(f"**Colors:** {' '.join(dsig.get('real_colors', [])) or 'colorless'}")
+                        boosts = dsig.get("active_boosts", [])
+                        c2.markdown(f"**Active boosts:** {', '.join(boosts) if boosts else '—'}")
+
                 # ── Role breakdown ────────────────────────────────────────────
                 archetype = deck.get("archetype", "")
                 win_conditions = deck.get("win_conditions", [])
@@ -259,6 +271,7 @@ with tab_deck:
                             r["effect_class"] for r in c.get("roles", [])
                             if r.get("effect_class")
                         ) or "—",
+                        "score_tags": " | ".join(c.get("score_tags", [])) or "—",
                         "score": round(s, 4),
                     }
                     for c, s in zip(deck["cards"], deck["scores"])
@@ -274,6 +287,7 @@ with tab_deck:
                         "count": st.column_config.NumberColumn("#", width="small"),
                         "roles": st.column_config.TextColumn("roles", width="medium"),
                         "effects": st.column_config.TextColumn("effect tags", width="medium"),
+                        "score_tags": st.column_config.TextColumn("score boosts", width="medium"),
                         "score": st.column_config.NumberColumn("Score", format="%.4f"),
                     },
                 )
