@@ -29,10 +29,11 @@ _COLOR_SYMBOL_RE = re.compile(r"\{([WUBRG])\}")
 # "Any color" phrasing: City of Brass, Mana Confluence, Command Tower, etc.
 _ADD_ANY_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,40}any color", re.I)
 
-# Type-restricted mana: "Spend this mana only to cast a Ninja or Turtle spell"
-_SPEND_ONLY_RE = re.compile(
-    r"[Ss]pend this mana only to cast (?:a |an )?(\w+)(?: or (\w+))? spell", re.I
-)
+# Type-restricted mana — detect presence and capture everything up to next period
+_SPEND_ONLY_RE = re.compile(r"[Ss]pend this mana only to cast ([^.]+)", re.I)
+
+# Capitalised words likely to be creature type names within a restriction clause
+_TYPE_WORD_RE = re.compile(r"\b[A-Z][a-z]+")
 
 MANA_PRODUCER_BOOST = 1.35
 COLORLESS_LAND_PENALTY = 0.25
@@ -42,13 +43,18 @@ DUAL_LAND_BOOST = 1.6
 def _type_restricted_mana_is_useful(
     oracle_text: str, deck_creature_types: frozenset[str]
 ) -> bool:
-    """Return False if mana is restricted to creature types not present in the deck."""
+    """Return False if mana is restricted to creature types not present in the deck.
+
+    Captures the full restriction clause to handle multi-word types (Time Lord),
+    adjective-qualified types (Dragon creature), and comma-separated lists
+    (Cleric, Rogue, Warrior, or Wizard).
+    """
     m = _SPEND_ONLY_RE.search(oracle_text)
     if not m:
         return True
-    restricted = {g.lower() for g in m.groups() if g}
+    clause_types = {w.lower() for w in _TYPE_WORD_RE.findall(m.group(1))}
     deck_lower = {t.lower() for t in deck_creature_types}
-    return bool(restricted & deck_lower)
+    return bool(clause_types & deck_lower)
 
 
 def _colors_produced(oracle_text: str) -> frozenset[str]:
