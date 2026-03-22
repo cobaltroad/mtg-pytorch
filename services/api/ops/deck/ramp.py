@@ -21,7 +21,8 @@ _MANA_ADD_RE = re.compile(r"\{[tT]\}\s*:\s*[Aa]dd|\badd \{", re.I)
 # Pure tap mana ability: cost is exactly {T}: with no other costs.
 # Captures everything after "Add" up to end of sentence/line.
 # Excludes abilities like "{T}, Pay {E}:", "{1}, {T}:", "{T}, Sacrifice ...:".
-_PURE_TAP_ADD_RE = re.compile(r"^\{[Tt]\}\s*:\s*Add([^\n.]*)", re.M)
+# Optional leading "(" handles shock land format: ({T}: Add {B} or {G}.)
+_PURE_TAP_ADD_RE = re.compile(r"^\(?\{[Tt]\}\s*:\s*Add([^\n.]*)", re.M)
 
 # Any colored mana symbol — applied inside a captured Add clause
 _COLOR_SYMBOL_RE = re.compile(r"\{([WUBRG])\}")
@@ -37,6 +38,14 @@ _TYPE_WORD_RE = re.compile(r"\b[A-Z][a-z]+")
 
 # Unconditionally enters tapped — "unless …" and "If you don't …" variants are excluded
 _UNCONDITIONAL_TAPPED_RE = re.compile(r"^This land enters tapped\.", re.M)
+
+# Conditional self-sacrifice based on permanent type (Glimmervoid, Thran Quarry, etc.)
+# Captures the permanent type the deck must control to keep the land alive.
+_CONDITIONAL_SACRIFICE_RE = re.compile(
+    r"if you (?:control no|don't control a) (\w+),? sacrifice this land", re.I
+)
+# Permanent types the deck can reasonably rely on having (don't penalise these)
+_RELIABLE_PERMANENT_TYPES = frozenset({"creature", "creatures", "land", "lands"})
 
 MANA_PRODUCER_BOOST = 1.35
 COLORLESS_LAND_PENALTY = 0.25
@@ -172,6 +181,11 @@ def score_land_mana_quality(
             sc = sc * TAPPED_LAND_PENALTY
             if tags is not None:
                 tags.setdefault(cid, []).append("land:tapped_penalty")
+        m = _CONDITIONAL_SACRIFICE_RE.search(ot)
+        if m and m.group(1).lower() not in _RELIABLE_PERMANENT_TYPES:
+            sc = sc * COLORLESS_LAND_PENALTY
+            if tags is not None:
+                tags.setdefault(cid, []).append("land:colorless_penalty")
         result.append((cid, sc))
     return result
 
