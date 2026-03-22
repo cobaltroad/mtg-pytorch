@@ -37,6 +37,9 @@ _ramp_cache: dict[str, tuple[frozenset, dict]] = {}         # keyed by db_url
 _land_staple_cache: dict[str, dict[str, str]] = {}          # keyed by db_url
 _legal_ids_cache: dict[str, frozenset[str]] = {}            # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
+# Sparse adjacency dict: {card_id: {neighbour_id: weight}}.
+# At ~100k edges × 8 bytes ≈ 800 KB — safe to keep in memory.
+_synergy_adj_cache: dict[str, dict[str, dict[str, float]]] = {}  # keyed by db_url
 
 
 def _sync_db_url(db_url: str) -> str:
@@ -293,6 +296,90 @@ def get_land_staple_ids(db_url: str) -> dict[str, str]:
     result: dict[str, str] = {canonical: card_id for canonical, card_id in rows}
     log.info("Loaded %d land staple IDs", len(result))
     _land_staple_cache[db_url] = result
+    return result
+
+
+def get_synergy_adjacency(
+    db_url: str,
+    edge_type: str = "ability_trigger",
+) -> dict[str, dict[str, float]]:
+    """Pre-load synergy edges into a sparse adjacency dict.
+
+    Returns ``{card_id: {neighbour_id: weight}}`` for all edges of the given
+    ``edge_type`` (default: ``ability_trigger``).  The result is bidirectional:
+    if edge (A → B) has weight w, then both ``adj[A][B]`` and ``adj[B][A]``
+    are set to w so that ``mean_synergy_to_deck`` can look up either direction.
+
+    The dict is cached at the module level keyed by ``db_url``.  At 100k edges
+    the in-memory footprint is ≈ 800 KB — safe to keep resident.
+    """
+    cache_key = f"{db_url}::{edge_type}"
+    if cache_key in _synergy_adj_cache:
+        return _synergy_adj_cache[cache_key]
+
+    log.info("Loading synergy adjacency (edge_type=%s)…", edge_type)
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT card_a::text, card_b::text, score
+                FROM synergy_edges
+                WHERE score_type = %s
+                """,
+                (edge_type,),
+            )
+            rows = cur.fetchall()
+
+    adj: dict[str, dict[str, float]] = {}
+    for card_a, card_b, score in rows:
+        weight = float(score)
+        adj.setdefault(card_a, {})[card_b] = weight
+        adj.setdefault(card_b, {})[card_a] = weight
+
+    log.info(
+        "Loaded synergy adjacency: %d edges → %d unique cards",
+        len(rows), len(adj),
+    )
+    _synergy_adj_cache[cache_key] = adj
+    return adj
+
+
+def mean_synergy_to_deck(
+    candidate_ids: list[str],
+    deck_ids: list[str],
+    adj: dict[str, dict[str, float]],
+) -> np.ndarray:
+    """Compute mean synergy score from each candidate to the current deck.
+
+    For each candidate c and each card d already in the deck, looks up
+    ``adj[c].get(d, 0.0)``, then averages across all deck cards.  If the
+    deck is empty, returns a zero array.
+
+    Parameters
+    ----------
+    candidate_ids:
+        Ordered list of candidate card IDs to score.
+    deck_ids:
+        Card IDs already selected into the deck (not including lands).
+    adj:
+        Sparse adjacency dict from ``get_synergy_adjacency()``.
+
+    Returns
+    -------
+    np.ndarray of shape (len(candidate_ids),), dtype float32.
+    """
+    n = len(candidate_ids)
+    result = np.zeros(n, dtype=np.float32)
+    if not deck_ids:
+        return result
+    deck_set = deck_ids  # list is fine; inner loop is over adj[c] dict
+    n_deck = len(deck_set)
+    for i, cid in enumerate(candidate_ids):
+        neighbours = adj.get(cid)
+        if not neighbours:
+            continue
+        total = sum(neighbours.get(d, 0.0) for d in deck_set)
+        result[i] = total / n_deck
     return result
 
 

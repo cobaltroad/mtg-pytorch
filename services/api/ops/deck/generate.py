@@ -13,6 +13,8 @@ import os
 import re
 from uuid import UUID
 
+import numpy as np
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,13 +124,20 @@ async def generate(
     boost_overrides: list[str] | None = None,
     combo_boost: float = 0.3,
     partner_oracle_id: UUID | None = None,
+    synergy_alpha: float = 0.4,
 ) -> dict | None:
     """Generate a 99-card Commander deck.
 
-    Runs model inference to score the card pool, then applies behavioural
-    scoring adjustments (ramp, evasion, removal, card draw) before
-    enforcing land budget, mana curve, and guaranteed inclusions.
-    Falls back to synergy stub if no model checkpoint is available.
+    Runs model inference to score the card pool, applies behavioural scoring
+    adjustments (ramp, evasion, removal, card draw), then selects spells via
+    a greedy iterative loop that blends model scores with intra-deck synergy:
+
+        final_score(c, deck) = (1 - α) × model_score(c) + α × mean_synergy(c → deck)
+
+    ``synergy_alpha=0.0`` exactly reproduces the previous single-pass behaviour.
+    ``synergy_alpha=0.4`` (default) weights 40% synergy and 60% model score.
+
+    Falls back to the synergy stub if no model checkpoint is available.
     """
     result = await db.execute(
         text("""
@@ -220,7 +229,7 @@ async def generate(
                     }
 
                     # ── Lookup tables ─────────────────────────────────────────
-                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp), land_staples = \
+                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp), land_staples, synergy_adj = \
                         await asyncio.gather(
                             asyncio.gather(
                                 loop.run_in_executor(None, inference.get_type_lines, db_url),
@@ -228,6 +237,7 @@ async def generate(
                             ),
                             loop.run_in_executor(None, inference.get_ramp_info, db_url),
                             loop.run_in_executor(None, inference.get_land_staple_ids, db_url),
+                            loop.run_in_executor(None, inference.get_synergy_adjacency, db_url),
                         )
 
                     def _is_land(cid: str) -> bool:
@@ -328,34 +338,128 @@ async def generate(
                         spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
                     )
 
-                    # ── Mana curve enforcement ────────────────────────────────
-                    ramp_bucket_fill: dict[int, int] = {}
-                    for cid, _ in selected_ramp:
-                        b = _curve_bucket(cmc_map.get(cid, 0.0))
-                        ramp_bucket_fill[b] = ramp_bucket_fill.get(b, 0) + 1
+                    # ── Iterative greedy spell selection ──────────────────────
+                    # Seats remaining after ramp slots.
+                    remaining_slots = SPELL_SLOTS - len(selected_ramp)
 
-                    non_ramp_scored = [
-                        (cid, sc) for cid, sc in spell_scored
-                        if cid not in ramp_ids
-                    ]
-                    buckets: list[list[tuple[str, float]]] = [[] for _ in CURVE_BUCKETS]
-                    for cid, sc in non_ramp_scored:
-                        b = _curve_bucket(cmc_map.get(cid, 0.0))
-                        buckets[b].append((cid, sc))
+                    if synergy_alpha == 0.0:
+                        # Fast path: single-pass CMC bucket enforcement (original behaviour).
+                        ramp_bucket_fill: dict[int, int] = {}
+                        for cid, _ in selected_ramp:
+                            b = _curve_bucket(cmc_map.get(cid, 0.0))
+                            ramp_bucket_fill[b] = ramp_bucket_fill.get(b, 0) + 1
 
-                    selected_non_ramp: list[tuple[str, float]] = []
-                    overflow: list[tuple[str, float]] = []
-                    deficit = 0
-                    for b, (_, target) in enumerate(CURVE_BUCKETS):
-                        adjusted = max(0, target - ramp_bucket_fill.get(b, 0))
-                        selected_non_ramp.extend(buckets[b][:adjusted])
-                        overflow.extend(buckets[b][adjusted:])
-                        if len(buckets[b]) < adjusted:
-                            deficit += adjusted - len(buckets[b])
+                        non_ramp_scored = [
+                            (cid, sc) for cid, sc in spell_scored
+                            if cid not in ramp_ids
+                        ]
+                        buckets: list[list[tuple[str, float]]] = [[] for _ in CURVE_BUCKETS]
+                        for cid, sc in non_ramp_scored:
+                            b = _curve_bucket(cmc_map.get(cid, 0.0))
+                            buckets[b].append((cid, sc))
 
-                    overflow.sort(key=lambda x: x[1], reverse=True)
-                    selected_non_ramp.extend(overflow[:deficit])
-                    selected_spells = (selected_ramp + selected_non_ramp)[:SPELL_SLOTS]
+                        selected_non_ramp: list[tuple[str, float]] = []
+                        overflow: list[tuple[str, float]] = []
+                        deficit = 0
+                        for b, (_, target) in enumerate(CURVE_BUCKETS):
+                            adjusted = max(0, target - ramp_bucket_fill.get(b, 0))
+                            selected_non_ramp.extend(buckets[b][:adjusted])
+                            overflow.extend(buckets[b][adjusted:])
+                            if len(buckets[b]) < adjusted:
+                                deficit += adjusted - len(buckets[b])
+
+                        overflow.sort(key=lambda x: x[1], reverse=True)
+                        selected_non_ramp.extend(overflow[:deficit])
+                        selected_spells = (selected_ramp + selected_non_ramp)[:SPELL_SLOTS]
+                    else:
+                        # Synergy-ensemble iterative selection loop.
+                        # Seed the deck with guaranteed ramp cards.
+                        deck_so_far: list[str] = [cid for cid, _ in selected_ramp]
+
+                        # Build a normalised model-score lookup over non-ramp candidates.
+                        non_ramp_candidates: list[tuple[str, float]] = [
+                            (cid, sc) for cid, sc in spell_scored
+                            if cid not in selected_ramp_ids
+                        ]
+                        if non_ramp_candidates:
+                            raw_scores = np.array(
+                                [sc for _, sc in non_ramp_candidates], dtype=np.float32
+                            )
+                            sc_min, sc_max = raw_scores.min(), raw_scores.max()
+                            sc_range = sc_max - sc_min if sc_max > sc_min else 1.0
+                            norm_model_scores = (raw_scores - sc_min) / sc_range
+                        else:
+                            norm_model_scores = np.array([], dtype=np.float32)
+
+                        cand_ids: list[str] = [cid for cid, _ in non_ramp_candidates]
+                        cand_set: set[str] = set(cand_ids)
+
+                        # Track CMC bucket fills (seeded from ramp already selected).
+                        bucket_fill: dict[int, int] = {}
+                        for cid, _ in selected_ramp:
+                            b = _curve_bucket(cmc_map.get(cid, 0.0))
+                            bucket_fill[b] = bucket_fill.get(b, 0) + 1
+
+                        # Build index: cand_ids → position in norm_model_scores array.
+                        idx_map: dict[str, int] = {cid: i for i, cid in enumerate(cand_ids)}
+
+                        # Soft CMC penalty: candidates in full buckets score ×0.1.
+                        _BUCKET_TARGETS = {b: t for b, (_, t) in enumerate(CURVE_BUCKETS)}
+
+                        def _cmc_penalty(cid: str) -> float:
+                            b = _curve_bucket(cmc_map.get(cid, 0.0))
+                            cap = _BUCKET_TARGETS.get(b, 6)
+                            ramp_fill = sum(
+                                1 for rc, _ in selected_ramp
+                                if _curve_bucket(cmc_map.get(rc, 0.0)) == b
+                            )
+                            effective_fill = bucket_fill.get(b, 0) + ramp_fill
+                            return 0.1 if effective_fill >= cap else 1.0
+
+                        selected_non_ramp_iter: list[tuple[str, float]] = []
+                        for _step in range(remaining_slots):
+                            if not cand_ids:
+                                break
+
+                            syn_scores = inference.mean_synergy_to_deck(
+                                cand_ids, deck_so_far, synergy_adj
+                            )
+                            # Normalise synergy scores to [0, 1].
+                            syn_min, syn_max = syn_scores.min(), syn_scores.max()
+                            syn_range = syn_max - syn_min if syn_max > syn_min else 1.0
+                            norm_syn = (syn_scores - syn_min) / syn_range
+
+                            # Retrieve model scores by position.
+                            positions = [idx_map[cid] for cid in cand_ids]
+                            model_s = norm_model_scores[positions]
+
+                            blended = (
+                                (1.0 - synergy_alpha) * model_s
+                                + synergy_alpha * norm_syn
+                            )
+
+                            # Apply soft CMC penalty.
+                            penalties = np.array(
+                                [_cmc_penalty(cid) for cid in cand_ids], dtype=np.float32
+                            )
+                            blended = blended * penalties
+
+                            best_local = int(np.argmax(blended))
+                            best_cid = cand_ids[best_local]
+                            best_score = float(blended[best_local])
+
+                            selected_non_ramp_iter.append((best_cid, best_score))
+                            deck_so_far.append(best_cid)
+
+                            # Update bucket fill.
+                            b = _curve_bucket(cmc_map.get(best_cid, 0.0))
+                            bucket_fill[b] = bucket_fill.get(b, 0) + 1
+
+                            # Remove selected card from candidates.
+                            cand_set.discard(best_cid)
+                            cand_ids = [c for c in cand_ids if c != best_cid]
+
+                        selected_spells = (selected_ramp + selected_non_ramp_iter)[:SPELL_SLOTS]
 
                     # ── Non-basic land selection ──────────────────────────────
                     nonbasic_score_map = {cid: sc for cid, sc in nonbasic_scored}

@@ -208,6 +208,7 @@ class DeckRequest(BaseModel):
     checkpoint: str = "latest"
     boost_overrides: list[str] = []
     combo_boost: float = 0.3
+    synergy_alpha: float = 0.4  # blend weight: 0.0 = model-only, 1.0 = synergy-only
 
 
 class ComboPackageOut(BaseModel):
@@ -271,6 +272,7 @@ async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
         boost_overrides=req.boost_overrides or None,
         combo_boost=req.combo_boost,
         partner_oracle_id=req.partner_oracle_id,
+        synergy_alpha=req.synergy_alpha,
     )
     if result is None:
         raise HTTPException(400, "Could not generate deck — commander not found or model unavailable")
