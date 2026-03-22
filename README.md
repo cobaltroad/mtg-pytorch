@@ -104,15 +104,14 @@ Final loss benchmark: >0.65 = barely learning, 0.55–0.60 = good,
 ### Phase 3 — Deck co-occurrence ranking
 
 **Loss:** Bayesian Personalised Ranking (BPR).
-**Data:** human-built Commander decklists imported from Moxfield and cardtrak,
-stored as (commander, card list) pairs.
+**Data:** ~171 human-built Commander decklists from Moxfield and cardtrak.
 **Triples:** (commander, positive card from a real deck, random negative card).
 **Goal:** the encoder learns that cards co-occurring with a given commander
 should score higher than random cards.
 
-More data consistently lowers loss: 94 decks → 0.54, 120 → 0.43, 278 → 0.39,
-344 → 0.28.  Importing more decklists is the primary lever for improving
-Phase 3 quality.
+Deck co-occurrence is a supplementary signal, not the primary one.  The stronger
+long-term direction is compositional reasoning from oracle text and ability
+interactions (Phases 1–2, synergy graph) — see #71.
 
 ### Phase 4 — Generative deck construction
 
