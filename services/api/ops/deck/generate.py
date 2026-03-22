@@ -20,9 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .signals import build_signals
 from .ramp import score_mana_producers, score_land_mana_quality, select_ramp
-from .evasion import score_evasion_enablers
-from .removal import score_removal
-from .value_engine import score_value_engine
+from .evasion import score_evasion_enablers, is_evasion_card, EVASION_BOOST
+from .removal import score_removal, is_removal_card, HARD_REMOVAL_BOOST
+from .value_engine import score_value_engine, is_value_card, DRAW_BOOST
+from .composition_targets import TARGETS as _COMPOSITION_TARGETS
 
 log = logging.getLogger(__name__)
 
@@ -125,6 +126,7 @@ async def generate(
     combo_boost: float = 0.3,
     partner_oracle_id: UUID | None = None,
     synergy_alpha: float = 0.4,
+    progress_cb=None,  # optional callable(fraction: float, message: str)
 ) -> dict | None:
     """Generate a 99-card Commander deck.
 
@@ -139,6 +141,15 @@ async def generate(
 
     Falls back to the synergy stub if no model checkpoint is available.
     """
+    def _progress(fraction: float, message: str) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(fraction, message)
+            except Exception:
+                pass
+
+    _progress(0.02, "Looking up commander…")
+
     result = await db.execute(
         text("""
             SELECT id, oracle_id, name, type_line, oracle_text, color_identity, mana_cost, cmc
@@ -176,9 +187,11 @@ async def generate(
         loop = asyncio.get_event_loop()
 
         ckpt_name = checkpoint if checkpoint != "latest" else "phase4_best"
+        _progress(0.05, "Loading model…")
         model = await loop.run_in_executor(None, inference.get_model, ckpt_name)
 
         if model is not None:
+            _progress(0.08, "Loading embeddings…")
             embeddings = await loop.run_in_executor(None, inference.get_embeddings, db_url)
 
             if embeddings and commander_id in embeddings:
@@ -208,6 +221,7 @@ async def generate(
                     None, inference.get_color_identities, db_url
                 )
 
+                _progress(0.12, "Scoring card pool…")
                 scored = await loop.run_in_executor(
                     None,
                     lambda: inference.score_cards(
@@ -270,9 +284,15 @@ async def generate(
                     score_tags: dict[str, list[str]] = {}
 
                     scored = score_mana_producers(scored, oracle_texts, signals, score_tags)
-                    scored = score_removal(scored, oracle_texts, signals, score_tags)
-                    scored = score_value_engine(scored, oracle_texts, signals, score_tags)
-                    scored = score_evasion_enablers(scored, oracle_texts, signals, score_tags)
+                    # Removal, draw/value, and evasion are applied upfront only
+                    # for the single-pass fast path (synergy_alpha == 0.0).
+                    # The iterative path (synergy_alpha > 0) handles them inside
+                    # the greedy loop with diminishing boosts so that the deck
+                    # stops favouring a category once its structural target is met.
+                    if synergy_alpha == 0.0:
+                        scored = score_removal(scored, oracle_texts, signals, score_tags)
+                        scored = score_value_engine(scored, oracle_texts, signals, score_tags)
+                        scored = score_evasion_enablers(scored, oracle_texts, signals, score_tags)
 
                     # Commander-value boost (inline: Fierce Guardianship, etc.)
                     if "commander_value" in signals.active_boosts:
@@ -334,6 +354,7 @@ async def generate(
                     nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 
                     # ── Ramp selection ────────────────────────────────────────
+                    _progress(0.22, "Selecting ramp…")
                     selected_ramp, selected_ramp_ids = select_ramp(
                         spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
                     )
@@ -376,20 +397,10 @@ async def generate(
                         # Seed the deck with guaranteed ramp cards.
                         deck_so_far: list[str] = [cid for cid, _ in selected_ramp]
 
-                        # Build a normalised model-score lookup over non-ramp candidates.
                         non_ramp_candidates: list[tuple[str, float]] = [
                             (cid, sc) for cid, sc in spell_scored
                             if cid not in selected_ramp_ids
                         ]
-                        if non_ramp_candidates:
-                            raw_scores = np.array(
-                                [sc for _, sc in non_ramp_candidates], dtype=np.float32
-                            )
-                            sc_min, sc_max = raw_scores.min(), raw_scores.max()
-                            sc_range = sc_max - sc_min if sc_max > sc_min else 1.0
-                            norm_model_scores = (raw_scores - sc_min) / sc_range
-                        else:
-                            norm_model_scores = np.array([], dtype=np.float32)
 
                         cand_ids: list[str] = [cid for cid, _ in non_ramp_candidates]
                         cand_set: set[str] = set(cand_ids)
@@ -400,8 +411,58 @@ async def generate(
                             b = _curve_bucket(cmc_map.get(cid, 0.0))
                             bucket_fill[b] = bucket_fill.get(b, 0) + 1
 
-                        # Build index: cand_ids → position in norm_model_scores array.
+                        # Build index: cand_ids → original position (stable across steps).
                         idx_map: dict[str, int] = {cid: i for i, cid in enumerate(cand_ids)}
+
+                        # ── Pre-encode candidates once (two-phase scoring) ────
+                        # z_cand_t is reused every step; only z_ctx changes.
+                        _progress(0.25, "Pre-encoding candidates…")
+                        if cand_ids:
+                            z_cmd_t, z_cand_t = await loop.run_in_executor(
+                                None,
+                                lambda: inference.encode_candidates(
+                                    commander_id, cand_ids, embeddings, model
+                                ),
+                            )
+                        else:
+                            z_cmd_t = z_cand_t = None
+
+                        # ── Iterative role boosts (issue #61) ────────────────
+                        # Pre-classify all candidates by structural role (once).
+                        # Arrays are indexed by the *original* position in cand_ids
+                        # (same invariant as idx_map) so they stay valid as
+                        # cand_ids shrinks each step.
+                        _ot = oracle_texts
+                        _role_rm = np.array(
+                            [is_removal_card(_ot.get(c, "")) for c in cand_ids],
+                            dtype=np.float32,
+                        )
+                        _role_dw = np.array(
+                            [is_value_card(_ot.get(c, "")) for c in cand_ids],
+                            dtype=np.float32,
+                        )
+                        _role_ev = np.array(
+                            [is_evasion_card(_ot.get(c, "")) for c in cand_ids],
+                            dtype=np.float32,
+                        )
+
+                        # Seed role counts from already-selected ramp cards.
+                        _rm_count = sum(
+                            1 for c, _ in selected_ramp
+                            if is_removal_card(oracle_texts.get(c, ""))
+                        )
+                        _dw_count = sum(
+                            1 for c, _ in selected_ramp
+                            if is_value_card(oracle_texts.get(c, ""))
+                        )
+                        _ev_count = sum(
+                            1 for c, _ in selected_ramp
+                            if is_evasion_card(oracle_texts.get(c, ""))
+                        )
+
+                        _tgt_rm = max(_COMPOSITION_TARGETS.get("removal", 8), 1)
+                        _tgt_dw = max(_COMPOSITION_TARGETS.get("draw",    8), 1)
+                        _tgt_ev = max(_COMPOSITION_TARGETS.get("evasion", 4), 1)
 
                         # Soft CMC penalty: candidates in full buckets score ×0.1.
                         _BUCKET_TARGETS = {b: t for b, (_, t) in enumerate(CURVE_BUCKETS)}
@@ -416,10 +477,19 @@ async def generate(
                             effective_fill = bucket_fill.get(b, 0) + ramp_fill
                             return 0.1 if effective_fill >= cap else 1.0
 
+                        # 0.30 → 0.85 across all spell-selection steps
+                        _LOOP_START = 0.30
+                        _LOOP_END   = 0.85
+
                         selected_non_ramp_iter: list[tuple[str, float]] = []
                         for _step in range(remaining_slots):
                             if not cand_ids:
                                 break
+
+                            _progress(
+                                _LOOP_START + (_step / remaining_slots) * (_LOOP_END - _LOOP_START),
+                                f"Selecting spell {_step + 1} of {remaining_slots}…",
+                            )
 
                             syn_scores = inference.mean_synergy_to_deck(
                                 cand_ids, deck_so_far, synergy_adj
@@ -429,14 +499,39 @@ async def generate(
                             syn_range = syn_max - syn_min if syn_max > syn_min else 1.0
                             norm_syn = (syn_scores - syn_min) / syn_range
 
-                            # Retrieve model scores by position.
+                            # Re-score with current deck context.
+                            # z_cand_t pre-encoded before the loop; only z_ctx changes.
                             positions = [idx_map[cid] for cid in cand_ids]
-                            model_s = norm_model_scores[positions]
+                            pos_arr = np.array(positions, dtype=np.intp)
+                            _raw = inference.rescore_with_context(
+                                z_cmd_t, z_cand_t, deck_so_far, embeddings, model
+                            )
+                            _raw_min, _raw_max = _raw.min(), _raw.max()
+                            _raw_range = _raw_max - _raw_min if _raw_max > _raw_min else 1.0
+                            model_s = ((_raw - _raw_min) / _raw_range)[pos_arr]
 
                             blended = (
                                 (1.0 - synergy_alpha) * model_s
                                 + synergy_alpha * norm_syn
                             )
+
+                            # Diminishing role boosts: boost_factor 1.0 → 0.0 as
+                            # each structural target fills.  Scores are normalised
+                            # to [0, 1] here, so boosts are additive (not × as in
+                            # the upfront scorers) to stay in a sensible range.
+                            _bf_rm = max(0.0, (_tgt_rm - _rm_count) / _tgt_rm)
+                            _bf_dw = max(0.0, (_tgt_dw - _dw_count) / _tgt_dw)
+                            _bf_ev = (
+                                max(0.0, (_tgt_ev - _ev_count) / _tgt_ev)
+                                if signals.wants_attack else 0.0
+                            )
+                            if _bf_rm or _bf_dw or _bf_ev:
+                                blended = (
+                                    blended
+                                    + _role_rm[pos_arr] * (HARD_REMOVAL_BOOST - 1.0) * _bf_rm
+                                    + _role_dw[pos_arr] * (DRAW_BOOST          - 1.0) * _bf_dw
+                                    + _role_ev[pos_arr] * (EVASION_BOOST        - 1.0) * _bf_ev
+                                )
 
                             # Apply soft CMC penalty.
                             penalties = np.array(
@@ -451,6 +546,18 @@ async def generate(
                             selected_non_ramp_iter.append((best_cid, best_score))
                             deck_so_far.append(best_cid)
 
+                            # Update role counts and score_tags for selected card.
+                            best_orig = idx_map[best_cid]
+                            if _role_rm[best_orig]:
+                                _rm_count += 1
+                                score_tags.setdefault(best_cid, []).append("removal:hard")
+                            if _role_dw[best_orig]:
+                                _dw_count += 1
+                                score_tags.setdefault(best_cid, []).append("value:draw")
+                            if _role_ev[best_orig]:
+                                _ev_count += 1
+                                score_tags.setdefault(best_cid, []).append("evasion:unblockable")
+
                             # Update bucket fill.
                             b = _curve_bucket(cmc_map.get(best_cid, 0.0))
                             bucket_fill[b] = bucket_fill.get(b, 0) + 1
@@ -462,6 +569,7 @@ async def generate(
                         selected_spells = (selected_ramp + selected_non_ramp_iter)[:SPELL_SLOTS]
 
                     # ── Non-basic land selection ──────────────────────────────
+                    _progress(0.86, "Selecting lands…")
                     nonbasic_score_map = {cid: sc for cid, sc in nonbasic_scored}
                     guaranteed_nb: list[tuple[str, float]] = []
                     for name in GUARANTEED_NONBASICS:
@@ -483,6 +591,7 @@ async def generate(
                     basic_needed = LAND_TARGET - len(selected_nonbasics)
 
                     # ── Fetch card metadata ───────────────────────────────────
+                    _progress(0.92, "Assembling deck…")
                     fetch_ids = (
                         [cid for cid, _ in selected_spells]
                         + [cid for cid, _ in selected_nonbasics]

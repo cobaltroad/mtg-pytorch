@@ -31,6 +31,12 @@ TUTOR_BOOST = 1.35
 LOOT_BOOST = 1.1
 
 
+def is_value_card(oracle_text: str) -> bool:
+    """Return True if the card generates card advantage (draw, tutor, or loot)."""
+    ot = _REMINDER_RE.sub("", oracle_text)
+    return bool(_TUTOR_RE.search(ot) or _DRAW_RE.search(ot) or _LOOT_RE.search(ot))
+
+
 def score_value_engine(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],

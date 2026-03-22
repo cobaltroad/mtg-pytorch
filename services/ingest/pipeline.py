@@ -928,6 +928,17 @@ def export_dataset_stage() -> None:
     export_dataset.main()
 
 
+async def composition_profile_stage() -> None:
+    """Rebuild /data/deck_composition_profile.json from the imported deck pool.
+
+    Always regenerates — call after importing new decklists or after a full
+    process run so the API's structural targets stay current.
+    """
+    import deck_composition_profile as dcp
+    log.info("Regenerating deck composition profile → %s", dcp.OUTPUT_FILE)
+    await dcp.main()
+
+
 async def download():
     """Download step: fetch card data + combos and load into DB.
 
@@ -950,6 +961,7 @@ async def process():
     await compute_commander_value_synergy()
     await compute_tribal_typeline_synergy()
     export_dataset_stage()
+    await composition_profile_stage()
 
 
 async def run_all():
@@ -968,12 +980,14 @@ if __name__ == "__main__":
             "embed_cards", "tag_abilities",
             "compute_synergy", "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
-            "export_dataset",
+            "export_dataset", "composition_profile",
         ],
         default=None,
         help=(
             "download: fetch MTGJSON + load cards + import combos. "
-            "process: embed + tag + synergy + export. "
+            "process: embed + tag + synergy + export + composition_profile. "
+            "composition_profile: rebuild deck_composition_profile.json "
+            "(run after importing new decklists). "
             "Omit to run both."
         ),
     )
@@ -1003,5 +1017,7 @@ if __name__ == "__main__":
         asyncio.run(compute_tribal_typeline_synergy())
     elif args.stage == "export_dataset":
         export_dataset_stage()
+    elif args.stage == "composition_profile":
+        asyncio.run(composition_profile_stage())
     else:
         asyncio.run(run_all())

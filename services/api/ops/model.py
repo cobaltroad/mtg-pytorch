@@ -46,6 +46,9 @@ class DeckConstructor(nn.Module):
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.scorer = nn.Linear(embed_dim, 1)
+        # Learnable query token used during Phase 4 training (not used at inference).
+        # Included here so state_dict keys match the trainer checkpoint.
+        self.query_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
     def forward(
         self,

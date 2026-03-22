@@ -380,6 +380,11 @@ async def main() -> None:
 
     log.info("Done — %d inserted, %d skipped, %d duplicates", ok, skipped, dupes)
 
+    if not DRY_RUN:
+        import deck_composition_profile as dcp
+        log.info("Regenerating deck composition profile → %s", dcp.OUTPUT_FILE)
+        await dcp.main()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -3,6 +3,7 @@
 import json as _json
 import os
 import re
+import time
 
 import httpx
 import pandas as pd
@@ -23,12 +24,13 @@ def search_cards(q: str) -> list[dict]:
     return r.json()
 
 
-def generate_deck(
+def submit_deck_job(
     oracle_id: str,
     checkpoint: str = "latest",
     boost_overrides: list[str] | None = None,
     synergy_alpha: float = 0.4,
-) -> dict:
+) -> str:
+    """Submit a generation job and return the job_id."""
     r = httpx.post(
         f"{API_URL}/decks/generate",
         json={
@@ -37,8 +39,15 @@ def generate_deck(
             "boost_overrides": boost_overrides or [],
             "synergy_alpha": synergy_alpha,
         },
-        timeout=120,
+        timeout=15,
     )
+    r.raise_for_status()
+    return r.json()["job_id"]
+
+
+def poll_job(job_id: str) -> dict:
+    """Fetch current job status."""
+    r = httpx.get(f"{API_URL}/decks/jobs/{job_id}", timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -54,6 +63,27 @@ def analyze_commander(oracle_id: str) -> dict | None:
         return None
 
 
+@st.cache_data(ttl=30)
+def list_generated_decks() -> list[dict]:
+    """List previously generated decks from the API (cached 30 s)."""
+    try:
+        r = httpx.get(f"{API_URL}/decks/generated", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=60)
+def get_generated_deck(filename: str) -> dict | None:
+    """Fetch a specific generated deck by filename (cached 60 s)."""
+    try:
+        r = httpx.get(f"{API_URL}/decks/generated/{filename}", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
 
 # ── UI constants ──────────────────────────────────────────────────────────────
 
@@ -61,9 +91,168 @@ _CONFIDENCE_ICONS = {"high": "✅", "medium": "⚠️", "low": "❓", "unknown":
 _GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}
 
 
+# ── Shared deck display ───────────────────────────────────────────────────────
+
+def render_deck(deck: dict) -> None:
+    """Render the full deck view. Accepts the deck result dict from the API."""
+    st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
+    st.markdown(f"**Commander:** {deck['commander']['name']}")
+
+    # ── Download buttons ──────────────────────────────────────────
+    _safe_name = re.sub(r"[^\w]", "_", deck['commander']['name'])
+    _dl_cols = st.columns(2)
+    _dl_cols[0].download_button(
+        "⬇ Download deck (JSON)",
+        data=_json.dumps(deck, indent=2, default=str),
+        file_name=f"{_safe_name}.json",
+        mime="application/json",
+    )
+    _deck_lines = [f"Commander\n1 {deck['commander']['name']}\n\nDeck"]
+    for _c in deck["cards"]:
+        _deck_lines.append(f"{_c.get('count', 1)} {_c['name']}")
+    _dl_cols[1].download_button(
+        "⬇ Download deck (text)",
+        data="\n".join(_deck_lines),
+        file_name=f"{_safe_name}.txt",
+        mime="text/plain",
+    )
+
+    # ── Context seed section ──────────────────────────────────────
+    context_cards = deck.get("context_cards", [])
+    is_proxy = deck.get("proxy_context", False)
+    if context_cards and not is_proxy:
+        with st.expander(f"Context seed ({len(context_cards)} archetype staples used to prime the decoder)"):
+            st.write(", ".join(context_cards))
+    elif context_cards and is_proxy:
+        with st.expander(
+            f"⚠️ Proxy context ({len(context_cards)} staples from similar commanders — "
+            "no training decks exist for this commander)",
+            expanded=True,
+        ):
+            st.info(
+                f"No decklists have been imported for **{deck['commander']['name']}**. "
+                "The decoder was seeded with staples from the most embedding-similar "
+                "commanders that *do* have training data. "
+                "Results will improve once you import decklists for this commander."
+            )
+            st.write(", ".join(context_cards))
+    else:
+        st.warning(
+            f"No training decks found for **{deck['commander']['name']}** "
+            f"and no similar commanders with training data were found. "
+            "The model is flying blind — results will be poor."
+        )
+
+    # ── Deck signals ─────────────────────────────────────────────
+    dsig = deck.get("deck_signals", {})
+    if dsig:
+        with st.expander("Deck signals (scoring inputs)", expanded=False):
+            c1, c2 = st.columns(2)
+            c1.markdown(f"**Wants attack:** {'✅' if dsig.get('wants_attack') else '❌'}")
+            tribal = dsig.get("tribal_types", [])
+            c1.markdown(f"**Tribal types:** {', '.join(tribal) if tribal else '—'}")
+            c2.markdown(f"**Colors:** {' '.join(dsig.get('real_colors', [])) or 'colorless'}")
+            boosts = dsig.get("active_boosts", [])
+            c2.markdown(f"**Active boosts:** {', '.join(boosts) if boosts else '—'}")
+
+    # ── Role breakdown ────────────────────────────────────────────
+    archetype = deck.get("archetype", "")
+    win_conditions = deck.get("win_conditions", [])
+    if archetype:
+        arch_label = archetype
+        if win_conditions:
+            arch_label += "  —  win cons: " + ", ".join(f"`{w}`" for w in win_conditions)
+        st.markdown(f"**Archetype:** `{arch_label}`")
+
+    role_counts = deck.get("role_counts", {})
+    if role_counts:
+        rc_cols = st.columns(len(role_counts))
+        for col, (role, cnt) in zip(rc_cols, sorted(role_counts.items())):
+            col.metric(role, cnt)
+
+    # ── Deck summary stats ────────────────────────────────────────
+    land_count = sum(
+        c.get("count", 1) for c in deck["cards"]
+        if "Land" in c.get("type_line", "")
+    )
+    total_count = sum(c.get("count", 1) for c in deck["cards"])
+    ramp_count = sum(
+        c.get("count", 1) for c in deck["cards"]
+        if c.get("is_ramp", False)
+    )
+    syn_density = deck.get("synergy_density")
+    syn_baseline = deck.get("synergy_baseline")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
+    col2.metric("Ramp", str(ramp_count))
+    col3.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
+    if syn_density is not None:
+        delta = round(syn_density - syn_baseline, 4) if syn_baseline else None
+        col4.metric(
+            "Synergy density",
+            f"{syn_density:.4f}",
+            delta=f"{delta:+.4f} vs baseline" if delta is not None else None,
+        )
+
+    # ── Mana curve bar chart ──────────────────────────────────────
+    spells = [
+        c for c in deck["cards"]
+        if "Land" not in c.get("type_line", "")
+    ]
+    curve: dict[str, int] = {}
+    for c in spells:
+        cmc = float(c.get("cmc") or 0)
+        label = f"{int(cmc)}+" if cmc >= 6 else str(int(cmc))
+        curve[label] = curve.get(label, 0) + c.get("count", 1)
+    if curve:
+        curve_df = pd.DataFrame(
+            sorted(curve.items(), key=lambda x: int(x[0].rstrip("+"))),
+            columns=["CMC", "Cards"],
+        )
+        st.bar_chart(curve_df.set_index("CMC"))
+
+    # ── Deck table sorted by score ────────────────────────────────
+    rows = [
+        {
+            "count": c.get("count", 1),
+            "name": c["name"],
+            "type_line": c.get("type_line", ""),
+            "mana_cost": c.get("mana_cost", ""),
+            "cmc": c.get("cmc", ""),
+            "roles": " | ".join(
+                r["role"] for r in c.get("roles", [])
+            ) or "—",
+            "effects": " | ".join(
+                r["effect_class"] for r in c.get("roles", [])
+                if r.get("effect_class")
+            ) or "—",
+            "score_tags": " | ".join(c.get("score_tags", [])) or "—",
+            "score": round(s, 4),
+        }
+        for c, s in zip(deck["cards"], deck["scores"])
+    ]
+    df = pd.DataFrame(rows).sort_values(
+        ["score"], ascending=False
+    ).reset_index(drop=True)
+    st.dataframe(
+        df,
+        use_container_width=True,
+        height=600,
+        column_config={
+            "count": st.column_config.NumberColumn("#", width="small"),
+            "roles": st.column_config.TextColumn("roles", width="medium"),
+            "effects": st.column_config.TextColumn("effect tags", width="medium"),
+            "score_tags": st.column_config.TextColumn("score boosts", width="medium"),
+            "score": st.column_config.NumberColumn("Score", format="%.4f"),
+        },
+    )
+
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-tab_deck, = st.tabs(["Deck Builder"])
+tab_deck, tab_history = st.tabs(["Deck Builder", "Generated Decks"])
+
+# ── Deck Builder tab ─────────────────────────────────────────────────────────
 
 with tab_deck:
     st.subheader("Commander deck builder")
@@ -160,164 +349,97 @@ with tab_deck:
                 ),
             )
 
+    # ── Generate button + async polling ───────────────────────────────────────
     if commander and st.button("Generate deck", type="primary"):
-        with st.spinner("Generating 99-card deck…"):
-            try:
-                deck = generate_deck(
-                    str(commander["oracle_id"]), "latest", _boost_overrides, _synergy_alpha
-                )
-                st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
-                st.markdown(f"**Commander:** {deck['commander']['name']}")
+        try:
+            job_id = submit_deck_job(
+                str(commander["oracle_id"]), "latest", _boost_overrides, _synergy_alpha
+            )
+            st.session_state["gen_job_id"] = job_id
+            st.session_state.pop("last_deck_filename", None)
+            st.rerun()
+        except httpx.HTTPError as e:
+            st.error(f"Failed to submit job: {e}")
 
-                # ── Download buttons ──────────────────────────────────────────
-                _safe_name = re.sub(r"[^\w]", "_", deck['commander']['name'])
-                _dl_cols = st.columns(2)
-                _dl_cols[0].download_button(
-                    "⬇ Download deck (JSON)",
-                    data=_json.dumps(deck, indent=2, default=str),
-                    file_name=f"{_safe_name}.json",
-                    mime="application/json",
-                )
-                _deck_lines = [f"Commander\n1 {deck['commander']['name']}\n\nDeck"]
-                for _c in deck["cards"]:
-                    _deck_lines.append(f"{_c.get('count', 1)} {_c['name']}")
-                _dl_cols[1].download_button(
-                    "⬇ Download deck (text)",
-                    data="\n".join(_deck_lines),
-                    file_name=f"{_safe_name}.txt",
-                    mime="text/plain",
-                )
+    # Poll while a job is in flight
+    if "gen_job_id" in st.session_state:
+        job_id = st.session_state["gen_job_id"]
+        job = None
+        try:
+            job = poll_job(job_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                st.error("Generation job was lost (API restarted). Please generate again.")
+                del st.session_state["gen_job_id"]
+            else:
+                st.warning(f"Transient poll error ({e.response.status_code}), retrying…")
+                time.sleep(2)
+                st.rerun()
+        except httpx.HTTPError:
+            time.sleep(2)
+            st.rerun()
 
-                # ── Context seed section ──────────────────────────────────────
-                context_cards = deck.get("context_cards", [])
-                is_proxy = deck.get("proxy_context", False)
-                if context_cards and not is_proxy:
-                    with st.expander(f"Context seed ({len(context_cards)} archetype staples used to prime the decoder)"):
-                        st.write(", ".join(context_cards))
-                elif context_cards and is_proxy:
-                    with st.expander(
-                        f"⚠️ Proxy context ({len(context_cards)} staples from similar commanders — "
-                        "no training decks exist for this commander)",
-                        expanded=True,
-                    ):
-                        st.info(
-                            f"No decklists have been imported for **{deck['commander']['name']}**. "
-                            "The decoder was seeded with staples from the most embedding-similar "
-                            "commanders that *do* have training data. "
-                            "Results will improve once you import decklists for this commander."
-                        )
-                        st.write(", ".join(context_cards))
-                else:
-                    st.warning(
-                        f"No training decks found for **{deck['commander']['name']}** "
-                        f"and no similar commanders with training data were found. "
-                        "The model is flying blind — results will be poor."
-                    )
+        if job:
+            status = job.get("status", "unknown")
+            if status in ("queued", "running"):
+                st.progress(job.get("progress", 0.0), text=job.get("message", "Working…"))
+                time.sleep(1)
+                st.rerun()
+            elif status == "error":
+                st.error(f"Generation failed: {job.get('error', 'unknown error')}")
+                del st.session_state["gen_job_id"]
+            elif status == "complete":
+                filename = job["result"].get("deck_filename")
+                st.session_state["last_deck_filename"] = filename
+                del st.session_state["gen_job_id"]
+                # Bust the list cache so the new deck appears immediately
+                list_generated_decks.clear()
+                st.rerun()
 
-                # ── Deck signals ─────────────────────────────────────────────
-                dsig = deck.get("deck_signals", {})
-                if dsig:
-                    with st.expander("Deck signals (scoring inputs)", expanded=False):
-                        c1, c2 = st.columns(2)
-                        c1.markdown(f"**Wants attack:** {'✅' if dsig.get('wants_attack') else '❌'}")
-                        tribal = dsig.get("tribal_types", [])
-                        c1.markdown(f"**Tribal types:** {', '.join(tribal) if tribal else '—'}")
-                        c2.markdown(f"**Colors:** {' '.join(dsig.get('real_colors', [])) or 'colorless'}")
-                        boosts = dsig.get("active_boosts", [])
-                        c2.markdown(f"**Active boosts:** {', '.join(boosts) if boosts else '—'}")
-
-                # ── Role breakdown ────────────────────────────────────────────
-                archetype = deck.get("archetype", "")
-                win_conditions = deck.get("win_conditions", [])
-                if archetype:
-                    arch_label = archetype
-                    if win_conditions:
-                        arch_label += "  —  win cons: " + ", ".join(f"`{w}`" for w in win_conditions)
-                    st.markdown(f"**Archetype:** `{arch_label}`")
-
-                role_counts = deck.get("role_counts", {})
-                if role_counts:
-                    rc_cols = st.columns(len(role_counts))
-                    for col, (role, cnt) in zip(rc_cols, sorted(role_counts.items())):
-                        col.metric(role, cnt)
-
-                # ── Deck summary stats ────────────────────────────────────────
-                land_count = sum(
-                    c.get("count", 1) for c in deck["cards"]
-                    if "Land" in c.get("type_line", "")
-                )
-                total_count = sum(c.get("count", 1) for c in deck["cards"])
-                ramp_count = sum(
-                    c.get("count", 1) for c in deck["cards"]
-                    if c.get("is_ramp", False)
-                )
-                syn_density = deck.get("synergy_density")
-                syn_baseline = deck.get("synergy_baseline")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
-                col2.metric("Ramp", str(ramp_count))
-                col3.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
-                if syn_density is not None:
-                    delta = round(syn_density - syn_baseline, 4) if syn_baseline else None
-                    col4.metric(
-                        "Synergy density",
-                        f"{syn_density:.4f}",
-                        delta=f"{delta:+.4f} vs baseline" if delta is not None else None,
-                    )
-
-                # ── Mana curve bar chart ──────────────────────────────────────
-                spells = [
-                    c for c in deck["cards"]
-                    if "Land" not in c.get("type_line", "")
-                ]
-                curve: dict[str, int] = {}
-                for c in spells:
-                    cmc = c.get("cmc") or 0
-                    label = f"{int(cmc)}+" if cmc >= 6 else str(int(cmc))
-                    curve[label] = curve.get(label, 0) + c.get("count", 1)
-                if curve:
-                    curve_df = pd.DataFrame(
-                        sorted(curve.items(), key=lambda x: int(x[0].rstrip("+"))),
-                        columns=["CMC", "Cards"],
-                    )
-                    st.bar_chart(curve_df.set_index("CMC"))
-
-                # ── Deck table sorted by score ────────────────────────────────
-                rows = [
-                    {
-                        "count": c.get("count", 1),
-                        "name": c["name"],
-                        "type_line": c.get("type_line", ""),
-                        "mana_cost": c.get("mana_cost", ""),
-                        "cmc": c.get("cmc", ""),
-                        "roles": " | ".join(
-                            r["role"] for r in c.get("roles", [])
-                        ) or "—",
-                        "effects": " | ".join(
-                            r["effect_class"] for r in c.get("roles", [])
-                            if r.get("effect_class")
-                        ) or "—",
-                        "score_tags": " | ".join(c.get("score_tags", [])) or "—",
-                        "score": round(s, 4),
-                    }
-                    for c, s in zip(deck["cards"], deck["scores"])
-                ]
-                df = pd.DataFrame(rows).sort_values(
-                    ["score"], ascending=False
-                ).reset_index(drop=True)
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                    height=600,
-                    column_config={
-                        "count": st.column_config.NumberColumn("#", width="small"),
-                        "roles": st.column_config.TextColumn("roles", width="medium"),
-                        "effects": st.column_config.TextColumn("effect tags", width="medium"),
-                        "score_tags": st.column_config.TextColumn("score boosts", width="medium"),
-                        "score": st.column_config.NumberColumn("Score", format="%.4f"),
-                    },
-                )
-            except httpx.HTTPError as e:
-                st.error(f"Generation failed: {e}")
+    # Show completion notice after a successful generation
+    if "last_deck_filename" in st.session_state and "gen_job_id" not in st.session_state:
+        st.progress(1.0, text="Generation complete!")
+        st.info("Your deck is ready. Open the **Generated Decks** tab to view it.")
 
 
+# ── Generated Decks tab ───────────────────────────────────────────────────────
+
+with tab_history:
+    st.subheader("Generated decks")
+
+    decks_list = list_generated_decks()
+
+    if not decks_list:
+        st.info("No generated decks yet. Use the Deck Builder tab to generate one.")
+    else:
+        # Build display labels
+        options_map = {
+            f"{d['commander']}  —  {d['filename']}  ({d['card_count']} cards)": d["filename"]
+            for d in decks_list
+        }
+        labels = list(options_map.keys())
+
+        # Auto-select the most recently generated deck if available
+        default_idx = 0
+        last_fn = st.session_state.get("last_deck_filename")
+        if last_fn:
+            for i, lbl in enumerate(labels):
+                if last_fn in lbl:
+                    default_idx = i
+                    break
+
+        chosen_label = st.selectbox("Select a deck", labels, index=default_idx)
+        chosen_filename = options_map[chosen_label]
+
+        if st.button("Refresh list"):
+            list_generated_decks.clear()
+            get_generated_deck.clear()
+            st.rerun()
+
+        st.divider()
+
+        deck = get_generated_deck(chosen_filename)
+        if deck is None:
+            st.error("Could not load deck. The file may have been deleted.")
+        else:
+            render_deck(deck)

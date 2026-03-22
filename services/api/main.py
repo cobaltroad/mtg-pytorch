@@ -8,8 +8,8 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
-from uuid import UUID
+from typing import Annotated, Any
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Query, HTTPException, Depends, UploadFile, File, Header
 from fastapi.responses import FileResponse
@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from sqlalchemy import text
 
-from db import get_db, AsyncSession
+from db import get_db, SessionLocal, AsyncSession
 from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
 from ops.commander_analysis import (
     analyze_commander_oracle_text,
@@ -39,6 +39,11 @@ app = FastAPI(
     version="0.1.0",
     description="Card similarity search, synergy queries, and commander deck generation.",
 )
+
+# ── In-memory job store ───────────────────────────────────────────────────────
+# { job_id: {"status": str, "progress": float, "message": str,
+#            "result": dict|None, "error": str|None, "created_at": datetime} }
+_jobs: dict[str, dict[str, Any]] = {}
 
 
 # ── Startup: pre-load embeddings in background ────────────────────────────────
@@ -246,8 +251,11 @@ class DeckOut(BaseModel):
     deck_signals: DeckSignalsOut = DeckSignalsOut()
 
 
-def _save_deck(result: dict) -> None:
-    """Persist a generated deck to DECK_SAVE_DIR as a timestamped JSON file."""
+def _save_deck(result: dict) -> str | None:
+    """Persist a generated deck to DECK_SAVE_DIR as a timestamped JSON file.
+
+    Returns the filename (not full path) on success, None on failure.
+    """
     try:
         DECK_SAVE_DIR.mkdir(parents=True, exist_ok=True)
         commander_name = (
@@ -260,24 +268,124 @@ def _save_deck(result: dict) -> None:
         save_path = DECK_SAVE_DIR / f"{timestamp}_{commander_name}.json"
         save_path.write_text(json.dumps(result, indent=2, default=str))
         log.info("Deck saved: %s", save_path)
+        return save_path.name
     except Exception as exc:
         log.warning("Failed to save generated deck: %s", exc)
+        return None
 
 
-@app.post("/decks/generate", response_model=DeckOut)
-async def generate_deck(req: DeckRequest, db: AsyncSession = Depends(get_db)):
-    """Ask the model to build a 99-card commander deck."""
-    result = await deck_ops.generate(
-        db, req.commander_oracle_id, req.checkpoint,
-        boost_overrides=req.boost_overrides or None,
-        combo_boost=req.combo_boost,
-        partner_oracle_id=req.partner_oracle_id,
-        synergy_alpha=req.synergy_alpha,
-    )
-    if result is None:
-        raise HTTPException(400, "Could not generate deck — commander not found or model unavailable")
-    _save_deck(result)
+class JobStarted(BaseModel):
+    job_id: str
+
+
+class JobStatus(BaseModel):
+    job_id: str
+    status: str          # queued | running | complete | error
+    progress: float      # 0.0 – 1.0
+    message: str
+    result: dict | None = None
+    error: str | None = None
+
+
+@app.post("/decks/generate", response_model=JobStarted)
+async def generate_deck(req: DeckRequest):
+    """Submit a deck generation job.  Returns a job_id immediately.
+
+    Poll GET /decks/jobs/{job_id} for progress and the final result.
+    """
+    job_id = str(uuid4())
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0.0,
+        "message": "Queued…",
+        "result": None,
+        "error": None,
+        "created_at": datetime.utcnow(),
+    }
+
+    async def _run() -> None:
+        _jobs[job_id]["status"] = "running"
+
+        def _progress(fraction: float, message: str) -> None:
+            _jobs[job_id]["progress"] = fraction
+            _jobs[job_id]["message"] = message
+
+        try:
+            async with SessionLocal() as db:
+                result = await deck_ops.generate(
+                    db,
+                    req.commander_oracle_id,
+                    req.checkpoint,
+                    boost_overrides=req.boost_overrides or None,
+                    combo_boost=req.combo_boost,
+                    partner_oracle_id=req.partner_oracle_id,
+                    synergy_alpha=req.synergy_alpha,
+                    progress_cb=_progress,
+                )
+            if result is None:
+                _jobs[job_id].update({
+                    "status": "error",
+                    "error": "Commander not found or model unavailable",
+                })
+            else:
+                deck_filename = _save_deck(result)
+                _jobs[job_id].update({
+                    "status": "complete",
+                    "progress": 1.0,
+                    "message": "Done",
+                    "result": {**result, "deck_filename": deck_filename},
+                })
+        except Exception as exc:
+            log.exception("Deck generation job %s failed", job_id)
+            _jobs[job_id].update({"status": "error", "error": str(exc)})
+
+    asyncio.create_task(_run())
+    return JobStarted(job_id=job_id)
+
+
+@app.get("/decks/jobs/{job_id}", response_model=JobStatus)
+async def get_job(job_id: str):
+    """Poll for deck generation progress and retrieve the result when complete."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
+
+
+# ── Generated deck history ───────────────────────────────────────────────────
+
+@app.get("/decks/generated")
+async def list_generated_decks(limit: int = 50):
+    """List previously generated decks (newest first)."""
+    if not DECK_SAVE_DIR.exists():
+        return []
+    files = sorted(DECK_SAVE_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    result = []
+    for f in files[:limit]:
+        try:
+            data = json.loads(f.read_text())
+            result.append({
+                "filename": f.name,
+                "commander": data.get("commander", {}).get("name", "Unknown"),
+                "checkpoint": data.get("checkpoint", ""),
+                "card_count": len(data.get("cards", [])),
+            })
+        except Exception:
+            pass
     return result
+
+
+@app.get("/decks/generated/{filename}")
+async def get_generated_deck(filename: str):
+    """Retrieve a specific generated deck JSON by filename."""
+    safe = Path(filename).name  # prevent path traversal
+    if not safe.endswith(".json"):
+        raise HTTPException(400, "Invalid filename")
+    path = DECK_SAVE_DIR / safe
+    if not path.exists():
+        raise HTTPException(404, "Deck not found")
+    return json.loads(path.read_text())
 
 
 # ── Deck metrics ─────────────────────────────────────────────────────────────
