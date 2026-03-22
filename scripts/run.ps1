@@ -21,7 +21,7 @@ param(
     [Nullable[int]]$BatchSize = $null,
 
     [Nullable[bool]]$Resume = $null,
-    [bool]$FreezeEncoder = $true,
+    [Nullable[bool]]$FreezeEncoder = $null,
     [double]$EncoderLrScale = 0.1,
     [int]$Patience = 10,
     [double]$TempStart = 0.5,
@@ -249,7 +249,8 @@ if ($Mode -eq 'train') {
     }
 
     if ($Phase -eq 4) {
-        if (-not $FreezeEncoder) {
+        $resolvedFreezeEncoder = if ($null -ne $FreezeEncoder) { [bool]$FreezeEncoder } else { $true }
+        if (-not $resolvedFreezeEncoder) {
             $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $EncoderLrScale)
         }
         $cmd += @('--patience', $Patience)
