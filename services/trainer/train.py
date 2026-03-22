@@ -314,6 +314,14 @@ class DeckConstructor(nn.Module):
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.scorer = nn.Linear(embed_dim, 1)
+        # Learnable query token for synergy-only Phase 4 training.
+        # Replaces the degenerate z_cmd-as-tgt pattern: instead of the decoder
+        # attending to the commander from itself (tgt=memory=z_cmd), this token
+        # is a free variable that learns "what does a commander need?" via
+        # cross-attention to z_cmd as memory.  At inference, real deck cards
+        # serve as tgt — training with query_token is compatible because both
+        # cases use commander-as-memory.
+        self.query_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
     def forward(
         self,
@@ -858,7 +866,259 @@ def load_synergy_positions(
     return positions
 
 
-# ── Phase 4: Autoregressive deck construction ─────────────────────────────────
+def load_synergy_positions_global(
+    embeddings: dict[str, np.ndarray],
+    ability_weight: float = 2.0,
+    tribal_weight: float = 1.5,
+    synergy_limit_per_commander: int = 300,
+) -> list[dict]:
+    """Build Phase 4 synergy positions for ALL legal commanders in synergy_edges.
+
+    Unlike load_synergy_positions, this function does not require human decklists.
+    It queries synergy_edges for every embedded card that is a legal commander,
+    producing training positions for commanders the model has never seen in a
+    human deck.  The legal negative pool is derived from color identity alone.
+
+    This is the data-loading half of Option A (synergy-only Phase 4 training).
+    """
+    from collections import Counter
+
+    log.info("Building global synergy positions (all legal commanders, no decks required)…")
+
+    emb_set = set(embeddings.keys())
+    all_ids = list(embeddings.keys())
+    color_ids = load_color_identities(embeddings)
+
+    _legal_cache: dict[frozenset, np.ndarray] = {}
+
+    def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
+        if cmd_ci not in _legal_cache:
+            idx = np.array(
+                [i for i, cid in enumerate(all_ids)
+                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                dtype=np.int64,
+            )
+            _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(len(all_ids), dtype=np.int64)
+        return _legal_cache[cmd_ci]
+
+    positions: list[dict] = []
+    cmd_count: Counter = Counter()
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT se.card_a::text, se.card_b::text, se.score_type
+                FROM synergy_edges se
+                JOIN cards c ON c.id = se.card_a
+                WHERE se.score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND se.card_b IS NOT NULL
+                  AND c.legalities->>'commander' = 'legal'
+                  AND (c.type_line ILIKE '%Legendary Creature%'
+                    OR c.type_line ILIKE '%Legendary Planeswalker%'
+                    OR c.oracle_text ILIKE '%can be your commander%')
+                ORDER BY se.card_a, se.score DESC
+            """)
+            rows = cur.fetchall()
+
+    for card_a, card_b, score_type in rows:
+        if card_a not in emb_set or card_b not in emb_set:
+            continue
+        if cmd_count[card_a] >= synergy_limit_per_commander:
+            continue
+        cmd_ci = color_ids.get(card_a, frozenset())
+        weight = ability_weight if score_type == "ability_trigger" else tribal_weight
+        positions.append({
+            "commander_id":     card_a,
+            "context_card_ids": [],
+            "target_card_id":   card_b,
+            "weight":           weight,
+            "legal_neg_indices": _legal_indices(cmd_ci),
+        })
+        cmd_count[card_a] += 1
+
+    log.info("Global synergy positions: %d across %d commanders",
+             len(positions), len(cmd_count))
+    return positions
+
+
+# ── Phase 4: Synergy-only training loop (Option A) ────────────────────────────
+
+def train_synergy_positions_phase(
+    model: "DeckConstructor",
+    positions: list[dict],
+    embeddings: dict[str, np.ndarray],
+    epochs: int,
+    lr: float,
+    batch_size: int = 256,
+    n_neg: int = 64,
+    temp_start: float = 0.5,
+    temp_end: float = 0.05,
+    freeze_encoder: bool = True,
+    encoder_lr_scale: float = 0.1,
+    patience: int = 10,
+):
+    """Phase 4 (Option A): train the DeckConstructor purely on synergy edges.
+
+    Replaces the deck-sequence autoregressive loop with a batched InfoNCE scorer:
+
+        given (commander, candidate), rank known synergy partners above
+        color-legal random negatives.
+
+    No human deck sequences are used.  Training data scales with synergy_edges
+    (tens of thousands of positions) rather than the number of imported decklists
+    (~180), eliminating the memorisation problem while keeping the GPU saturated
+    through large batches.
+
+    The commander embedding serves as the sole context token — the decoder learns
+    to produce a context vector that is similar to synergy partners and dissimilar
+    to random cards.  This directly trains the scoring function that inference
+    uses at deck-generation time.
+
+    With freeze_encoder=True (default) the Phase 3 card representations are
+    preserved; only the decoder and scorer are updated.  Collapse is impossible
+    because the encoder is not a training variable.
+    """
+    if not positions:
+        log.error("No synergy positions — cannot run synergy-only Phase 4.")
+        return
+
+    if freeze_encoder:
+        model.card_encoder.requires_grad_(False)
+        log.info("Phase 4 (synergy-only): card_encoder frozen — decoder + scorer only")
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=1e-4)
+    else:
+        encoder_lr = lr * encoder_lr_scale
+        log.info(
+            "Phase 4 (synergy-only): encoder unfrozen — encoder lr=%.2e, decoder lr=%.2e",
+            encoder_lr, lr,
+        )
+        optimizer = torch.optim.AdamW([
+            {"params": model.card_encoder.parameters(), "lr": encoder_lr},
+            {"params": list(model.decoder.parameters()) + list(model.scorer.parameters()), "lr": lr},
+        ], weight_decay=1e-4)
+
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    device = next(model.parameters()).device
+
+    all_ids = list(embeddings.keys())
+    id_to_idx = {cid: i for i, cid in enumerate(all_ids)}
+    all_raw = torch.from_numpy(
+        np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
+    ).to(device)
+
+    log.info(
+        "Phase 4 (synergy-only): %d positions, batch_size=%d, %d epochs",
+        len(positions), batch_size, epochs,
+    )
+    if patience > 0:
+        log.info("Phase 4: early stopping patience=%d epochs", patience)
+
+    best_loss = float("inf")
+    no_improve = 0
+    final_epoch = 0
+
+    for epoch in range(epochs):
+        temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
+
+        # Pre-project the full card pool for negative sampling (no grad).
+        model.eval()
+        with torch.no_grad():
+            all_proj = torch.cat([
+                model.card_encoder(all_raw[i: i + 512])
+                for i in range(0, all_raw.size(0), 512)
+            ], dim=0)
+        model.train()
+
+        epoch_positions = positions[:]
+        random.shuffle(epoch_positions)
+
+        total_loss = 0.0
+        n_steps = 0
+
+        for batch_start in range(0, len(epoch_positions), batch_size):
+            batch = epoch_positions[batch_start: batch_start + batch_size]
+            B = len(batch)
+
+            cmd_indices = torch.tensor(
+                [id_to_idx[p["commander_id"]] for p in batch],
+                dtype=torch.long, device=device,
+            )
+            tgt_indices = torch.tensor(
+                [id_to_idx[p["target_card_id"]] for p in batch],
+                dtype=torch.long, device=device,
+            )
+
+            if freeze_encoder:
+                # Encoder frozen: use pre-projected embeddings (no grad needed).
+                z_cmd = all_proj[cmd_indices]   # (B, D)
+                z_tgt = all_proj[tgt_indices]   # (B, D)
+            else:
+                # Encoder unfrozen: encode fresh to capture gradient.
+                z_cmd = model.card_encoder(all_raw[cmd_indices])  # (B, D)
+                z_tgt = model.card_encoder(all_raw[tgt_indices])  # (B, D)
+
+            # Learnable query token as the decoder tgt: (B, 1, D).
+            # The decoder cross-attends this token to the commander (memory),
+            # learning "what does this commander need?" without the degenerate
+            # tgt=memory=z_cmd pattern that produced near-random InfoNCE scores.
+            z_ctx = model.query_token.expand(B, -1, -1)
+
+            # Sample color-legal negatives from the pre-projected pool: (B, n_neg, D).
+            neg_idx = np.vstack([
+                np.random.choice(p["legal_neg_indices"], size=n_neg, replace=True)
+                for p in batch
+            ])
+            z_neg = all_proj[torch.from_numpy(neg_idx).to(device)]  # (B, n_neg, D)
+
+            # Candidates: target (pos 0) followed by negatives → (B, 1+n_neg, D).
+            candidates = torch.cat([z_tgt.unsqueeze(1), z_neg], dim=1)
+
+            scores = model(z_cmd, z_ctx, candidates)  # (B, 1+n_neg)
+
+            weights = torch.tensor(
+                [p["weight"] for p in batch], dtype=torch.float32, device=device,
+            )
+            per_pos_loss = -F.log_softmax(scores / temperature, dim=1)[:, 0]  # (B,)
+            loss = (per_pos_loss * weights).mean()
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            # Log unweighted mean so the curve stays comparable across weight configs.
+            total_loss += per_pos_loss.mean().item()
+            n_steps += 1
+
+        scheduler.step()
+        avg = total_loss / max(n_steps, 1)
+        log.info("Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0], temperature)
+
+        if WANDB_ENABLED:
+            wandb.log({"phase": 4, "epoch": epoch + 1, "loss": avg,
+                       "lr": scheduler.get_last_lr()[0], "temperature": temperature})
+
+        final_epoch = epoch + 1
+        if avg < best_loss:
+            best_loss = avg
+            no_improve = 0
+            save_checkpoint(model, "phase4_best")
+        else:
+            no_improve += 1
+            if patience > 0 and no_improve >= patience:
+                log.info(
+                    "Phase 4: early stopping at epoch %d/%d "
+                    "(no improvement for %d consecutive epochs, best=%.4f)",
+                    final_epoch, epochs, patience, best_loss,
+                )
+                break
+
+    save_checkpoint(model, f"phase4_epoch{final_epoch}")
+
+
+# ── Phase 4: Autoregressive deck construction (legacy) ────────────────────────
 
 def train_deck_constructor_phase(
     model: DeckConstructor,
@@ -1113,7 +1373,7 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
             log.info("Extracting card_encoder weights from DeckConstructor checkpoint: %s", path)
             state = extracted
 
-    model.load_state_dict(state)
+    model.load_state_dict(state, strict=False)
     log.info("Loaded checkpoint: %s", path)
     return model
 
@@ -1257,6 +1517,14 @@ def main():
     parser.add_argument("--synergy-limit", type=int, default=300,
                         help="Phase 4: max synergy positions per commander "
                              "(default 300; increase if commanders have sparse edge coverage)")
+    parser.add_argument("--synergy-only", action=argparse.BooleanOptionalAction, default=True,
+                        help="Phase 4: train purely on synergy positions (Option A, default). "
+                             "Drops human deck sequences; scales to all legal commanders; "
+                             "eliminates deck-memorisation.  Pass --no-synergy-only to use "
+                             "the legacy interleaved deck+synergy loop.")
+    parser.add_argument("--syn-batch-size", type=int, default=256,
+                        help="Phase 4 --synergy-only: positions per gradient step "
+                             "(default 256 — larger than deck batch=32 to saturate the GPU)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1382,25 +1650,6 @@ def main():
             log.error("No embeddings found — run the ingest pipeline first.")
             return
 
-        decks = load_decks_from_artifact(_artifact) if _artifact else load_decks(embeddings)
-        if not decks:
-            log.error("No decks found — run import_decklists.py first.")
-            return
-
-        dataset = DeckDataset(decks, embeddings)
-        log.info("Dataset: %d decks", len(dataset))
-
-        if _artifact:
-            syn_positions = load_synergy_positions_from_artifact(_artifact)
-        else:
-            syn_positions = load_synergy_positions(
-                decks, embeddings,
-                combo_weight=args.combo_weight,
-                ability_weight=args.ability_weight,
-                tribal_weight=args.tribal_weight,
-                synergy_limit_per_commander=args.synergy_limit,
-            )
-
         input_dim = len(next(iter(embeddings.values())))
         model = DeckConstructor(input_dim=input_dim).to(device)
         if args.resume and (CHECKPOINT_DIR / "phase4_best.pt").exists():
@@ -1415,17 +1664,67 @@ def main():
             else:
                 log.warning("No phase3_best found — card_encoder starts from scratch")
 
-        train_deck_constructor_phase(
-            model, dataset, embeddings, args.epochs, args.lr,
-            synergy_positions=syn_positions,
-            syn_per_epoch=args.syn_per_epoch,
-            n_neg=64, positions_per_deck=10,
-            temp_start=args.temp_start,
-            temp_end=args.temp_end,
-            freeze_encoder=args.freeze_encoder,
-            encoder_lr_scale=args.encoder_lr_scale,
-            patience=args.patience,
-        )
+        if args.synergy_only:
+            # Option A: train purely on synergy positions — no human deck sequences.
+            # Artifact positions already cover all legal commanders after re-export;
+            # DB mode (no --dataset) always queries all commanders directly.
+            if _artifact:
+                syn_positions = load_synergy_positions_from_artifact(_artifact)
+                log.info(
+                    "Synergy-only mode: %d positions from artifact "
+                    "(re-export after upgrading ingest to expand to all commanders)",
+                    len(syn_positions),
+                )
+            else:
+                syn_positions = load_synergy_positions_global(
+                    embeddings,
+                    ability_weight=args.ability_weight,
+                    tribal_weight=args.tribal_weight,
+                    synergy_limit_per_commander=args.synergy_limit,
+                )
+
+            train_synergy_positions_phase(
+                model, syn_positions, embeddings, args.epochs, args.lr,
+                batch_size=args.syn_batch_size,
+                n_neg=64,
+                temp_start=args.temp_start,
+                temp_end=args.temp_end,
+                freeze_encoder=args.freeze_encoder,
+                encoder_lr_scale=args.encoder_lr_scale,
+                patience=args.patience,
+            )
+        else:
+            # Legacy: interleaved deck-sequence + synergy steps.
+            decks = load_decks_from_artifact(_artifact) if _artifact else load_decks(embeddings)
+            if not decks:
+                log.error("No decks found — run import_decklists.py first.")
+                return
+
+            dataset = DeckDataset(decks, embeddings)
+            log.info("Dataset: %d decks", len(dataset))
+
+            if _artifact:
+                syn_positions = load_synergy_positions_from_artifact(_artifact)
+            else:
+                syn_positions = load_synergy_positions(
+                    decks, embeddings,
+                    combo_weight=args.combo_weight,
+                    ability_weight=args.ability_weight,
+                    tribal_weight=args.tribal_weight,
+                    synergy_limit_per_commander=args.synergy_limit,
+                )
+
+            train_deck_constructor_phase(
+                model, dataset, embeddings, args.epochs, args.lr,
+                synergy_positions=syn_positions,
+                syn_per_epoch=args.syn_per_epoch,
+                n_neg=64, positions_per_deck=10,
+                temp_start=args.temp_start,
+                temp_end=args.temp_end,
+                freeze_encoder=args.freeze_encoder,
+                encoder_lr_scale=args.encoder_lr_scale,
+                patience=args.patience,
+            )
 
     else:
         log.warning("Phase %d not yet implemented.", args.phase)

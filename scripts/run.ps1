@@ -21,11 +21,15 @@ param(
     [Nullable[int]]$BatchSize = $null,
 
     [Nullable[bool]]$Resume = $null,
-    [bool]$FreezeEncoder = $true,
-    [double]$EncoderLrScale = 0.1,
+    [string]$FreezeEncoder = 'false',
+    [double]$EncoderLrScale = 0.01,
     [int]$Patience = 10,
-    [double]$TempStart = 0.5,
+    [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
+    # Phase 4 Option A: synergy-only training (default $true).
+    # Set -SynergyOnly $false to fall back to the legacy deck+synergy loop.
+    [bool]$SynergyOnly = $true,
+    [int]$SynBatchSize = 256,
 
     # Phase 4 synergy-guided training weights
     [int]$SynPerEpoch = 1000,
@@ -245,18 +249,23 @@ if ($Mode -eq 'train') {
     }
 
     if ($Phase -eq 4) {
-        if (-not $FreezeEncoder) {
+        $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
+        if (-not $resolvedFreezeEncoder) {
             $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $EncoderLrScale)
         }
         $cmd += @('--patience', $Patience)
         $cmd += @(
             '--temp-start', $TempStart, '--temp-end', $TempEnd,
-            '--syn-per-epoch', $SynPerEpoch,
-            '--combo-weight', $ComboWeight,
             '--ability-weight', $AbilityWeight,
             '--tribal-weight', $TribalWeight,
             '--synergy-limit', $P4SynergyLimit
         )
+        if ($SynergyOnly) {
+            $cmd += @('--synergy-only', '--syn-batch-size', $SynBatchSize)
+        } else {
+            $cmd += @('--no-synergy-only', '--syn-per-epoch', $SynPerEpoch,
+                      '--combo-weight', $ComboWeight)
+        }
     }
 
     Write-Host "Running trainer with args: $($cmd -join ' ')"
