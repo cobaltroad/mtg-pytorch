@@ -7,7 +7,12 @@ all ramp from the deckbuilder's perspective.
 Responsibilities:
   - Force-include Sol Ring / Arcane Signet regardless of model score
   - Boost mana-producing cards when "mana_producers" boost is active
-  - Penalise non-basic lands that produce no mana in the commander's colors
+  - Score non-basic lands by mana quality in three tiers:
+      Tier 3 (SPECIFIC_DUAL_BOOST): specific commander-color duals, fetches,
+              Shadowmoor filter lands — always preferred over any-color lands
+      Tier 2 (ANY_COLOR_BOOST):     unrestricted {T}: Add one mana of any color
+      Tier 1 (neutral):             single commander color, type-restricted match
+      Tier 0 (COLORLESS_LAND_PENALTY): colorless-only, restricted non-match
 """
 from __future__ import annotations
 
@@ -15,77 +20,131 @@ import re
 
 from .signals import DeckSignals
 
+# ── Mana production detection ─────────────────────────────────────────────────
+
 # Activated mana ability: "{T}: Add …" or free "Add {" phrasing
 _MANA_ADD_RE = re.compile(r"\{[tT]\}\s*:\s*[Aa]dd|\badd \{", re.I)
 
 # Pure tap mana ability: cost is exactly {T}: with no other costs.
-# Captures everything after "Add" up to end of sentence/line.
-# Excludes abilities like "{T}, Pay {E}:", "{1}, {T}:", "{T}, Sacrifice ...:".
 # Optional leading "(" handles shock land format: ({T}: Add {B} or {G}.)
 _PURE_TAP_ADD_RE = re.compile(r"^\(?\{[Tt]\}\s*:\s*Add([^\n.]*)", re.M)
 
-# Any colored mana symbol — applied inside a captured Add clause
+# Any colored mana symbol inside a captured clause
 _COLOR_SYMBOL_RE = re.compile(r"\{([WUBRG])\}")
 
-# "Any color" phrasing: City of Brass, Mana Confluence, Command Tower, etc.
-_ADD_ANY_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,40}any color", re.I)
+# Shadowmoor-style filter lands: {X/Y}, {T}: Add {X}{X}, {X}{Y}, or {Y}{Y}
+_FILTER_LAND_RE = re.compile(r"\{[WUBRG]/[WUBRG]\},\s*\{[Tt]\}:\s*Add([^\n.]*)", re.M)
 
-# Type-restricted mana — detect presence and capture everything up to next period
+# Fetch lands: search for a basic land type and put it onto the battlefield
+_FETCH_RE = re.compile(
+    r"Search your library for (?:a |an )?(\w+)(?: or (\w+))? card[^.]*"
+    r"put it onto the battlefield",
+    re.I | re.S,
+)
+_BASIC_TYPE_TO_COLOR: dict[str, str] = {
+    "swamp": "B", "forest": "G", "plains": "W", "island": "U", "mountain": "R",
+}
+
+# Type-restricted mana: "Spend this mana only to cast …"
 _SPEND_ONLY_RE = re.compile(r"[Ss]pend this mana only to cast ([^.]+)", re.I)
-
-# Capitalised words likely to be creature type names within a restriction clause
 _TYPE_WORD_RE = re.compile(r"\b[A-Z][a-z]+")
 
-# Unconditionally enters tapped — "unless …" and "If you don't …" variants are excluded
+# Unconditionally enters tapped (conditional "unless …" forms excluded)
 _UNCONDITIONAL_TAPPED_RE = re.compile(r"^This land enters tapped\.", re.M)
 
-# Conditional self-sacrifice based on permanent type (Glimmervoid, Thran Quarry, etc.)
-# Captures the permanent type the deck must control to keep the land alive.
+# Conditional self-sacrifice ("if you control no artifacts, sacrifice this land")
 _CONDITIONAL_SACRIFICE_RE = re.compile(
     r"if you (?:control no|don't control a) (\w+),? sacrifice this land", re.I
 )
-# Permanent types the deck can reasonably rely on having (don't penalise these)
 _RELIABLE_PERMANENT_TYPES = frozenset({"creature", "creatures", "land", "lands"})
 
-# Lands that don't untap normally (Forsaken City, etc.) — functionally much worse
+# Lands that never untap normally
 _DOESNT_UNTAP_RE = re.compile(r"this land doesn't untap during your untap step", re.I)
 
-MANA_PRODUCER_BOOST = 1.35
-COLORLESS_LAND_PENALTY = 0.25
-DUAL_LAND_BOOST = 1.6
-TAPPED_LAND_PENALTY = 0.8
+# ── Constants ─────────────────────────────────────────────────────────────────
 
+MANA_PRODUCER_BOOST    = 1.35
+COLORLESS_LAND_PENALTY = 0.25
+SPECIFIC_DUAL_BOOST    = 2.0   # shock/check/fetch/filter/bond/fast/slow lands
+ANY_COLOR_BOOST        = 1.6   # City of Brass, Command Tower, Mana Confluence
+TAPPED_LAND_PENALTY    = 0.8
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _type_restricted_mana_is_useful(
     oracle_text: str, deck_creature_types: frozenset[str]
 ) -> bool:
-    """Return False if mana is restricted to creature types not present in the deck.
-
-    Captures the full restriction clause to handle multi-word types (Time Lord),
-    adjective-qualified types (Dragon creature), and comma-separated lists
-    (Cleric, Rogue, Warrior, or Wizard).
-    """
+    """Return False if mana is restricted to types not present in the deck."""
     m = _SPEND_ONLY_RE.search(oracle_text)
     if not m:
         return True
     clause_types = {w.lower() for w in _TYPE_WORD_RE.findall(m.group(1))}
-    deck_lower = {t.lower() for t in deck_creature_types}
-    return bool(clause_types & deck_lower)
+    return bool(clause_types & {t.lower() for t in deck_creature_types})
 
 
 def _colors_produced(oracle_text: str) -> frozenset[str]:
-    """Return colored mana symbols from pure-tap abilities only ({T}: Add ...).
-
-    Abilities with additional costs ({1}, {E}, Sacrifice, Pay life, etc.)
-    are excluded — those are conditional and don't count as reliable mana fixing.
-    """
+    """Colors from pure {T}: Add abilities.  Returns {'ANY'} sentinel for any-color."""
     colors: set[str] = set()
     for m in _PURE_TAP_ADD_RE.finditer(oracle_text):
         clause = m.group(1)
         if "any color" in clause.lower():
-            return frozenset({"ANY"})  # sentinel: caller handles this
+            return frozenset({"ANY"})
         colors |= set(_COLOR_SYMBOL_RE.findall(clause))
     return frozenset(colors)
+
+
+def _land_mana_tier(
+    oracle_text: str,
+    real_colors: frozenset[str],
+    deck_creature_types: frozenset[str],
+) -> int:
+    """Return a mana quality tier for a non-basic land (0–3).
+
+    3 — specific commander-color dual, fetch, or Shadowmoor filter land
+    2 — unrestricted {T}: Add one mana of any color
+    1 — single commander color, or type-restricted any-color with matching types
+    0 — colorless-only or type-restricted with no matching types
+    """
+    if not _type_restricted_mana_is_useful(oracle_text, deck_creature_types):
+        return 0
+
+    # ── Fetch lands ───────────────────────────────────────────────────────────
+    m = _FETCH_RE.search(oracle_text)
+    if m:
+        types = {t.lower() for t in m.groups() if t}
+        fetch_colors = frozenset(
+            _BASIC_TYPE_TO_COLOR[t] for t in types if t in _BASIC_TYPE_TO_COLOR
+        )
+        overlap = fetch_colors & real_colors
+        if len(overlap) >= 2:
+            return 3  # Verdant Catacombs for B/G — covers both colors
+        if overlap:
+            return 2  # Misty Rainforest for B/G — covers one
+
+    # ── Shadowmoor filter lands ({X/Y}, {T}: Add) ────────────────────────────
+    filter_colors: set[str] = set()
+    for fm in _FILTER_LAND_RE.finditer(oracle_text):
+        filter_colors |= set(_COLOR_SYMBOL_RE.findall(fm.group(1)))
+    if len(filter_colors & real_colors) >= 2:
+        return 3
+    if filter_colors & real_colors:
+        return 1  # filter land that only covers one commander color (e.g. Flooded Grove in B/G)
+
+    # ── Pure-tap specific or any-color ────────────────────────────────────────
+    produced = _colors_produced(oracle_text)
+    if "ANY" in produced:
+        # Type-restricted any-color is useful but not as good as a real dual
+        if _SPEND_ONLY_RE.search(oracle_text):
+            return 1
+        return 2
+
+    specific = produced & real_colors
+    if len(specific) >= 2:
+        return 3
+    if specific:
+        return 1
+    return 0
 
 
 def produces_commander_color(
@@ -93,14 +152,11 @@ def produces_commander_color(
     real_colors: frozenset[str],
     deck_creature_types: frozenset[str] = frozenset(),
 ) -> bool:
-    """True if a pure-tap ability produces any of the commander's colors."""
-    if not _type_restricted_mana_is_useful(oracle_text, deck_creature_types):
-        return False
-    produced = _colors_produced(oracle_text)
-    if "ANY" in produced:
-        return bool(real_colors)
-    return bool(produced & real_colors)
+    """True if this card can produce any of the commander's colors."""
+    return _land_mana_tier(oracle_text, real_colors, deck_creature_types) >= 1
 
+
+# ── Scorers ───────────────────────────────────────────────────────────────────
 
 def score_mana_producers(
     scored: list[tuple[str, float]],
@@ -108,11 +164,7 @@ def score_mana_producers(
     signals: DeckSignals,
     tags: dict[str, list[str]] | None = None,
 ) -> list[tuple[str, float]]:
-    """Boost any card with a mana-producing ability when the commander needs them.
-
-    Applies equally to mana dorks, rocks, and ritual-style effects.
-    Only active when "mana_producers" is in active_boosts.
-    """
+    """Boost any card with a mana-producing ability when the commander needs them."""
     if "mana_producers" not in signals.active_boosts:
         return scored
     result = []
@@ -125,28 +177,6 @@ def score_mana_producers(
     return result
 
 
-def _count_commander_colors_produced(
-    oracle_text: str,
-    real_colors: frozenset[str],
-    deck_creature_types: frozenset[str] = frozenset(),
-) -> int:
-    """Count how many distinct commander colors this land can produce.
-
-    Returns 0 if the land's colored mana is restricted to creature types
-    not present in the deck.
-    """
-    if not _type_restricted_mana_is_useful(oracle_text, deck_creature_types):
-        return 0
-    produced = _colors_produced(oracle_text)
-    if "ANY" in produced:
-        # Type-restricted any-color (Base Camp, Cavern of Souls, etc.) is useful
-        # but narrower than an unrestricted dual — counts as 1, not all colors.
-        if _SPEND_ONLY_RE.search(oracle_text):
-            return 1
-        return len(real_colors)
-    return len(produced & real_colors)
-
-
 def score_land_mana_quality(
     nonbasic_scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
@@ -154,32 +184,35 @@ def score_land_mana_quality(
     tags: dict[str, list[str]] | None = None,
     deck_creature_types: frozenset[str] = frozenset(),
 ) -> list[tuple[str, float]]:
-    """Boost dual lands; penalise non-basic lands that produce no commander colors.
+    """Score non-basic lands by mana quality tier, then apply usage penalties.
 
-    Lands producing ≥2 commander colors (shocks, checks, temples, etc.) get a
-    boost so they outrank utility lands.  Colorless-only lands (Urza's Tower,
-    Blinkmoth Nexus, etc.) are penalised.  No-op for colorless commanders.
-
-    deck_creature_types: all creature subtypes in the top spell candidates,
-    used to detect type-restricted lands like Turtle Lair that are useless
-    when their restricted type isn't in the deck.
+    Tier 3 lands (specific duals, fetches, filter lands) always outrank
+    tier 2 (any-color), which outranks tier 1 (single color / restricted),
+    which outranks tier 0 (colorless / useless).  Penalties for entering
+    tapped, conditional sacrifice, and not untapping are applied on top.
     """
     if not signals.real_colors:
         return nonbasic_scored
     result = []
     for cid, sc in nonbasic_scored:
-        colors_produced = _count_commander_colors_produced(
-            oracle_texts.get(cid, ""), signals.real_colors, deck_creature_types
-        )
         ot = oracle_texts.get(cid, "")
-        if colors_produced >= 2:
-            sc = sc * DUAL_LAND_BOOST
+        tier = _land_mana_tier(ot, signals.real_colors, deck_creature_types)
+
+        if tier >= 3:
+            sc = sc * SPECIFIC_DUAL_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("land:specific_dual_boost")
+        elif tier == 2:
+            sc = sc * ANY_COLOR_BOOST
             if tags is not None:
                 tags.setdefault(cid, []).append("land:dual_boost")
-        elif colors_produced == 0:
+        elif tier == 0:
             sc = sc * COLORLESS_LAND_PENALTY
             if tags is not None:
                 tags.setdefault(cid, []).append("land:colorless_penalty")
+        # tier == 1: neutral — no multiplier
+
+        # Usage penalties applied after the tier multiplier
         if _UNCONDITIONAL_TAPPED_RE.search(ot):
             sc = sc * TAPPED_LAND_PENALTY
             if tags is not None:
@@ -193,6 +226,7 @@ def score_land_mana_quality(
             sc = sc * COLORLESS_LAND_PENALTY
             if tags is not None:
                 tags.setdefault(cid, []).append("land:colorless_penalty")
+
         result.append((cid, sc))
     return result
 
@@ -204,11 +238,7 @@ def select_ramp(
     ramp_target: int,
     tags: dict[str, list[str]] | None = None,
 ) -> tuple[list[tuple[str, float]], set[str]]:
-    """Select ramp cards, force-including Sol Ring and Arcane Signet first.
-
-    Guaranteed cards are included even if they were excluded from model
-    scoring (e.g. because they landed in the proxy context seed).
-    """
+    """Select ramp cards, force-including Sol Ring and Arcane Signet first."""
     score_lookup = {cid: sc for cid, sc in spell_scored}
 
     selected: list[tuple[str, float]] = []
