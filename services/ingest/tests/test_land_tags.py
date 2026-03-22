@@ -13,7 +13,7 @@ Covers the canonical land cycles most relevant to Commander deckbuilding:
   - Gain lands      (Jungle Hollow)
   - Bounce lands    (Dimir Aqueduct)
   - Any-color lands (Command Tower, Mana Confluence)
-  - Penalty cases   (Bojuka Bog, Forsaken City, Base Camp)
+  - Penalty cases   (Forsaken City, Base Camp)
 """
 
 from __future__ import annotations
@@ -254,19 +254,9 @@ def test_bounce_land_tapped():
 
 
 # ── Penalty cases ──────────────────────────────────────────────────────────────
-
-BOJUKA_BOG = (
-    "Bojuka Bog enters tapped.\n"
-    "When Bojuka Bog enters, exile all cards from target player's graveyard.\n"
-    "{T}: Add {B}."
-)
-
-def test_bojuka_bog_single_color():
-    assert "SINGLE_COLOR_LAND:B" in tags(BOJUKA_BOG)
-
-def test_bojuka_bog_tapped():
-    assert "ENTERS_TAPPED" in tags(BOJUKA_BOG)
-
+# Cards with genuine structural drawbacks: doesn't-untap, conditional-sacrifice,
+# or type-restricted mana.  ENTERS_TAPPED alone is already covered by the
+# surveil/gain/bounce cycle tests above.
 
 FORSAKEN_CITY = (
     "At the beginning of your upkeep, sacrifice Forsaken City unless you remove "
