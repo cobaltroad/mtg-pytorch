@@ -446,7 +446,7 @@ async def tag_abilities(rescan: bool = False) -> None:
                 if m:
                     inserts.append({
                         "card_id": str(card_id),
-                        "ability_type": "triggered" if "trigger" in name else "activated",
+                        "ability_type": "triggered" if "trigger" in name else ("static" if "lord" in name or "anthem" in name else "activated"),
                         "ability_name": name,
                         "trigger_event": event,
                         "effect_class": None,
@@ -512,7 +512,7 @@ async def tag_abilities(rescan: bool = False) -> None:
                     if m:
                         inserts.append({
                             "card_id": str(card_id),
-                            "ability_type": "triggered" if "trigger" in name else "activated",
+                            "ability_type": "triggered" if "trigger" in name else ("static" if "lord" in name or "anthem" in name else "activated"),
                             "ability_name": name,
                             "trigger_event": event,
                             "effect_class": None,
@@ -524,7 +524,7 @@ async def tag_abilities(rescan: bool = False) -> None:
                             (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
                         VALUES
                             (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text)
-                        ON CONFLICT (card_id, ability_type, ability_name, effect_class) DO NOTHING
+                        ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, '')) DO NOTHING
                     """), inserts)
                     backfill_count += len(inserts)
 
@@ -563,7 +563,7 @@ async def tag_abilities(rescan: bool = False) -> None:
                         (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
                     VALUES
                         (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text)
-                    ON CONFLICT (card_id, ability_type, ability_name, effect_class) DO NOTHING
+                    ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, '')) DO NOTHING
                 """), role_inserts)
 
         await db.commit()
