@@ -380,8 +380,18 @@ def _tag_roles(oracle_text: str, type_line: str) -> list[dict]:
 async def tag_abilities() -> None:
     log.info("Tagging abilities…")
 
+    # Snapshot which trigger_events already have consumer rows BEFORE Pass 1 so
+    # the gap detector doesn't miss events that get their first rows from newly
+    # added cards in this very run.
+    async with Session() as db:
+        existing_events_result = await db.execute(text("""
+            SELECT DISTINCT trigger_event FROM card_abilities
+            WHERE trigger_event IS NOT NULL
+        """))
+        existing_events = {row[0] for row in existing_events_result.fetchall()}
+
     # ── Pass 1: keyword / triggered / activated abilities ─────────────────────
-    # Only processes cards that have no ability rows at all yet.
+    # Processes cards that have no ability rows yet (fresh cards).
     async with Session() as db:
         result = await db.execute(text("""
             SELECT c.id, c.oracle_text, c.keywords
@@ -442,6 +452,64 @@ async def tag_abilities() -> None:
                 """), inserts)
 
         await db.commit()
+
+    # ── Pass 1b: gap detection — apply new trigger patterns to existing cards ──
+    # When a new trigger_event is added to TRIGGER_PATTERNS after the initial
+    # tag_abilities run, existing cards are skipped by Pass 1 (they already have
+    # ability rows).  This pass detects trigger_events with 0 consumer rows and
+    # re-processes ALL cards for just those new events.
+    #
+    # We use the pre-Pass-1 snapshot so events that got their first rows from
+    # newly ingested cards during Pass 1 are still detected as gaps (they won't
+    # have rows on any *existing* cards).
+    new_events = [
+        (pattern, name, event)
+        for pattern, name, event in TRIGGER_PATTERNS
+        if event and event not in existing_events
+    ]
+
+    if new_events:
+        log.info(
+            "Gap detection: %d new trigger event(s) have no consumer rows — "
+            "backfilling across all cards: %s",
+            len(new_events), [e for _, _, e in new_events],
+        )
+        async with Session() as db:
+            all_cards_result = await db.execute(text("""
+                SELECT c.id, c.oracle_text FROM cards c WHERE c.oracle_text IS NOT NULL
+            """))
+            all_cards = all_cards_result.fetchall()
+
+        log.info("  Scanning %d cards for %d new event(s)…", len(all_cards), len(new_events))
+        backfill_count = 0
+        async with Session() as db:
+            for card_id, oracle_text in tqdm(all_cards):
+                inserts = []
+                for pattern, name, event in new_events:
+                    m = re.search(pattern, oracle_text, re.IGNORECASE)
+                    if m:
+                        inserts.append({
+                            "card_id": str(card_id),
+                            "ability_type": "triggered" if "trigger" in name else "activated",
+                            "ability_name": name,
+                            "trigger_event": event,
+                            "effect_class": None,
+                            "raw_text": m.group(0)[:200],
+                        })
+                if inserts:
+                    await db.execute(text("""
+                        INSERT INTO card_abilities
+                            (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
+                        VALUES
+                            (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text)
+                        ON CONFLICT (card_id, ability_type, ability_name, effect_class) DO NOTHING
+                    """), inserts)
+                    backfill_count += len(inserts)
+
+            await db.commit()
+        log.info("  Gap detection complete: %d rows inserted", backfill_count)
+    else:
+        log.info("Gap detection: all trigger events already have consumer rows — nothing to backfill")
 
     # ── Pass 2: functional role tags ──────────────────────────────────────────
     # Processes cards that have no 'role' ability rows yet.  This is a separate
@@ -739,9 +807,26 @@ async def compute_synergy() -> None:
             log.info("  %s → no producers found, skipping", trigger_event)
             continue
 
+        # Count consumers before running chunks — 0 consumers means the
+        # trigger_event pattern produced no card_abilities rows (tag_abilities
+        # gap) and all chunks would silently produce 0 inserts.
+        async with Session() as db:
+            consumer_count = (await db.execute(text(f"""
+                SELECT COUNT(*) FROM card_abilities
+                WHERE trigger_event = '{trigger_event}'
+            """))).scalar()
+        if not consumer_count:
+            log.warning(
+                "  %s → 0 consumer rows in card_abilities — skipping "
+                "(run tag_abilities to backfill this trigger event)",
+                trigger_event,
+            )
+            continue
+
         total_inserted = 0
         n_chunks = (len(producer_ids) + SYNERGY_CHUNK - 1) // SYNERGY_CHUNK
-        log.info("  %s: %d producers in %d chunks…", trigger_event, len(producer_ids), n_chunks)
+        log.info("  %s: %d producers × %d consumers in %d chunks…",
+                 trigger_event, len(producer_ids), consumer_count, n_chunks)
 
         for chunk_idx in range(0, len(producer_ids), SYNERGY_CHUNK):
             if total_inserted >= SYNERGY_LIMIT:
@@ -784,7 +869,7 @@ async def compute_synergy() -> None:
                 log.info("    chunk %d/%d — %d edges so far",
                          chunk_idx // SYNERGY_CHUNK + 1, n_chunks, total_inserted)
 
-        log.info("  %s → %d edges total", trigger_event, total_inserted)
+        log.info("  %s → %d new edges (existing skipped via ON CONFLICT)", trigger_event, total_inserted)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

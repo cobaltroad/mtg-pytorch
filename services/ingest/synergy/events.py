@@ -24,7 +24,7 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         "creature_etb",
     ),
     (
-        r"when(ever)?\s+(a |an )?artifact.{0,30}enters the battlefield",
+        r"when(ever)?\s+.{0,30}artifact.{0,30}enter",
         "Artifact ETB trigger",
         "artifact_etb",
     ),
