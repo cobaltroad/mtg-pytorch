@@ -290,12 +290,21 @@ async def load_cards(path: Path, source: str) -> None:
 
 # ── Stage 3: Embed ────────────────────────────────────────────────────────────
 
+from land_tags import annotate_land_oracle  # noqa: E402
+
+
 def _card_text(row) -> str:
     parts = [row[1]]  # name
     if row[4]:         # type_line
         parts.append(row[4])
-    if row[5]:         # oracle_text
-        parts.append(row[5])
+    oracle = row[5] or ""
+    if oracle:
+        # Augment Land oracle text with structured mana-quality tags so the
+        # model learns that Verdant Catacombs and Woodland Cemetery cluster
+        # together rather than being separated by superficial text differences.
+        if row[4] and "Land" in row[4]:
+            oracle = annotate_land_oracle(oracle)
+        parts.append(oracle)
     return " | ".join(parts)
 
 
