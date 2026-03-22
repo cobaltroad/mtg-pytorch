@@ -752,6 +752,17 @@ async def compute_tribal_typeline_synergy() -> None:
 
         log.info("  %s: %d members, %d legendary commanders", tribe, len(member_ids), len(cmd_ids))
 
+        # Check how many edges already exist for this tribe so the "0 new edges"
+        # log from ON CONFLICT DO NOTHING isn't misread as a failure.
+        async with Session() as db:
+            existing_tribal = (await db.execute(text(f"""
+                SELECT count(*) FROM synergy_edges
+                WHERE metadata->>'trigger_event' = 'tribal_{t}_typeline'
+            """))).scalar()
+        if existing_tribal:
+            log.info("  %s: %d existing typeline edges (new inserts skipped via ON CONFLICT)",
+                     tribe, existing_tribal)
+
         # ── 1. Commander → all tribe members (uncapped) ─────────────────────
         cmd_inserted = 0
         for chunk_start in range(0, len(cmd_ids), SYNERGY_CHUNK):
@@ -774,7 +785,7 @@ async def compute_tribal_typeline_synergy() -> None:
                 """))
                 await db.commit()
             cmd_inserted += result.rowcount
-        log.info("    commander→member: %d edges", cmd_inserted)
+        log.info("    commander→member: %d new edges (existing skipped via ON CONFLICT)", cmd_inserted)
 
         # ── 2. Member → member (capped) ──────────────────────────────────────
         member_inserted = 0
@@ -802,7 +813,7 @@ async def compute_tribal_typeline_synergy() -> None:
                 """))
                 await db.commit()
             member_inserted += result.rowcount
-        log.info("    member→member: %d edges", member_inserted)
+        log.info("    member→member: %d new edges (existing skipped via ON CONFLICT)", member_inserted)
 
     log.info("Tribal type_line synergy complete")
 
