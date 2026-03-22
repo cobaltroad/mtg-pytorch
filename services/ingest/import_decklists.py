@@ -190,6 +190,10 @@ async def main():
     finally:
         await conn.close()
 
+    import deck_composition_profile as dcp
+    log.info("Regenerating deck composition profile → %s", dcp.OUTPUT_FILE)
+    await dcp.main()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
