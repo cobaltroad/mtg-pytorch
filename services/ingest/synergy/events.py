@@ -13,23 +13,26 @@ from __future__ import annotations
 
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     # ── ETB sub-types (most specific first so distinct tags are recorded) ─────
+    # Note: WotC Oracle errata (2021+) shortened "enters the battlefield" to
+    # "enters" on most cards.  All patterns use `enters( the battlefield)?` to
+    # match both the old and new wording.
     (
-        r"when(ever)?\s+(a |another )?nontoken creature.{0,30}enters the battlefield",
+        r"when(ever)?\s+(a |another )?nontoken creature.{0,30}enters( the battlefield)?",
         "Nontoken creature ETB",
         "nontoken_etb",
     ),
     (
-        r"when(ever)?\s+(a |another )?creature.{0,30}enters the battlefield",
+        r"when(ever)?\s+(a |another )?creature.{0,30}enters( the battlefield)?",
         "Creature ETB trigger",
         "creature_etb",
     ),
     (
-        r"when(ever)?\s+.{0,30}artifact.{0,30}enter",
+        r"when(ever)?\s+.{0,30}artifact.{0,30}enters?( the battlefield)?",
         "Artifact ETB trigger",
         "artifact_etb",
     ),
     # Generic ETB catch-all (also matches enchantments, planeswalkers, etc.)
-    (r"when(ever)?\s+.{0,60}enters the battlefield", "ETB trigger", "enters_battlefield"),
+    (r"when(ever)?\s+.{0,60}enters( the battlefield)?", "ETB trigger", "enters_battlefield"),
 
     # ── Creature death ────────────────────────────────────────────────────────
     # Nontoken creature dies: the most common Aristocrats / sacrifice payoff template
@@ -62,7 +65,7 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     ),
 
     # ── Common event types ────────────────────────────────────────────────────
-    (r"when(ever)?\s+a land enters", "Landfall trigger", "landfall"),
+    (r"when(ever)?\s+a land enters( the battlefield)?", "Landfall trigger", "landfall"),
     (r"when(ever)?\s+(you |a player |an opponent )discard", "Discard trigger", "discard"),
     (r"when(ever)?\s+(you )?create.{0,30}token", "Token creation trigger", "token_creation"),
     (r"when(ever)?\s+.{0,40}(counter|counters).{0,20}(placed|put) on", "Counter trigger", "counter_added"),
