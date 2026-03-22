@@ -123,6 +123,10 @@ def _count_commander_colors_produced(
         return 0
     produced = _colors_produced(oracle_text)
     if "ANY" in produced:
+        # Type-restricted any-color (Base Camp, Cavern of Souls, etc.) is useful
+        # but narrower than an unrestricted dual — counts as 1, not all colors.
+        if _SPEND_ONLY_RE.search(oracle_text):
+            return 1
         return len(real_colors)
     return len(produced & real_colors)
 
