@@ -63,11 +63,16 @@ _DOESNT_UNTAP_RE = re.compile(r"this land doesn't untap during your untap step",
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
+# Issue #56: ingest now prepends structured mana-quality tags ([DUAL_LAND:BG],
+# [FETCH_LAND:BG], [ANY_COLOR_LAND], [ENTERS_TAPPED], etc.) to land oracle text
+# before embedding, so the model learns land quality directly.  These runtime
+# multipliers are reduced accordingly and can be eliminated once the model is
+# retrained on the augmented embeddings.
 MANA_PRODUCER_BOOST    = 1.35
-COLORLESS_LAND_PENALTY = 0.25
-SPECIFIC_DUAL_BOOST    = 2.0   # shock/check/fetch/filter/bond/fast/slow lands
-ANY_COLOR_BOOST        = 1.6   # City of Brass, Command Tower, Mana Confluence
-TAPPED_LAND_PENALTY    = 0.8
+COLORLESS_LAND_PENALTY = 0.5   # was 0.25 — model now signals this via embedding
+SPECIFIC_DUAL_BOOST    = 1.5   # was 2.0  — model now signals this via embedding
+ANY_COLOR_BOOST        = 1.3   # was 1.6  — model now signals this via embedding
+TAPPED_LAND_PENALTY    = 0.9   # was 0.8  — model now signals this via embedding
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
