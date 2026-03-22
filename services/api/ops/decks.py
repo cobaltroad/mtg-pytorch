@@ -18,6 +18,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # Compiled once at import time — used in boost logic inside generate().
 # Matches mana-producing activated abilities like "{T}: Add {G}" or "Add {C}".
 _MANA_ADD_RE = re.compile(r"\{[tT]\}\s*:\s*[Aa]dd|\badd \{", re.I)
+
+# Matches a colored mana symbol within an "Add …" clause.
+# Used to detect whether a land produces mana in the commander's colors.
+_ADD_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,60}\{([WUBRG])\}")
+# Matches "any color" phrasing (City of Brass, Mana Confluence, etc.)
+_ADD_ANY_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,40}any color", re.I)
+# Score multiplier for non-basic lands that produce no mana in the commander's colors.
+# Pushes Urza's Tower, Tomb of the Spirit Dragon, etc. to the bottom of the land pool
+# without making them impossible to include when better options are exhausted.
+_COLORLESS_LAND_PENALTY = 0.25
 # Score multiplier applied to mana-producing cards when "mana_producers" boost is active.
 _MANA_PRODUCER_BOOST = 1.35
 
@@ -387,6 +397,38 @@ async def generate(
                     spell_scored = [
                         (cid, sc) for cid, sc in scored if not _is_land(cid)
                     ]
+
+                    # ── Non-basic land color penalty ──────────────────────────
+                    # Demote lands that produce no mana in the commander's colors
+                    # (e.g. Urza's Tower, Tomb of the Spirit Dragon, Blinkmoth
+                    # Nexus) so colored duals and utility lands that tap for the
+                    # right colors rank first.  Skipped for colorless commanders.
+                    _real_colors = [c for c in color_identity if c != "C"]
+                    if _real_colors and nonbasic_scored:
+                        _land_ids = [cid for cid, _ in nonbasic_scored]
+                        _land_ot_result = await db.execute(
+                            text("SELECT id::text, oracle_text FROM cards WHERE id::text = ANY(:ids)"),
+                            {"ids": _land_ids},
+                        )
+                        _land_ots: dict[str, str] = {
+                            str(r[0]): (r[1] or "") for r in _land_ot_result.fetchall()
+                        }
+                        _cmd_colors = set(_real_colors)
+
+                        def _land_produces_cmd_color(ot: str) -> bool:
+                            if _ADD_ANY_COLOR_RE.search(ot):
+                                return True
+                            return any(
+                                m.group(1) in _cmd_colors
+                                for m in _ADD_COLOR_RE.finditer(ot)
+                            )
+
+                        nonbasic_scored = [
+                            (cid, sc if _land_produces_cmd_color(_land_ots.get(cid, ""))
+                             else sc * _COLORLESS_LAND_PENALTY)
+                            for cid, sc in nonbasic_scored
+                        ]
+                        nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 
                     # ── Ramp selection ────────────────────────────────────────
                     # Force Sol Ring + Arcane Signet in first, then fill to
