@@ -47,6 +47,9 @@ _CONDITIONAL_SACRIFICE_RE = re.compile(
 # Permanent types the deck can reasonably rely on having (don't penalise these)
 _RELIABLE_PERMANENT_TYPES = frozenset({"creature", "creatures", "land", "lands"})
 
+# Lands that don't untap normally (Forsaken City, etc.) — functionally much worse
+_DOESNT_UNTAP_RE = re.compile(r"this land doesn't untap during your untap step", re.I)
+
 MANA_PRODUCER_BOOST = 1.35
 COLORLESS_LAND_PENALTY = 0.25
 DUAL_LAND_BOOST = 1.6
@@ -183,6 +186,10 @@ def score_land_mana_quality(
                 tags.setdefault(cid, []).append("land:tapped_penalty")
         m = _CONDITIONAL_SACRIFICE_RE.search(ot)
         if m and m.group(1).lower() not in _RELIABLE_PERMANENT_TYPES:
+            sc = sc * COLORLESS_LAND_PENALTY
+            if tags is not None:
+                tags.setdefault(cid, []).append("land:colorless_penalty")
+        if _DOESNT_UNTAP_RE.search(ot):
             sc = sc * COLORLESS_LAND_PENALTY
             if tags is not None:
                 tags.setdefault(cid, []).append("land:colorless_penalty")
