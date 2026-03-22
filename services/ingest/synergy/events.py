@@ -73,9 +73,6 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     ),
     (r"when(ever)?\s+(you )?sacrifice", "Sacrifice trigger", "sacrifice"),
 
-    # ── Activated abilities ───────────────────────────────────────────────────
-    (r"\{t\}\s*:", "Tap ability", "activated_tap"),
-    (r"sacrifice .{0,40}:", "Sacrifice activated", "activated_sacrifice"),
 ]
 
 # ── Producer map ──────────────────────────────────────────────────────────────
