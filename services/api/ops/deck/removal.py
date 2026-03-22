@@ -37,6 +37,11 @@ HARD_REMOVAL_BOOST = 1.3
 SOFT_REMOVAL_BOOST = 1.1
 
 
+def is_removal_card(oracle_text: str) -> bool:
+    """Return True if the card has any removal effect (hard or soft)."""
+    return bool(_HARD_REMOVAL_RE.search(oracle_text) or _SOFT_REMOVAL_RE.search(oracle_text))
+
+
 def score_removal(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],

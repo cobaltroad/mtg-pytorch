@@ -20,9 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .signals import build_signals
 from .ramp import score_mana_producers, score_land_mana_quality, select_ramp
-from .evasion import score_evasion_enablers
-from .removal import score_removal
-from .value_engine import score_value_engine
+from .evasion import score_evasion_enablers, is_evasion_card, EVASION_BOOST
+from .removal import score_removal, is_removal_card, HARD_REMOVAL_BOOST
+from .value_engine import score_value_engine, is_value_card, DRAW_BOOST
+from .composition_targets import TARGETS as _COMPOSITION_TARGETS
 
 log = logging.getLogger(__name__)
 
@@ -270,9 +271,15 @@ async def generate(
                     score_tags: dict[str, list[str]] = {}
 
                     scored = score_mana_producers(scored, oracle_texts, signals, score_tags)
-                    scored = score_removal(scored, oracle_texts, signals, score_tags)
-                    scored = score_value_engine(scored, oracle_texts, signals, score_tags)
-                    scored = score_evasion_enablers(scored, oracle_texts, signals, score_tags)
+                    # Removal, draw/value, and evasion are applied upfront only
+                    # for the single-pass fast path (synergy_alpha == 0.0).
+                    # The iterative path (synergy_alpha > 0) handles them inside
+                    # the greedy loop with diminishing boosts so that the deck
+                    # stops favouring a category once its structural target is met.
+                    if synergy_alpha == 0.0:
+                        scored = score_removal(scored, oracle_texts, signals, score_tags)
+                        scored = score_value_engine(scored, oracle_texts, signals, score_tags)
+                        scored = score_evasion_enablers(scored, oracle_texts, signals, score_tags)
 
                     # Commander-value boost (inline: Fierce Guardianship, etc.)
                     if "commander_value" in signals.active_boosts:
@@ -403,6 +410,43 @@ async def generate(
                         # Build index: cand_ids → position in norm_model_scores array.
                         idx_map: dict[str, int] = {cid: i for i, cid in enumerate(cand_ids)}
 
+                        # ── Iterative role boosts (issue #61) ────────────────
+                        # Pre-classify all candidates by structural role (once).
+                        # Arrays are indexed by the *original* position in cand_ids
+                        # (same invariant as norm_model_scores / idx_map) so they
+                        # stay valid as cand_ids shrinks each step.
+                        _ot = oracle_texts
+                        _role_rm = np.array(
+                            [is_removal_card(_ot.get(c, "")) for c in cand_ids],
+                            dtype=np.float32,
+                        )
+                        _role_dw = np.array(
+                            [is_value_card(_ot.get(c, "")) for c in cand_ids],
+                            dtype=np.float32,
+                        )
+                        _role_ev = np.array(
+                            [is_evasion_card(_ot.get(c, "")) for c in cand_ids],
+                            dtype=np.float32,
+                        )
+
+                        # Seed role counts from already-selected ramp cards.
+                        _rm_count = sum(
+                            1 for c, _ in selected_ramp
+                            if is_removal_card(oracle_texts.get(c, ""))
+                        )
+                        _dw_count = sum(
+                            1 for c, _ in selected_ramp
+                            if is_value_card(oracle_texts.get(c, ""))
+                        )
+                        _ev_count = sum(
+                            1 for c, _ in selected_ramp
+                            if is_evasion_card(oracle_texts.get(c, ""))
+                        )
+
+                        _tgt_rm = max(_COMPOSITION_TARGETS.get("removal", 8), 1)
+                        _tgt_dw = max(_COMPOSITION_TARGETS.get("draw",    8), 1)
+                        _tgt_ev = max(_COMPOSITION_TARGETS.get("evasion", 4), 1)
+
                         # Soft CMC penalty: candidates in full buckets score ×0.1.
                         _BUCKET_TARGETS = {b: t for b, (_, t) in enumerate(CURVE_BUCKETS)}
 
@@ -438,6 +482,25 @@ async def generate(
                                 + synergy_alpha * norm_syn
                             )
 
+                            # Diminishing role boosts: boost_factor 1.0 → 0.0 as
+                            # each structural target fills.  Scores are normalised
+                            # to [0, 1] here, so boosts are additive (not × as in
+                            # the upfront scorers) to stay in a sensible range.
+                            _bf_rm = max(0.0, (_tgt_rm - _rm_count) / _tgt_rm)
+                            _bf_dw = max(0.0, (_tgt_dw - _dw_count) / _tgt_dw)
+                            _bf_ev = (
+                                max(0.0, (_tgt_ev - _ev_count) / _tgt_ev)
+                                if signals.wants_attack else 0.0
+                            )
+                            if _bf_rm or _bf_dw or _bf_ev:
+                                pos_arr = np.array(positions, dtype=np.intp)
+                                blended = (
+                                    blended
+                                    + _role_rm[pos_arr] * (HARD_REMOVAL_BOOST - 1.0) * _bf_rm
+                                    + _role_dw[pos_arr] * (DRAW_BOOST          - 1.0) * _bf_dw
+                                    + _role_ev[pos_arr] * (EVASION_BOOST        - 1.0) * _bf_ev
+                                )
+
                             # Apply soft CMC penalty.
                             penalties = np.array(
                                 [_cmc_penalty(cid) for cid in cand_ids], dtype=np.float32
@@ -450,6 +513,18 @@ async def generate(
 
                             selected_non_ramp_iter.append((best_cid, best_score))
                             deck_so_far.append(best_cid)
+
+                            # Update role counts and score_tags for selected card.
+                            best_orig = idx_map[best_cid]
+                            if _role_rm[best_orig]:
+                                _rm_count += 1
+                                score_tags.setdefault(best_cid, []).append("removal:hard")
+                            if _role_dw[best_orig]:
+                                _dw_count += 1
+                                score_tags.setdefault(best_cid, []).append("value:draw")
+                            if _role_ev[best_orig]:
+                                _ev_count += 1
+                                score_tags.setdefault(best_cid, []).append("evasion:unblockable")
 
                             # Update bucket fill.
                             b = _curve_bucket(cmc_map.get(best_cid, 0.0))

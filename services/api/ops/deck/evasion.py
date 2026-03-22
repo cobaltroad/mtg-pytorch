@@ -34,6 +34,11 @@ EVASION_BOOST = 1.8
 SMALL_EVASION_TRIBAL_BONUS = 1.5
 
 
+def is_evasion_card(oracle_text: str) -> bool:
+    """Return True if the card grants evasion (unblockability or small-creature evasion)."""
+    return bool(_EVASION_RE.search(oracle_text) or _SMALL_EVASION_RE.search(oracle_text))
+
+
 def score_evasion_enablers(
     scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
