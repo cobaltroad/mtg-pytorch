@@ -14,9 +14,10 @@ import re
 
 from .signals import DeckSignals
 
-# Exile or destroy a permanent / creature / nonland
+# Exile or destroy a permanent / creature / nonland.
+# Negative lookahead excludes graveyard-targeting effects (recursion, not removal).
 _HARD_REMOVAL_RE = re.compile(
-    r"\bexile target\b"
+    r"\bexile target(?!.{0,100}from (?:your|a|the|an) graveyard)\b"
     r"|\bdestroy target\b"
     r"|\bdestroys? all\b"
     r"|\bexile all\b"

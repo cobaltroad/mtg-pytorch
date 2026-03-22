@@ -18,24 +18,66 @@ from .signals import DeckSignals
 # Activated mana ability: "{T}: Add …" or free "Add {" phrasing
 _MANA_ADD_RE = re.compile(r"\{[tT]\}\s*:\s*[Aa]dd|\badd \{", re.I)
 
-# Colored symbol inside an Add clause ("Add {G}", "Add {B}{G}")
-_ADD_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,60}\{([WUBRG])\}")
+# Pure tap mana ability: cost is exactly {T}: with no other costs.
+# Captures everything after "Add" up to end of sentence/line.
+# Excludes abilities like "{T}, Pay {E}:", "{1}, {T}:", "{T}, Sacrifice ...:".
+_PURE_TAP_ADD_RE = re.compile(r"^\{[Tt]\}\s*:\s*Add([^\n.]*)", re.M)
+
+# Any colored mana symbol — applied inside a captured Add clause
+_COLOR_SYMBOL_RE = re.compile(r"\{([WUBRG])\}")
 
 # "Any color" phrasing: City of Brass, Mana Confluence, Command Tower, etc.
 _ADD_ANY_COLOR_RE = re.compile(r"[Aa]dd[^.\n]{0,40}any color", re.I)
 
+# Type-restricted mana: "Spend this mana only to cast a Ninja or Turtle spell"
+_SPEND_ONLY_RE = re.compile(
+    r"[Ss]pend this mana only to cast (?:a |an )?(\w+)(?: or (\w+))? spell", re.I
+)
+
 MANA_PRODUCER_BOOST = 1.35
 COLORLESS_LAND_PENALTY = 0.25
+DUAL_LAND_BOOST = 1.6
 
 
-def produces_commander_color(oracle_text: str, real_colors: frozenset[str]) -> bool:
-    """True if the text's mana production includes any of the commander's colors."""
-    if _ADD_ANY_COLOR_RE.search(oracle_text):
+def _type_restricted_mana_is_useful(
+    oracle_text: str, deck_creature_types: frozenset[str]
+) -> bool:
+    """Return False if mana is restricted to creature types not present in the deck."""
+    m = _SPEND_ONLY_RE.search(oracle_text)
+    if not m:
         return True
-    return any(
-        m.group(1) in real_colors
-        for m in _ADD_COLOR_RE.finditer(oracle_text)
-    )
+    restricted = {g.lower() for g in m.groups() if g}
+    deck_lower = {t.lower() for t in deck_creature_types}
+    return bool(restricted & deck_lower)
+
+
+def _colors_produced(oracle_text: str) -> frozenset[str]:
+    """Return colored mana symbols from pure-tap abilities only ({T}: Add ...).
+
+    Abilities with additional costs ({1}, {E}, Sacrifice, Pay life, etc.)
+    are excluded — those are conditional and don't count as reliable mana fixing.
+    """
+    colors: set[str] = set()
+    for m in _PURE_TAP_ADD_RE.finditer(oracle_text):
+        clause = m.group(1)
+        if "any color" in clause.lower():
+            return frozenset({"ANY"})  # sentinel: caller handles this
+        colors |= set(_COLOR_SYMBOL_RE.findall(clause))
+    return frozenset(colors)
+
+
+def produces_commander_color(
+    oracle_text: str,
+    real_colors: frozenset[str],
+    deck_creature_types: frozenset[str] = frozenset(),
+) -> bool:
+    """True if a pure-tap ability produces any of the commander's colors."""
+    if not _type_restricted_mana_is_useful(oracle_text, deck_creature_types):
+        return False
+    produced = _colors_produced(oracle_text)
+    if "ANY" in produced:
+        return bool(real_colors)
+    return bool(produced & real_colors)
 
 
 def score_mana_producers(
@@ -61,23 +103,53 @@ def score_mana_producers(
     return result
 
 
+def _count_commander_colors_produced(
+    oracle_text: str,
+    real_colors: frozenset[str],
+    deck_creature_types: frozenset[str] = frozenset(),
+) -> int:
+    """Count how many distinct commander colors this land can produce.
+
+    Returns 0 if the land's colored mana is restricted to creature types
+    not present in the deck.
+    """
+    if not _type_restricted_mana_is_useful(oracle_text, deck_creature_types):
+        return 0
+    produced = _colors_produced(oracle_text)
+    if "ANY" in produced:
+        return len(real_colors)
+    return len(produced & real_colors)
+
+
 def score_land_mana_quality(
     nonbasic_scored: list[tuple[str, float]],
     oracle_texts: dict[str, str],
     signals: DeckSignals,
     tags: dict[str, list[str]] | None = None,
+    deck_creature_types: frozenset[str] = frozenset(),
 ) -> list[tuple[str, float]]:
-    """Penalise non-basic lands that produce no mana in the commander's colors.
+    """Boost dual lands; penalise non-basic lands that produce no commander colors.
 
-    Urza's Tower, Tomb of the Spirit Dragon, Blinkmoth Nexus, etc. sink
-    to the bottom of the land pool so colored duals and fetch lands rank
-    first.  No-op for colorless commanders.
+    Lands producing ≥2 commander colors (shocks, checks, temples, etc.) get a
+    boost so they outrank utility lands.  Colorless-only lands (Urza's Tower,
+    Blinkmoth Nexus, etc.) are penalised.  No-op for colorless commanders.
+
+    deck_creature_types: all creature subtypes in the top spell candidates,
+    used to detect type-restricted lands like Turtle Lair that are useless
+    when their restricted type isn't in the deck.
     """
     if not signals.real_colors:
         return nonbasic_scored
     result = []
     for cid, sc in nonbasic_scored:
-        if not produces_commander_color(oracle_texts.get(cid, ""), signals.real_colors):
+        colors_produced = _count_commander_colors_produced(
+            oracle_texts.get(cid, ""), signals.real_colors, deck_creature_types
+        )
+        if colors_produced >= 2:
+            sc = sc * DUAL_LAND_BOOST
+            if tags is not None:
+                tags.setdefault(cid, []).append("land:dual_boost")
+        elif colors_produced == 0:
             sc = sc * COLORLESS_LAND_PENALTY
             if tags is not None:
                 tags.setdefault(cid, []).append("land:colorless_penalty")

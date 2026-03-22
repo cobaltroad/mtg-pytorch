@@ -247,10 +247,6 @@ async def generate(
                     cmd_oracle_text: str = commander_row[4] or ""
                     cmd_type_line:   str = commander_row[3] or ""
                     cmd_tribal_types = _commander_tribal_types(cmd_oracle_text, all_subtypes)
-                    if "Creature" in cmd_type_line:
-                        cmd_tribal_types = cmd_tribal_types | (
-                            _card_subtypes(cmd_type_line) & all_subtypes
-                        )
 
                     # ── Build deck signals ────────────────────────────────────
                     signals = build_signals(
@@ -311,9 +307,19 @@ async def generate(
 
                     # ── Land quality scoring ──────────────────────────────────
                     # Colorless-mana penalty runs after the split since it's
-                    # land-specific.
+                    # land-specific.  Collect creature subtypes from the top
+                    # spell candidates so type-restricted lands (e.g. Turtle
+                    # Lair) are only penalised when their type isn't in the deck.
+                    spell_creature_types: frozenset[str] = frozenset(
+                        sub
+                        for cid, _ in spell_scored[:SPELL_SLOTS]
+                        for tl in [type_lines.get(cid, "")]
+                        if "Creature" in tl and "\u2014" in tl
+                        for sub in tl.split("\u2014", 1)[1].split()
+                    )
                     nonbasic_scored = score_land_mana_quality(
-                        nonbasic_scored, oracle_texts, signals, score_tags
+                        nonbasic_scored, oracle_texts, signals, score_tags,
+                        deck_creature_types=spell_creature_types,
                     )
                     nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 

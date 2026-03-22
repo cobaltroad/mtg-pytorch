@@ -20,6 +20,9 @@ _DRAW_RE = re.compile(r"\bdraw (a|two|three|\w+ )?card(s)?\b", re.I)
 # Looting / rummaging: draw then discard
 _LOOT_RE = re.compile(r"\bdraw.{0,30}discard\b|\bdiscard.{0,30}draw\b", re.I)
 
+# Parenthetical reminder text — describes token/keyword rules, not the card's own effects
+_REMINDER_RE = re.compile(r"\([^)]*\)")
+
 # Tutors: search your library
 _TUTOR_RE = re.compile(r"\bsearch your library\b", re.I)
 
@@ -40,7 +43,7 @@ def score_value_engine(
     """
     result = []
     for cid, sc in scored:
-        ot = oracle_texts.get(cid, "")
+        ot = _REMINDER_RE.sub("", oracle_texts.get(cid, ""))
         if _TUTOR_RE.search(ot):
             sc = sc * TUTOR_BOOST
             if tags is not None:
