@@ -26,6 +26,10 @@ param(
     [int]$Patience = 10,
     [double]$TempStart = 0.5,
     [double]$TempEnd = 0.05,
+    # Phase 4 Option A: synergy-only training (default $true).
+    # Set -SynergyOnly $false to fall back to the legacy deck+synergy loop.
+    [bool]$SynergyOnly = $true,
+    [int]$SynBatchSize = 256,
 
     # Phase 4 synergy-guided training weights
     [int]$SynPerEpoch = 1000,
@@ -251,12 +255,16 @@ if ($Mode -eq 'train') {
         $cmd += @('--patience', $Patience)
         $cmd += @(
             '--temp-start', $TempStart, '--temp-end', $TempEnd,
-            '--syn-per-epoch', $SynPerEpoch,
-            '--combo-weight', $ComboWeight,
             '--ability-weight', $AbilityWeight,
             '--tribal-weight', $TribalWeight,
             '--synergy-limit', $P4SynergyLimit
         )
+        if ($SynergyOnly) {
+            $cmd += @('--synergy-only', '--syn-batch-size', $SynBatchSize)
+        } else {
+            $cmd += @('--no-synergy-only', '--syn-per-epoch', $SynPerEpoch,
+                      '--combo-weight', $ComboWeight)
+        }
     }
 
     Write-Host "Running trainer with args: $($cmd -join ' ')"

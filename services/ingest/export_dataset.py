@@ -331,22 +331,49 @@ def _build_synergy_positions(
     decks: list[dict],
     card_ids: list[str],
     id_to_idx: dict[str, int],
+    color_ids: dict[str, frozenset],
     combo_weight: float = 3.0,
     ability_weight: float = 2.0,
     tribal_weight: float = 1.5,
 ) -> list[dict]:
-    """Pre-compute Phase 4 synergy positions, storing int indices throughout.
+    """Pre-compute Phase 4 synergy positions for ALL legal commanders.
 
-    Replicates load_synergy_positions() from train.py but writes index-based
-    records so the trainer can reconstruct them without a DB connection.
+    Covers three position types:
+
+    Combo completions (combo_weight):
+        Require deck overlap (≥2 package cards in a human deck) to form
+        meaningful context.  Only deck commanders produce these.
+
+    Ability-trigger / tribal (ability_weight / tribal_weight):
+        Loaded for every embedded card that is a legal commander appearing in
+        synergy_edges — not just those with human decklists.  legal_neg_indices
+        are derived from color identity so no deck data is required.
+
+    Storing positions for all commanders (not just ~180 deck commanders)
+    exposes the trainer to a much larger commander distribution, which is
+    essential for Option A (synergy-only) training.
     """
+    from collections import Counter
+
     log.info(
         "Building Phase 4 synergy positions "
         "(combo=%.1f×, ability=%.1f×, tribal=%.1f×, limit=%d/cmd)…",
         combo_weight, ability_weight, tribal_weight, SYN_LIMIT,
     )
 
-    emb_set      = set(id_to_idx.keys())
+    n = len(card_ids)
+    _legal_cache: dict[frozenset, np.ndarray] = {}
+
+    def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
+        if cmd_ci not in _legal_cache:
+            idx = np.array(
+                [i for i, cid in enumerate(card_ids)
+                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                dtype=np.int64,
+            )
+            _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(n, dtype=np.int64)
+        return _legal_cache[cmd_ci]
+
     cmd_legal    = {d["commander_idx"]: d["legal_neg_indices"] for d in decks}
     deck_card_sets = {d["commander_idx"]: set(d["card_idxs"]) for d in decks}
 
@@ -368,33 +395,33 @@ def _build_synergy_positions(
                 if card_id in id_to_idx:
                     pkg_map[pkg_id].append(id_to_idx[card_id])
 
-            # ── Ability-trigger / tribal edges for deck commanders ────────────
-            cmd_idx_strs = [card_ids[d["commander_idx"]] for d in decks]
-            if not cmd_idx_strs:
-                return positions
-
-            placeholders = ",".join(f"'{c}'" for c in cmd_idx_strs)
-            cur.execute(f"""
-                SELECT card_a::text, card_b::text,
-                       COALESCE(metadata->>'trigger_event', '') AS trigger_event
-                FROM synergy_edges
-                WHERE card_a::text IN ({placeholders})
-                  AND score_type = 'ability_trigger'
-                  AND card_b IS NOT NULL
+            # ── Ability-trigger / tribal edges for ALL legal commanders ───────
+            cur.execute("""
+                SELECT se.card_a::text, se.card_b::text, se.score_type,
+                       COALESCE(se.metadata->>'trigger_event', '') AS trigger_event
+                FROM synergy_edges se
+                JOIN cards c ON c.id = se.card_a
+                WHERE se.score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND se.card_b IS NOT NULL
+                  AND c.legalities->>'commander' = 'legal'
+                  AND (c.type_line ILIKE '%Legendary Creature%'
+                    OR c.type_line ILIKE '%Legendary Planeswalker%'
+                    OR c.oracle_text ILIKE '%can be your commander%')
+                ORDER BY se.card_a, se.score DESC
             """)
             ability_edges: dict[int, list[int]] = defaultdict(list)
             tribal_edges:  dict[int, list[int]] = defaultdict(list)
-            for card_a, card_b, trigger_event in cur.fetchall():
+            for card_a, card_b, score_type, trigger_event in cur.fetchall():
                 if card_a not in id_to_idx or card_b not in id_to_idx:
                     continue
                 a_idx_v = id_to_idx[card_a]
                 b_idx_v = id_to_idx[card_b]
-                if trigger_event.startswith("tribal_"):
+                if score_type == 'tribal_typeline' or trigger_event.startswith("tribal_"):
                     tribal_edges[a_idx_v].append(b_idx_v)
                 else:
                     ability_edges[a_idx_v].append(b_idx_v)
 
-    # ── Combo completions ─────────────────────────────────────────────────────
+    # ── Combo completions (deck-dependent) ────────────────────────────────────
     combo_count = 0
     for deck in decks:
         cmd_idx_v  = deck["commander_idx"]
@@ -415,14 +442,14 @@ def _build_synergy_positions(
                 })
                 combo_count += 1
 
-    log.info("  %d combo positions", combo_count)
+    log.info("  %d combo positions (deck commanders only)", combo_count)
 
-    # ── Ability-trigger positions ─────────────────────────────────────────────
+    # ── Ability-trigger positions (all commanders) ────────────────────────────
     ability_count = 0
+    cmd_ability_count: Counter = Counter()
     for cmd_idx_v, targets in ability_edges.items():
-        legal = cmd_legal.get(cmd_idx_v)
-        if legal is None:
-            continue
+        cmd_ci = color_ids.get(card_ids[cmd_idx_v], frozenset())
+        legal  = cmd_legal.get(cmd_idx_v) or torch.from_numpy(_legal_indices(cmd_ci))
         for target_idx in targets[:SYN_LIMIT]:
             positions.append({
                 "commander_idx":     cmd_idx_v,
@@ -432,15 +459,17 @@ def _build_synergy_positions(
                 "legal_neg_indices": legal,
             })
             ability_count += 1
+            cmd_ability_count[cmd_idx_v] += 1
 
-    log.info("  %d ability-trigger positions", ability_count)
+    log.info("  %d ability-trigger positions across %d commanders",
+             ability_count, len(cmd_ability_count))
 
-    # ── Tribal positions ──────────────────────────────────────────────────────
+    # ── Tribal positions (all commanders) ─────────────────────────────────────
     tribal_count = 0
+    cmd_tribal_count: Counter = Counter()
     for cmd_idx_v, targets in tribal_edges.items():
-        legal = cmd_legal.get(cmd_idx_v)
-        if legal is None:
-            continue
+        cmd_ci = color_ids.get(card_ids[cmd_idx_v], frozenset())
+        legal  = cmd_legal.get(cmd_idx_v) or torch.from_numpy(_legal_indices(cmd_ci))
         for target_idx in targets[:SYN_LIMIT]:
             positions.append({
                 "commander_idx":     cmd_idx_v,
@@ -450,9 +479,13 @@ def _build_synergy_positions(
                 "legal_neg_indices": legal,
             })
             tribal_count += 1
+            cmd_tribal_count[cmd_idx_v] += 1
 
-    log.info("  %d tribal positions", tribal_count)
-    log.info("  %d total synergy positions", len(positions))
+    log.info("  %d tribal positions across %d commanders",
+             tribal_count, len(cmd_tribal_count))
+
+    all_commanders = len({p["commander_idx"] for p in positions})
+    log.info("  %d total positions across %d commanders", len(positions), all_commanders)
     return positions
 
 
@@ -473,18 +506,20 @@ def main() -> None:
     color_ids = _load_color_identities(id_to_idx)
     decks     = _load_decks(card_ids, id_to_idx, color_ids)
 
-    # 4. Synergy positions (phase 4)
-    syn_positions = _build_synergy_positions(decks, card_ids, id_to_idx)
+    # 4. Synergy positions (phase 4) — covers all legal commanders, not just deck commanders
+    syn_positions = _build_synergy_positions(decks, card_ids, id_to_idx, color_ids)
 
     # 5. Assemble and save
+    commander_count = len({p["commander_idx"] for p in syn_positions})
     meta = {
-        "model":          EMBEDDING_MODEL,
-        "dim":            int(emb_matrix.shape[1]),
-        "card_count":     n,
-        "synergy_count":  int(len(a_idx)),
-        "deck_count":     len(decks),
-        "position_count": len(syn_positions),
-        "created_at":     datetime.now(timezone.utc).isoformat(),
+        "model":            EMBEDDING_MODEL,
+        "dim":              int(emb_matrix.shape[1]),
+        "card_count":       n,
+        "synergy_count":    int(len(a_idx)),
+        "deck_count":       len(decks),
+        "position_count":   len(syn_positions),
+        "commander_count":  commander_count,
+        "created_at":       datetime.now(timezone.utc).isoformat(),
     }
 
     artifact = {
@@ -498,6 +533,9 @@ def main() -> None:
         },
         "decks":             decks,
         "synergy_positions": syn_positions,
+        # color_identities enables the trainer to reconstruct legal_neg_indices
+        # for any commander without a DB connection — needed for synergy-only Phase 4.
+        "color_identities":  {cid: sorted(ci) for cid, ci in color_ids.items()},
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -510,8 +548,8 @@ def main() -> None:
 
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
-        "Done. %.1f MB  |  %d cards  |  %d pairs  |  %d decks  |  %d positions",
-        size_mb, n, len(a_idx), len(decks), len(syn_positions),
+        "Done. %.1f MB  |  %d cards  |  %d pairs  |  %d decks  |  %d positions  |  %d commanders",
+        size_mb, n, len(a_idx), len(decks), len(syn_positions), commander_count,
     )
 
 
