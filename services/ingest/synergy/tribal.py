@@ -91,3 +91,23 @@ _angel_lifegain = (
 PRODUCER_MAP["tribal_angel_cast"] = _angel_lifegain
 PRODUCER_MAP["tribal_angel_etb"]  = _angel_lifegain
 PRODUCER_MAP["tribal_angel_lord"] = _angel_lifegain
+
+# Goblins naturally pair with from-library effects (reveal/exile top cards, put Goblins
+# onto the battlefield or cast them).  Muxus, Conspicuous Snoop, Goblin Ringleader,
+# Rundvelt Hordemaster, and Skirk Drill Sergeant are all part of this sub-theme.
+_goblin_library = (
+    f"(lower(type_line) LIKE '%goblin%' OR {_CHANGELING})"
+    # Reveal top N cards, put Goblin cards onto battlefield (Muxus, Ringleader)
+    " OR lower(oracle_text) LIKE '%reveal%top%goblin%battlefield%'"
+    # Exile top card, cast if Goblin (Rundvelt, Skirk Drill Sergeant)
+    " OR lower(oracle_text) LIKE '%exile%top%goblin%cast%'"
+    " OR lower(oracle_text) LIKE '%exile%top%goblin%put%battlefield%'"
+    # Cast Goblins directly from the top of library (Conspicuous Snoop)
+    " OR lower(oracle_text) LIKE '%cast goblin%top of your library%'"
+    " OR lower(oracle_text) LIKE '%cast%goblin%from the top%library%'"
+    # Reveal top N, put Goblin cards into hand (Goblin Ringleader — feeds future casts)
+    " OR lower(oracle_text) LIKE '%reveal%top%goblin%hand%'"
+)
+PRODUCER_MAP["tribal_goblin_cast"] = _goblin_library
+PRODUCER_MAP["tribal_goblin_etb"]  = _goblin_library
+PRODUCER_MAP["tribal_goblin_lord"] = _goblin_library
