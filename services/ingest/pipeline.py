@@ -220,6 +220,16 @@ def _to_row(card: dict) -> dict:
     }
 
 
+def _is_commander_legal(card: dict) -> bool:
+    """Return True only for cards legal in Commander.
+
+    Filters out Acorn/silver-border cards (no legalities entry), Planes,
+    Schemes, Conspiracy cards, and Commander-banned cards (Black Lotus etc.).
+    Banned cards are real Magic cards but won't appear in valid decklists.
+    """
+    return card.get("legalities", {}).get("commander") == "legal"
+
+
 def _parse_cards(path: Path, source: str) -> list[dict]:
     log.info("Parsing %s from %s…", source, path)
     with path.open() as f:
@@ -236,7 +246,9 @@ def _parse_cards(path: Path, source: str) -> list[dict]:
         cards = [_normalise_scryfall(c) for c in raw if isinstance(c, dict)]
         cards = [c for c in cards if c]
 
-    log.info("Parsed %d cards", len(cards))
+    before = len(cards)
+    cards = [c for c in cards if _is_commander_legal(c)]
+    log.info("Parsed %d commander-legal cards (dropped %d non-legal)", len(cards), before - len(cards))
     return cards
 
 
