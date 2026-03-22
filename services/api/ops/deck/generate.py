@@ -383,20 +383,10 @@ async def generate(
                         # Seed the deck with guaranteed ramp cards.
                         deck_so_far: list[str] = [cid for cid, _ in selected_ramp]
 
-                        # Build a normalised model-score lookup over non-ramp candidates.
                         non_ramp_candidates: list[tuple[str, float]] = [
                             (cid, sc) for cid, sc in spell_scored
                             if cid not in selected_ramp_ids
                         ]
-                        if non_ramp_candidates:
-                            raw_scores = np.array(
-                                [sc for _, sc in non_ramp_candidates], dtype=np.float32
-                            )
-                            sc_min, sc_max = raw_scores.min(), raw_scores.max()
-                            sc_range = sc_max - sc_min if sc_max > sc_min else 1.0
-                            norm_model_scores = (raw_scores - sc_min) / sc_range
-                        else:
-                            norm_model_scores = np.array([], dtype=np.float32)
 
                         cand_ids: list[str] = [cid for cid, _ in non_ramp_candidates]
                         cand_set: set[str] = set(cand_ids)
@@ -407,14 +397,26 @@ async def generate(
                             b = _curve_bucket(cmc_map.get(cid, 0.0))
                             bucket_fill[b] = bucket_fill.get(b, 0) + 1
 
-                        # Build index: cand_ids → position in norm_model_scores array.
+                        # Build index: cand_ids → original position (stable across steps).
                         idx_map: dict[str, int] = {cid: i for i, cid in enumerate(cand_ids)}
+
+                        # ── Pre-encode candidates once (two-phase scoring) ────
+                        # z_cand_t is reused every step; only z_ctx changes.
+                        if cand_ids:
+                            z_cmd_t, z_cand_t = await loop.run_in_executor(
+                                None,
+                                lambda: inference.encode_candidates(
+                                    commander_id, cand_ids, embeddings, model
+                                ),
+                            )
+                        else:
+                            z_cmd_t = z_cand_t = None
 
                         # ── Iterative role boosts (issue #61) ────────────────
                         # Pre-classify all candidates by structural role (once).
                         # Arrays are indexed by the *original* position in cand_ids
-                        # (same invariant as norm_model_scores / idx_map) so they
-                        # stay valid as cand_ids shrinks each step.
+                        # (same invariant as idx_map) so they stay valid as
+                        # cand_ids shrinks each step.
                         _ot = oracle_texts
                         _role_rm = np.array(
                             [is_removal_card(_ot.get(c, "")) for c in cand_ids],
@@ -473,9 +475,16 @@ async def generate(
                             syn_range = syn_max - syn_min if syn_max > syn_min else 1.0
                             norm_syn = (syn_scores - syn_min) / syn_range
 
-                            # Retrieve model scores by position.
+                            # Re-score with current deck context.
+                            # z_cand_t pre-encoded before the loop; only z_ctx changes.
                             positions = [idx_map[cid] for cid in cand_ids]
-                            model_s = norm_model_scores[positions]
+                            pos_arr = np.array(positions, dtype=np.intp)
+                            _raw = inference.rescore_with_context(
+                                z_cmd_t, z_cand_t, deck_so_far, embeddings, model
+                            )
+                            _raw_min, _raw_max = _raw.min(), _raw.max()
+                            _raw_range = _raw_max - _raw_min if _raw_max > _raw_min else 1.0
+                            model_s = ((_raw - _raw_min) / _raw_range)[pos_arr]
 
                             blended = (
                                 (1.0 - synergy_alpha) * model_s
@@ -493,7 +502,6 @@ async def generate(
                                 if signals.wants_attack else 0.0
                             )
                             if _bf_rm or _bf_dw or _bf_ev:
-                                pos_arr = np.array(positions, dtype=np.intp)
                                 blended = (
                                     blended
                                     + _role_rm[pos_arr] * (HARD_REMOVAL_BOOST - 1.0) * _bf_rm

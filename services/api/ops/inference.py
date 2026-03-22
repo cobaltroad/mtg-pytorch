@@ -655,6 +655,100 @@ def score_cards(
     return scores
 
 
+# ── Two-phase iterative scoring ───────────────────────────────────────────────
+
+def encode_candidates(
+    commander_id: str,
+    candidate_ids: list[str],
+    embeddings: dict[str, np.ndarray],
+    model: DeckConstructor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pre-encode commander and all candidates for iterative re-scoring.
+
+    Called once before the greedy selection loop.  The returned tensors are
+    reused at every step; only the context (deck_so_far) changes.
+
+    Returns
+    -------
+    z_cmd  : torch.Tensor shape (1, 256) — projected commander embedding.
+    z_cand : torch.Tensor shape (N, 256) — projected candidate embeddings,
+             in the same order as ``candidate_ids``.
+    """
+    batch_size = 512
+    model.eval()
+
+    cmd_raw = torch.from_numpy(embeddings[commander_id]).unsqueeze(0)
+    with torch.no_grad():
+        z_cmd = model.card_encoder(cmd_raw)  # (1, 256)
+
+    parts: list[torch.Tensor] = []
+    for start in range(0, len(candidate_ids), batch_size):
+        batch_ids = candidate_ids[start: start + batch_size]
+        cand_raw = torch.stack([
+            torch.from_numpy(embeddings[cid]) for cid in batch_ids
+        ])
+        with torch.no_grad():
+            parts.append(model.card_encoder(cand_raw))  # (C, 256)
+
+    z_cand = torch.cat(parts, dim=0) if parts else torch.zeros(0, z_cmd.shape[-1])
+    return z_cmd, z_cand
+
+
+def rescore_with_context(
+    z_cmd: torch.Tensor,
+    z_cand: torch.Tensor,
+    context_ids: list[str],
+    embeddings: dict[str, np.ndarray],
+    model: DeckConstructor,
+    batch_size: int = 512,
+) -> np.ndarray:
+    """Re-score all pre-encoded candidates with updated deck context.
+
+    Encodes ``context_ids`` (deck_so_far) into z_ctx, then runs the
+    DeckConstructor decoder over the pre-computed z_cand in batches —
+    skipping re-encoding of the full candidate pool each step.
+
+    Parameters
+    ----------
+    z_cmd       : (1, 256) commander projection from ``encode_candidates()``.
+    z_cand      : (N, 256) candidate projections from ``encode_candidates()``.
+    context_ids : card IDs currently in the deck (deck_so_far).
+    embeddings  : raw embedding dict for encoding context.
+    model       : DeckConstructor instance.
+    batch_size  : candidates per decoder batch.
+
+    Returns
+    -------
+    np.ndarray of shape (N,) with raw model scores in the same order as
+    the ``candidate_ids`` passed to ``encode_candidates()``.
+    """
+    n = z_cand.shape[0]
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+
+    model.eval()
+    with torch.no_grad():
+        if context_ids:
+            valid_ctx = [cid for cid in context_ids if cid in embeddings]
+            if valid_ctx:
+                ctx_raw = torch.stack([
+                    torch.from_numpy(embeddings[cid]) for cid in valid_ctx
+                ])
+                z_ctx = model.card_encoder(ctx_raw).unsqueeze(0)  # (1, T, 256)
+            else:
+                z_ctx = z_cmd.unsqueeze(0)
+        else:
+            z_ctx = z_cmd.unsqueeze(0)  # (1, 1, 256)
+
+        raw: list[float] = []
+        for start in range(0, n, batch_size):
+            z_batch = z_cand[start: start + batch_size].unsqueeze(0)  # (1, C, 256)
+            batch_scores = model(z_cmd, z_ctx, z_batch).squeeze(0)    # (C,)
+            raw.extend(batch_scores.tolist())
+
+    return np.array(raw, dtype=np.float32)
+
+
 # ── Recall@K evaluation ───────────────────────────────────────────────────────
 
 def recall_at_k(
