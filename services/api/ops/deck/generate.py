@@ -126,6 +126,7 @@ async def generate(
     combo_boost: float = 0.3,
     partner_oracle_id: UUID | None = None,
     synergy_alpha: float = 0.4,
+    progress_cb=None,  # optional callable(fraction: float, message: str)
 ) -> dict | None:
     """Generate a 99-card Commander deck.
 
@@ -140,6 +141,15 @@ async def generate(
 
     Falls back to the synergy stub if no model checkpoint is available.
     """
+    def _progress(fraction: float, message: str) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(fraction, message)
+            except Exception:
+                pass
+
+    _progress(0.02, "Looking up commander…")
+
     result = await db.execute(
         text("""
             SELECT id, oracle_id, name, type_line, oracle_text, color_identity, mana_cost, cmc
@@ -177,9 +187,11 @@ async def generate(
         loop = asyncio.get_event_loop()
 
         ckpt_name = checkpoint if checkpoint != "latest" else "phase4_best"
+        _progress(0.05, "Loading model…")
         model = await loop.run_in_executor(None, inference.get_model, ckpt_name)
 
         if model is not None:
+            _progress(0.08, "Loading embeddings…")
             embeddings = await loop.run_in_executor(None, inference.get_embeddings, db_url)
 
             if embeddings and commander_id in embeddings:
@@ -209,6 +221,7 @@ async def generate(
                     None, inference.get_color_identities, db_url
                 )
 
+                _progress(0.12, "Scoring card pool…")
                 scored = await loop.run_in_executor(
                     None,
                     lambda: inference.score_cards(
@@ -341,6 +354,7 @@ async def generate(
                     nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 
                     # ── Ramp selection ────────────────────────────────────────
+                    _progress(0.22, "Selecting ramp…")
                     selected_ramp, selected_ramp_ids = select_ramp(
                         spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
                     )
@@ -402,6 +416,7 @@ async def generate(
 
                         # ── Pre-encode candidates once (two-phase scoring) ────
                         # z_cand_t is reused every step; only z_ctx changes.
+                        _progress(0.25, "Pre-encoding candidates…")
                         if cand_ids:
                             z_cmd_t, z_cand_t = await loop.run_in_executor(
                                 None,
@@ -462,10 +477,19 @@ async def generate(
                             effective_fill = bucket_fill.get(b, 0) + ramp_fill
                             return 0.1 if effective_fill >= cap else 1.0
 
+                        # 0.30 → 0.85 across all spell-selection steps
+                        _LOOP_START = 0.30
+                        _LOOP_END   = 0.85
+
                         selected_non_ramp_iter: list[tuple[str, float]] = []
                         for _step in range(remaining_slots):
                             if not cand_ids:
                                 break
+
+                            _progress(
+                                _LOOP_START + (_step / remaining_slots) * (_LOOP_END - _LOOP_START),
+                                f"Selecting spell {_step + 1} of {remaining_slots}…",
+                            )
 
                             syn_scores = inference.mean_synergy_to_deck(
                                 cand_ids, deck_so_far, synergy_adj
@@ -545,6 +569,7 @@ async def generate(
                         selected_spells = (selected_ramp + selected_non_ramp_iter)[:SPELL_SLOTS]
 
                     # ── Non-basic land selection ──────────────────────────────
+                    _progress(0.86, "Selecting lands…")
                     nonbasic_score_map = {cid: sc for cid, sc in nonbasic_scored}
                     guaranteed_nb: list[tuple[str, float]] = []
                     for name in GUARANTEED_NONBASICS:
@@ -566,6 +591,7 @@ async def generate(
                     basic_needed = LAND_TARGET - len(selected_nonbasics)
 
                     # ── Fetch card metadata ───────────────────────────────────
+                    _progress(0.92, "Assembling deck…")
                     fetch_ids = (
                         [cid for cid, _ in selected_spells]
                         + [cid for cid, _ in selected_nonbasics]
