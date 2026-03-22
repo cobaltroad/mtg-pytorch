@@ -374,6 +374,91 @@ Phase 3 representations.
 
 ---
 
+## Structural changes (post Phase 4 run 1)
+
+### Land embedding augmentation (2026-03-22) — issue #57
+
+**Problem:** Land embeddings were generated from raw oracle text, giving poor
+mana-quality signal.  Dual lands have simple text (`{T}: Add {B} or {G}.`) while
+utility lands (Boseiju, Bojuka Bog) have rich text — so the model scored utility
+lands higher than dual lands.  The heuristic layer in `ramp.py` compensated with
+tier-based multipliers (SPECIFIC_DUAL_BOOST=2.0, etc.) but was fighting the model
+rather than fixing the root cause.
+
+**Fix:** `services/ingest/land_tags.py` prepends structured tags to Land oracle
+text before embedding.  Tags include:
+
+| Category | Examples |
+|----------|---------|
+| Primary type | `[FETCH_LAND:BG]`, `[DUAL_LAND:BG]`, `[FILTER_LAND:BG]`, `[ANY_COLOR_LAND]`, `[SINGLE_COLOR_LAND:B]` |
+| Cycle | `[SHOCK_LAND]`, `[CHECK_LAND]`, `[BOND_LAND]`, `[FAST_LAND]`, `[SLOW_LAND]`, `[PAIN_LAND]`, `[SURVEIL_LAND]`, `[GAIN_LAND]`, `[BOUNCE_LAND]` |
+| Penalty | `[ENTERS_TAPPED]`, `[CONDITIONAL_SACRIFICE]`, `[DOESNT_UNTAP]`, `[TYPE_RESTRICTED]` |
+
+`_card_text()` in `pipeline.py` calls `annotate_land_oracle()` for any card whose
+`type_line` contains `"Land"`.  Non-land oracle text is unchanged.
+
+**Embedding update procedure** (required when this code changes):
+```bash
+# Delete existing land embeddings
+docker compose exec db psql -U mtg -d mtg -c "
+  DELETE FROM card_embeddings
+  WHERE card_id IN (
+    SELECT e.card_id FROM card_embeddings e
+    JOIN cards c ON c.id = e.card_id
+    WHERE c.type_line ILIKE '%Land%'
+  );"
+# Re-embed
+docker compose run --rm ingest python pipeline.py --stage embed_cards
+# Re-export dataset
+docker compose run --rm ingest python pipeline.py --stage export_dataset
+```
+Then retrain from Phase 1 on the GPU machine (embeddings changed — old
+checkpoints are incompatible).
+
+**Heuristic multipliers in `ramp.py`** were reduced (not eliminated) after this
+change: SPECIFIC_DUAL_BOOST 2.0→1.5, ANY_COLOR_BOOST 1.6→1.3,
+COLORLESS_LAND_PENALTY 0.25→0.5, TAPPED_LAND_PENALTY 0.8→0.9.  These can be
+eliminated once the model is verified to score lands correctly after retraining.
+
+**Verification:** at raw embedding level (no trained model), nearest neighbours
+for the three target cards clustered correctly:
+- Verdant Catacombs → top results are all fetch lands and land-tutors
+- Overgrown Tomb → top results are shock lands, check lands, BG duals
+- Woodland Cemetery → #1 is Overgrown Tomb; remaining are check/fast/slow duals
+
+### Phase 4 collapse (2026-03-22) — issue #58
+
+After re-training all phases from Phase 1 (required by the land embedding
+change), `phase4_best.pt` showed severe score compression: cosine similarity
+≈0.999 for every card pair.  The trained model is non-functional for deck
+generation.
+
+**Root cause:** `run.ps1` defaulted `$FreezeEncoder=$false`, unconditionally
+passing `--no-freeze-encoder` to every Phase 4 run.  With only 171 decks and 50
+epochs the encoder memorises the training set and destroys Phase 3 representations
+even at `encoder_lr_scale=0.1`.
+
+**Fix (2026-03-22):**
+- `run.ps1`: `$FreezeEncoder` default changed `$false → $true` — encoder is now
+  frozen during Phase 4 by default.  Use `-FreezeEncoder $false` to opt in to
+  unfrozen training.
+- `train.py`: added `patience` parameter to `train_deck_constructor_phase`
+  (default 10 epochs).  Training halts if loss does not improve for that many
+  consecutive epochs, saving `phase4_epoch{N}` at the actual stopping point.
+  Acts as a safety net when the encoder is unfrozen.
+
+**Current serving state:** the `phase4_best.pt` checkpoint currently on the server
+(uploaded 2026-03-22) is the collapsed model.  **It should not be used for deck
+generation.**  Retrain Phase 4 with the fixed `run.ps1` before relying on model
+output.
+
+**Why more decks is not the solution:** the goal is generalisation from synergy
+signal, not memorisation of deck orderings.  Freezing the encoder keeps Phase 3
+representations intact; the decoder learns to sequence within that fixed embedding
+space.
+
+---
+
 ## Commander analysis (`GET /commanders/{oracle_id}/analyze`)
 
 Implemented in `services/api/ops/commander_analysis.py`.  A **pure, DB-free**
