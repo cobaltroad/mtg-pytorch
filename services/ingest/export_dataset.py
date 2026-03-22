@@ -449,7 +449,8 @@ def _build_synergy_positions(
     cmd_ability_count: Counter = Counter()
     for cmd_idx_v, targets in ability_edges.items():
         cmd_ci = color_ids.get(card_ids[cmd_idx_v], frozenset())
-        legal  = cmd_legal.get(cmd_idx_v) or torch.from_numpy(_legal_indices(cmd_ci))
+        _cached = cmd_legal.get(cmd_idx_v)
+        legal  = _cached if _cached is not None else torch.from_numpy(_legal_indices(cmd_ci))
         for target_idx in targets[:SYN_LIMIT]:
             positions.append({
                 "commander_idx":     cmd_idx_v,
@@ -469,7 +470,8 @@ def _build_synergy_positions(
     cmd_tribal_count: Counter = Counter()
     for cmd_idx_v, targets in tribal_edges.items():
         cmd_ci = color_ids.get(card_ids[cmd_idx_v], frozenset())
-        legal  = cmd_legal.get(cmd_idx_v) or torch.from_numpy(_legal_indices(cmd_ci))
+        _cached = cmd_legal.get(cmd_idx_v)
+        legal  = _cached if _cached is not None else torch.from_numpy(_legal_indices(cmd_ci))
         for target_idx in targets[:SYN_LIMIT]:
             positions.append({
                 "commander_idx":     cmd_idx_v,
