@@ -874,6 +874,7 @@ def train_deck_constructor_phase(
     temp_end: float = 0.05,
     freeze_encoder: bool = True,
     encoder_lr_scale: float = 0.1,
+    patience: int = 10,
 ):
     """Phase 4: autoregressive deck construction via transformer decoder + InfoNCE.
 
@@ -900,6 +901,11 @@ def train_deck_constructor_phase(
     Temperature is cosine-annealed from temp_start → temp_end.
     When freeze_encoder=False the encoder trains at lr * encoder_lr_scale (default
     0.1×) to prevent collapsing Phase 3 representations.
+
+    patience controls early stopping: training halts if the loss does not improve
+    for this many consecutive epochs (0 = disabled).  Use this as a safety net
+    when the encoder is unfrozen — the collapse pattern shows rapid loss increase
+    after the minimum, so a patience of ~5–10 catches it before it matters.
     """
     if freeze_encoder:
         model.card_encoder.requires_grad_(False)
@@ -932,8 +938,12 @@ def train_deck_constructor_phase(
     n_syn_epoch = min(n_syn_total, syn_per_epoch) if synergy_positions else 0
     log.info("Phase 4: %d deck sequences + %d/%d synergy positions per epoch",
              len(dataset), n_syn_epoch, n_syn_total)
+    if patience > 0:
+        log.info("Phase 4: early stopping patience=%d epochs", patience)
 
     best_loss = float("inf")
+    no_improve = 0
+    final_epoch = 0
     for epoch in range(epochs):
         temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
 
@@ -1054,11 +1064,22 @@ def train_deck_constructor_phase(
             wandb.log({"phase": 4, "epoch": epoch + 1, "loss": avg,
                        "lr": scheduler.get_last_lr()[0], "temperature": temperature})
 
+        final_epoch = epoch + 1
         if avg < best_loss:
             best_loss = avg
+            no_improve = 0
             save_checkpoint(model, "phase4_best")
+        else:
+            no_improve += 1
+            if patience > 0 and no_improve >= patience:
+                log.info(
+                    "Phase 4: early stopping at epoch %d/%d "
+                    "(no improvement for %d consecutive epochs, best=%.4f)",
+                    final_epoch, epochs, patience, best_loss,
+                )
+                break
 
-    save_checkpoint(model, f"phase4_epoch{epochs}")
+    save_checkpoint(model, f"phase4_epoch{final_epoch}")
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
@@ -1217,6 +1238,9 @@ def main():
     parser.add_argument("--encoder-lr-scale", type=float, default=0.1,
                         help="Phase 4 --no-freeze-encoder: encoder lr as fraction of decoder lr "
                              "(default 0.1 — encoder updates 10× slower to prevent collapse)")
+    parser.add_argument("--patience", type=int, default=10,
+                        help="Phase 4: early-stopping patience in epochs — halt if loss does not "
+                             "improve for this many consecutive epochs (0 = disabled, default 10)")
     parser.add_argument("--syn-per-epoch", type=int, default=1000,
                         help="Phase 4: max synergy positions sampled per epoch "
                              "(default 1000; fresh random sample each epoch covers "
@@ -1400,6 +1424,7 @@ def main():
             temp_end=args.temp_end,
             freeze_encoder=args.freeze_encoder,
             encoder_lr_scale=args.encoder_lr_scale,
+            patience=args.patience,
         )
 
     else:
