@@ -585,6 +585,31 @@ async def generate(
                     ]
                     archetype_info = detect_archetype(non_land_cards)
 
+                    # ── Intra-deck synergy density ────────────────────────────
+                    # Average synergy score across all pairs in the deck where
+                    # both cards have a synergy edge (non-land spells only).
+                    spell_ids = [cid for cid, _ in selected_spells]
+                    syn_density_result = await db.execute(
+                        text("""
+                            SELECT AVG(score)
+                            FROM synergy_edges
+                            WHERE card_a = ANY(CAST(:ids AS uuid[]))
+                              AND card_b = ANY(CAST(:ids AS uuid[]))
+                        """),
+                        {"ids": spell_ids},
+                    )
+                    synergy_density = float(syn_density_result.scalar() or 0.0)
+
+                    # Random baseline: average synergy across a fast sample of
+                    # the full synergy_edges table for comparison.
+                    baseline_result = await db.execute(
+                        text("""
+                            SELECT AVG(score)
+                            FROM synergy_edges TABLESAMPLE SYSTEM(0.1)
+                        """),
+                    )
+                    synergy_baseline = float(baseline_result.scalar() or 0.0)
+
                     # Resolve context card names for the response
                     context_names: list[str] = []
                     if context_ids:
@@ -611,6 +636,8 @@ async def generate(
                         "archetype": archetype_info.get("archetype", ""),
                         "win_conditions": archetype_info.get("win_conditions", []),
                         "combo_packages_triggered": triggered_combos,
+                        "synergy_density": round(synergy_density, 4),
+                        "synergy_baseline": round(synergy_baseline, 4),
                     }
 
     except Exception as exc:

@@ -7,7 +7,6 @@ import pandas as pd
 import streamlit as st
 
 API_URL          = os.environ.get("API_URL", "http://api:8000")
-EXTERNAL_API_URL = os.environ.get("EXTERNAL_API_URL", API_URL)
 
 st.set_page_config(page_title="MTG Commander AI", page_icon="🃏", layout="wide")
 st.title("🃏 MTG Commander AI")
@@ -47,16 +46,6 @@ def analyze_commander(oracle_id: str) -> dict | None:
         return None
 
 
-@st.cache_data(ttl=3600)
-def get_metrics() -> dict | None:
-    """Fetch Recall@K metrics from the API (cached 1 hour)."""
-    try:
-        r = httpx.get(f"{API_URL}/decks/metrics", timeout=300)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
-
 
 # ── UI constants ──────────────────────────────────────────────────────────────
 
@@ -66,7 +55,7 @@ _GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-tab_deck, tab_dataset, tab_train = st.tabs(["Deck Builder", "Training Data", "Upload Model"])
+tab_deck, = st.tabs(["Deck Builder"])
 
 with tab_deck:
     st.subheader("Commander deck builder")
@@ -74,25 +63,6 @@ with tab_deck:
         "Search for a commander, then let the model construct the remaining 99 cards."
     )
 
-    # ── Model performance metrics panel ───────────────────────────────────────
-    metrics = get_metrics()
-    if metrics and "error" not in metrics:
-        st.markdown("#### Model Performance (phase4_best)")
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Recall@1", f"{metrics.get('recall_1', 0):.1%}")
-        col2.metric("Recall@10", f"{metrics.get('recall_10', 0):.1%}")
-        col3.metric("Recall@50", f"{metrics.get('recall_50', 0):.1%}")
-        col4.metric("MRR", f"{metrics.get('mrr', 0):.4f}")
-        col5.metric("Random baseline", f"{metrics.get('random_baseline', 0):.1%}")
-        st.caption(
-            f"Evaluated on {metrics.get('n_positions', '?')} positions from held-out decks."
-        )
-    elif metrics and "error" in metrics:
-        st.info(f"Model metrics unavailable: {metrics['error']}")
-    else:
-        st.info("Model metrics not yet available (API may still be loading embeddings).")
-
-    st.divider()
 
     cmd_query = st.text_input("Commander name", placeholder="Atraxa, Praetors' Voice")
     commander = None
@@ -224,10 +194,19 @@ with tab_deck:
                     c.get("count", 1) for c in deck["cards"]
                     if c.get("is_ramp", False)
                 )
-                col1, col2, col3 = st.columns(3)
+                syn_density = deck.get("synergy_density")
+                syn_baseline = deck.get("synergy_baseline")
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
                 col2.metric("Ramp", str(ramp_count))
                 col3.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
+                if syn_density is not None:
+                    delta = round(syn_density - syn_baseline, 4) if syn_baseline else None
+                    col4.metric(
+                        "Synergy density",
+                        f"{syn_density:.4f}",
+                        delta=f"{delta:+.4f} vs baseline" if delta is not None else None,
+                    )
 
                 # ── Mana curve bar chart ──────────────────────────────────────
                 spells = [
@@ -282,85 +261,4 @@ with tab_deck:
             except httpx.HTTPError as e:
                 st.error(f"Generation failed: {e}")
 
-with tab_dataset:
-    st.subheader("Training Data Artifact")
-    st.markdown(
-        "After the full ingest pipeline completes (including `export_dataset`), "
-        "a self-contained `.pt` artifact is available here.  "
-        "Download it to the GPU machine and point the trainer at it — "
-        "no database connection required."
-    )
 
-    try:
-        info_r = httpx.get(f"{API_URL}/dataset/info", timeout=10)
-        if info_r.status_code == 404:
-            st.warning(
-                "No artifact found. Run the full ingest pipeline to generate one:\n\n"
-                "```\ndocker compose run --rm ingest\n```"
-            )
-        else:
-            info_r.raise_for_status()
-            info = info_r.json()
-
-            size_mb = info.get("size_bytes", 0) / 1e6
-            created = info.get("created_at", "unknown")[:19].replace("T", " ")
-
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Cards", f"{info.get('card_count', 0):,}")
-            col2.metric("Training pairs", f"{info.get('synergy_count', 0):,}")
-            col3.metric("Decks", f"{info.get('deck_count', 0):,}")
-            col4.metric("Phase 4 positions", f"{info.get('position_count', 0):,}")
-
-            st.caption(
-                f"Model: `{info.get('model', '?')}`  |  "
-                f"Dim: {info.get('dim', '?')}  |  "
-                f"Size: {size_mb:.0f} MB  |  "
-                f"Created: {created} UTC"
-            )
-
-            download_url = f"{EXTERNAL_API_URL}/dataset/download"
-            st.markdown(f"**Download URL:** `{download_url}`")
-            st.markdown(
-                "Use this URL with `download_dataset.ps1` on the GPU machine:\n\n"
-                "```powershell\n"
-                ".\\scripts\\download_dataset.ps1\n"
-                "```\n\n"
-                "Or download directly from your browser:"
-            )
-            st.link_button("Download mtg_dataset.pt", download_url, type="primary")
-
-    except httpx.HTTPError as e:
-        st.error(f"Could not reach API: {e}")
-
-with tab_train:
-    st.subheader("Upload Phase 4 Checkpoint")
-    st.markdown(
-        "Upload a `phase4_best.pt` (or any phase checkpoint) trained on the GPU machine. "
-        "The model cache is cleared immediately so the next deck generation uses the new weights."
-    )
-
-    ck_col1, ck_col2 = st.columns([2, 1])
-    ck_name  = ck_col1.selectbox("Save as", ["phase4_best", "phase3_best", "phase2_best", "phase1_best"], index=0)
-    ck_token = ck_col2.text_input("Admin token", type="password")
-    ck_file  = st.file_uploader("Checkpoint file (.pt)", type=["pt"])
-
-    if st.button("Upload", type="primary", disabled=ck_file is None):
-        with st.spinner("Uploading…"):
-            try:
-                r = httpx.post(
-                    f"{API_URL}/admin/checkpoint",
-                    files={"file": (ck_file.name, ck_file.getvalue(), "application/octet-stream")},
-                    params={"name": ck_name},
-                    headers={"x-admin-token": ck_token},
-                    timeout=60,
-                )
-                r.raise_for_status()
-                info = r.json()
-                st.success(
-                    f"Uploaded **{info['bytes']:,} bytes** → `{info['saved']}`. "
-                    "Model cache cleared — next generation will use the new checkpoint."
-                )
-            except httpx.HTTPStatusError as e:
-                st.error(f"Upload failed ({e.response.status_code}): {e.response.text}")
-            except httpx.HTTPError as e:
-                st.error(f"Upload failed: {e}")

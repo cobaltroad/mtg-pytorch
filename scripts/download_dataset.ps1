@@ -30,7 +30,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 
-# ── Resolve output directory ──────────────────────────────────────────────────
+# -- Resolve output directory -------------------------------------------------
 
 if (-not $OutputDir) {
     $OutputDir = Join-Path $RepoRoot 'ingest_cache'
@@ -38,7 +38,7 @@ if (-not $OutputDir) {
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $OutputPath = Join-Path $OutputDir 'mtg_dataset.pt'
 
-# ── Resolve download URL ──────────────────────────────────────────────────────
+# -- Resolve download URL -----------------------------------------------------
 
 if (-not $DatasetUrl) {
     # Load .env to find API_HOST
@@ -56,16 +56,16 @@ if (-not $DatasetUrl) {
     $apiHost = $env:API_HOST
     if (-not $apiHost) {
         $apiHost = 'edh-api.cardtrak.app'
-        Write-Warning "API_HOST not set in .env — defaulting to $apiHost"
+        Write-Warning "API_HOST not set in .env - defaulting to $apiHost"
     }
     $DatasetUrl = "https://$apiHost/dataset/download"
 }
 
-# ── Fetch metadata first (fast, shows what we're about to download) ───────────
+# -- Fetch metadata first (fast, shows what we're about to download) ----------
 
 $infoUrl = $DatasetUrl -replace '/download$', '/info'
 try {
-    Write-Host "Checking artifact metadata at $infoUrl…"
+    Write-Host "Checking artifact metadata at $infoUrl..."
     $info = Invoke-RestMethod -Uri $infoUrl -TimeoutSec 10
     $sizeMb = [math]::Round($info.size_bytes / 1MB, 0)
     $created = $info.created_at.Substring(0, 19).Replace('T', ' ')
@@ -80,14 +80,14 @@ try {
     Write-Host ""
 } catch {
     Write-Warning "Could not fetch metadata ($infoUrl): $_"
-    Write-Host "Proceeding with download anyway…"
+    Write-Host "Proceeding with download anyway..."
     Write-Host ""
 }
 
-# ── Download ──────────────────────────────────────────────────────────────────
+# -- Download -----------------------------------------------------------------
 
 Write-Host "Downloading $DatasetUrl"
-Write-Host "  → $OutputPath"
+Write-Host "  -> $OutputPath"
 Write-Host ""
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

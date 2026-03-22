@@ -1,4 +1,8 @@
 param(
+    # Shorthand: -Train N sets -Mode train -Phase N -Dataset .\ingest_cache\mtg_dataset.pt
+    [ValidateScript({ $_ -eq $null -or $_ -in 1,2,3,4 })]
+    [Nullable[int]]$Train = $null,
+
     [ValidateSet('train', 'ingest')]
     [string]$Mode = 'train',
 
@@ -6,7 +10,7 @@ param(
     [int]$Phase = 3,
 
     # Path to a pre-built training artifact (.pt from export_dataset stage).
-    # When set, no DATABASE_URL is required — all data is loaded from the file.
+    # When set, no DATABASE_URL is required -- all data is loaded from the file.
     [string]$Dataset = '',
 
     [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'import_spellbook', 'export_dataset', 'backfill_roles', 'all')]
@@ -40,6 +44,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# -Train N shorthand: expand to -Mode train -Phase N -Dataset .\ingest_cache\mtg_dataset.pt
+if ($null -ne $Train) {
+    $Mode    = 'train'
+    $Phase   = $Train
+    if (-not $Dataset) {
+        $Dataset = Join-Path $PSScriptRoot '..\ingest_cache\mtg_dataset.pt'
+    }
+}
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $RepoRoot
@@ -106,12 +119,12 @@ function Assert-Prerequisites {
     Write-Host ""
     Write-Host "Pre-flight checks:" -ForegroundColor Cyan
 
-    # ── Dataset artifact (skips DB check when provided) ────────────────────
+    # -- Dataset artifact (skips DB check when provided) ------------------
     if ($dataset) {
         Write-Host -NoNewline "  Dataset artifact           "
         if (Test-Path $dataset) {
             $sizeMb = [math]::Round((Get-Item $dataset).Length / 1MB, 0)
-            Write-Host "[found — ${sizeMb} MB, DB check skipped]" -ForegroundColor Green
+            Write-Host "[found - ${sizeMb} MB, DB check skipped]" -ForegroundColor Green
         } else {
             Write-Host "[NOT FOUND]" -ForegroundColor Red
             Write-Host "    Expected: $dataset" -ForegroundColor Yellow
@@ -119,7 +132,7 @@ function Assert-Prerequisites {
             $ok = $false
         }
     } else {
-        # ── PostgreSQL reachable? ──────────────────────────────────────────
+        # -- PostgreSQL reachable? -----------------------------------------
         Write-Host -NoNewline "  PostgreSQL localhost:5432  "
         $connected = $false
         try {
@@ -141,7 +154,7 @@ function Assert-Prerequisites {
         }
     }
 
-    # ── W&B API key (train only, soft warning) ────────────────────────────
+    # -- W&B API key (train only, soft warning) ----------------------------
     if ($mode -eq 'train') {
         Write-Host -NoNewline "  WANDB_API_KEY             "
         if ($env:WANDB_API_KEY) {
@@ -151,7 +164,7 @@ function Assert-Prerequisites {
         }
     }
 
-    # ── Warm-start checkpoint (train phase 3/4 with --resume) ─────────────
+    # -- Warm-start checkpoint (train phase 3/4 with --resume) ------------
     if ($mode -eq 'train' -and $phase -ge 3) {
         # Mirror the default-resume logic from the train block
         $resolvedResume = if ($null -ne $resume) { [bool]$resume } else { $true }
