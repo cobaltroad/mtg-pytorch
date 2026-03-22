@@ -377,18 +377,23 @@ def _tag_roles(oracle_text: str, type_line: str) -> list[dict]:
     return rows
 
 
-async def tag_abilities() -> None:
-    log.info("Tagging abilities…")
+async def tag_abilities(rescan: bool = False) -> None:
+    log.info("Tagging abilities%s…", " (full rescan)" if rescan else "")
 
     # Snapshot which trigger_events already have consumer rows BEFORE Pass 1 so
     # the gap detector doesn't miss events that get their first rows from newly
     # added cards in this very run.
-    async with Session() as db:
-        existing_events_result = await db.execute(text("""
-            SELECT DISTINCT trigger_event FROM card_abilities
-            WHERE trigger_event IS NOT NULL
-        """))
-        existing_events = {row[0] for row in existing_events_result.fetchall()}
+    # With --rescan, treat the existing set as empty so every trigger event is
+    # re-applied across all cards (useful after a pattern regex is improved).
+    if rescan:
+        existing_events: set[str] = set()
+    else:
+        async with Session() as db:
+            existing_events_result = await db.execute(text("""
+                SELECT DISTINCT trigger_event FROM card_abilities
+                WHERE trigger_event IS NOT NULL
+            """))
+            existing_events = {row[0] for row in existing_events_result.fetchall()}
 
     # ── Pass 1: keyword / triggered / activated abilities ─────────────────────
     # Processes cards that have no ability rows yet (fresh cards).
@@ -470,8 +475,8 @@ async def tag_abilities() -> None:
 
     if new_events:
         log.info(
-            "Gap detection: %d new trigger event(s) have no consumer rows — "
-            "backfilling across all cards: %s",
+            "%s: %d trigger event(s) — backfilling across all cards: %s",
+            "Full rescan" if rescan else "Gap detection",
             len(new_events), [e for _, _, e in new_events],
         )
         async with Session() as db:
@@ -509,7 +514,7 @@ async def tag_abilities() -> None:
             await db.commit()
         log.info("  Gap detection complete: %d rows inserted", backfill_count)
     else:
-        log.info("Gap detection: all trigger events already have consumer rows — nothing to backfill")
+        log.info("Gap detection: all trigger events already have consumer rows — nothing to backfill (use --rescan to force)")
 
     # ── Pass 2: functional role tags ──────────────────────────────────────────
     # Processes cards that have no 'role' ability rows yet.  This is a separate
@@ -915,6 +920,14 @@ if __name__ == "__main__":
         ],
         default=None,
     )
+    parser.add_argument(
+        "--rescan",
+        action="store_true",
+        help=(
+            "tag_abilities only: re-apply every trigger pattern to every card, "
+            "not just those with 0 existing rows.  Use after improving a pattern regex."
+        ),
+    )
     args = parser.parse_args()
 
     if args.stage == "fetch_cards":
@@ -924,7 +937,7 @@ if __name__ == "__main__":
     elif args.stage == "embed_cards":
         asyncio.run(embed_cards())
     elif args.stage == "tag_abilities":
-        asyncio.run(tag_abilities())
+        asyncio.run(tag_abilities(rescan=args.rescan))
     elif args.stage == "compute_synergy":
         asyncio.run(compute_synergy())
     elif args.stage == "compute_commander_value_synergy":

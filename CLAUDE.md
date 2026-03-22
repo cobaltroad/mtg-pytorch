@@ -66,6 +66,12 @@ docker compose run --rm ingest python pipeline.py --stage export_dataset
 #      fetch_cards, load_cards, embed_cards, tag_abilities,
 #      compute_synergy, compute_commander_value_synergy,
 #      compute_tribal_typeline_synergy, import_spellbook, export_dataset
+#
+#    tag_abilities options:
+#      --rescan   Re-apply every trigger pattern to every card (not just those with
+#                 0 existing rows).  Use after improving a pattern regex so that
+#                 already-tagged cards pick up matches from the updated pattern.
+docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan
 
 # 4. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
