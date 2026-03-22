@@ -1,13 +1,20 @@
 """
 MTG ingest pipeline.
 
-Stages
-------
-1. fetch_cards      – Download card data from MTGJSON (primary); fallback to Scryfall
-2. load_cards       – Upsert card rows into the `cards` table
-3. embed_cards      – Generate sentence-transformer embeddings → card_embeddings
-4. tag_abilities    – Parse keyword / ability tags → card_abilities
-5. compute_synergy  – Build pairwise synergy edges → synergy_edges
+Two-step workflow
+-----------------
+download   – Fetch card data (MTGJSON → cards table) + import combos (Commander Spellbook).
+             Re-run when new sets release or combo data changes.
+process    – Embed cards, tag abilities, compute synergy edges, export training artifact.
+             Re-run after download or after model/pattern changes.
+
+Run both:           python pipeline.py
+Run download only:  python pipeline.py --stage download
+Run process only:   python pipeline.py --stage process
+
+Individual sub-stages (rarely needed):
+  embed_cards, tag_abilities [--rescan], compute_synergy,
+  compute_commander_value_synergy, compute_tribal_typeline_synergy, export_dataset
 
 Data sources
 ------------
@@ -15,9 +22,7 @@ Primary:  MTGJSON bulk downloads (https://mtgjson.com/downloads/)
           No rate limits; full machine-readable dataset.
 Fallback: Scryfall oracle_cards bulk JSON — only used if MTGJSON unavailable,
           because Scryfall enforces strict rate limits on their API.
-
-Run all stages:   python pipeline.py
-Run one stage:    python pipeline.py --stage embed_cards
+Combos:   Commander Spellbook API — fetched during download step.
 """
 
 from __future__ import annotations
@@ -903,21 +908,33 @@ def export_dataset_stage() -> None:
     export_dataset.main()
 
 
-async def run_all():
+async def download():
+    """Download step: fetch card data + combos and load into DB.
+
+    Run this first (or whenever MTGJSON / Commander Spellbook has new data).
+    Does not require embeddings or synergy edges to be present.
+    """
     path, source = await fetch_cards()
     await load_cards(path, source)
+    await import_spellbook_stage()
+
+
+async def process():
+    """Process step: embed, tag, compute synergy, and export the artifact.
+
+    Requires the download step to have been run first.
+    """
     await embed_cards()
     await tag_abilities()
     await compute_synergy()
     await compute_commander_value_synergy()
     await compute_tribal_typeline_synergy()
-    await import_spellbook_stage()
     export_dataset_stage()
 
 
-async def _load_cards_stage():
-    path, source = await fetch_cards()
-    await load_cards(path, source)
+async def run_all():
+    await download()
+    await process()
 
 
 if __name__ == "__main__":
@@ -925,12 +942,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--stage",
         choices=[
-            "fetch_cards", "load_cards", "embed_cards", "tag_abilities",
+            # Grouped stages
+            "download", "process",
+            # Individual sub-stages
+            "embed_cards", "tag_abilities",
             "compute_synergy", "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
-            "import_spellbook", "export_dataset",
+            "export_dataset",
         ],
         default=None,
+        help=(
+            "download: fetch MTGJSON + load cards + import combos. "
+            "process: embed + tag + synergy + export. "
+            "Omit to run both."
+        ),
     )
     parser.add_argument(
         "--rescan",
@@ -942,10 +967,10 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.stage == "fetch_cards":
-        asyncio.run(fetch_cards())
-    elif args.stage == "load_cards":
-        asyncio.run(_load_cards_stage())
+    if args.stage == "download":
+        asyncio.run(download())
+    elif args.stage == "process":
+        asyncio.run(process())
     elif args.stage == "embed_cards":
         asyncio.run(embed_cards())
     elif args.stage == "tag_abilities":
@@ -956,8 +981,6 @@ if __name__ == "__main__":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":
         asyncio.run(compute_tribal_typeline_synergy())
-    elif args.stage == "import_spellbook":
-        asyncio.run(import_spellbook_stage())
     elif args.stage == "export_dataset":
         export_dataset_stage()
     else:

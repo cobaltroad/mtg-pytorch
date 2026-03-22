@@ -13,7 +13,7 @@ param(
     # When set, no DATABASE_URL is required -- all data is loaded from the file.
     [string]$Dataset = '',
 
-    [ValidateSet('fetch_cards', 'load_cards', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'import_spellbook', 'export_dataset', 'backfill_roles', 'all')]
+    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset', 'backfill_roles', 'all')]
     [string]$Stage = 'compute_synergy',
 
     [Nullable[int]]$Epochs = $null,

@@ -48,46 +48,41 @@ cp .env.example .env      # edit POSTGRES_PASSWORD, hosts, ADMIN_TOKEN
 # 2. Start services
 docker compose up -d db api ui jupyter
 
-# 3. Run full ingest pipeline (MTGJSON + Commander Spellbook + training artifact)
-#    Stages: fetch_cards → load_cards → embed_cards → tag_abilities →
-#            compute_synergy → compute_commander_value_synergy →
-#            compute_tribal_typeline_synergy → import_spellbook → export_dataset
-#    Takes ~30–60 min depending on hardware.
+# 3. Download card data + combos (MTGJSON → cards table + Commander Spellbook)
+#    Re-run when new sets release or combo data changes.  Fast — no ML work.
+docker compose run --rm ingest python pipeline.py --stage download
+
+# 4. Process: embed, tag abilities, compute synergy edges, export artifact
+#    Requires download to have been run first.  Takes ~30–60 min.
+docker compose run --rm ingest python pipeline.py --stage process
+
+# 3+4 combined (full pipeline, same as default):
 docker compose run --rm ingest
 
-# 3a. Run a single ingest stage (useful after code changes or partial failures)
+# Individual sub-stages (useful after code changes or partial failures):
+docker compose run --rm ingest python pipeline.py --stage embed_cards
 docker compose run --rm ingest python pipeline.py --stage tag_abilities
+docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan   # re-apply all patterns to all cards
 docker compose run --rm ingest python pipeline.py --stage compute_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
-docker compose run --rm ingest python pipeline.py --stage import_spellbook
 docker compose run --rm ingest python pipeline.py --stage export_dataset
-#    All valid --stage values:
-#      fetch_cards, load_cards, embed_cards, tag_abilities,
-#      compute_synergy, compute_commander_value_synergy,
-#      compute_tribal_typeline_synergy, import_spellbook, export_dataset
-#
-#    tag_abilities options:
-#      --rescan   Re-apply every trigger pattern to every card (not just those with
-#                 0 existing rows).  Use after improving a pattern regex so that
-#                 already-tagged cards pick up matches from the updated pattern.
-docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan
 
-# 4. Import decklists (required for Phase 3/4 training and proxy context in inference)
+# 5. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
 docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python import_moxfield.py
 
-# 5. Re-export the artifact after importing new decklists (fast — ~5 min)
+# 6. Re-export the artifact after importing new decklists (fast — ~5 min)
 docker compose run --rm ingest python pipeline.py --stage export_dataset
 
-# 6. Restart API to clear in-process embedding cache
+# 7. Restart API to clear in-process embedding cache
 docker compose restart api
 
-# 7. Rebuild pgvector index for full recall quality
+# 8. Rebuild pgvector index for full recall quality
 docker compose exec db psql -U mtg -d mtg -c \
   "REINDEX INDEX CONCURRENTLY idx_card_embeddings_vec;"
 
-# 8. Open UI
+# 9. Open UI
 open https://$UI_HOST
 ```
 
