@@ -21,10 +21,10 @@ param(
     [Nullable[int]]$BatchSize = $null,
 
     [Nullable[bool]]$Resume = $null,
-    [string]$FreezeEncoder = 'true',
-    [double]$EncoderLrScale = 0.1,
+    [string]$FreezeEncoder = 'false',
+    [double]$EncoderLrScale = 0.01,
     [int]$Patience = 10,
-    [double]$TempStart = 0.5,
+    [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
     # Phase 4 Option A: synergy-only training (default $true).
     # Set -SynergyOnly $false to fall back to the legacy deck+synergy loop.
