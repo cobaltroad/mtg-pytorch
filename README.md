@@ -118,19 +118,19 @@ Phase 3 quality.
 
 **Loss:** InfoNCE with 64 random negatives per position, temperature=0.1.
 **Architecture:** the DeckConstructor decoder with the Phase 3 CardEncoder
-weights loaded and **frozen** (by default).  Only the decoder is trained.
+weights loaded.  The encoder is **unfrozen** by default (controlled by
+`-FreezeEncoder` in `run.ps1`); `--encoder-lr-scale` (default 0.1×) keeps
+the encoder's learning rate well below the decoder's to protect Phase 3
+representations.
 **Data:** the same human decklists, now treated as ordered sequences; for each
 position the model predicts the next card given the commander and the cards
 selected so far.  Sampled freely at inference — not greedy.
 
-Freezing the encoder is critical.  With only a few hundred decks, an unfrozen
-encoder memorises the training sequences and destroys the Phase 3 synergy
-representations, causing score compression (all cosine similarities collapse
-toward 1.0).  Freezing keeps the geometry intact; the decoder learns to
-navigate within it.
-
-Differential learning rates (`--encoder-lr-scale`, default 0.1×) are
-available for careful unfrozen runs.
+Keeping the encoder's learning rate low relative to the decoder is important:
+with only a few hundred decks, aggressive encoder updates can memorise training
+sequences and destroy Phase 3 synergy geometry, causing score compression (all
+cosine similarities collapse toward 1.0).  Pass `-FreezeEncoder true` in
+`run.ps1` to freeze the encoder entirely if this becomes a problem.
 
 ---
 

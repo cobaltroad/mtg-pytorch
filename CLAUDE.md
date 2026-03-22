@@ -439,13 +439,13 @@ epochs the encoder memorises the training set and destroys Phase 3 representatio
 even at `encoder_lr_scale=0.1`.
 
 **Fix (2026-03-22):**
-- `run.ps1`: `$FreezeEncoder` default changed `$false → $true` — encoder is now
-  frozen during Phase 4 by default.  Use `-FreezeEncoder $false` to opt in to
-  unfrozen training.
+- `run.ps1`: `$FreezeEncoder` default is `'false'` — encoder is unfrozen during
+  Phase 4 by default, but `--encoder-lr-scale` (default 0.1×) keeps its learning
+  rate well below the decoder's.  Pass `-FreezeEncoder true` to freeze entirely.
 - `train.py`: added `patience` parameter to `train_deck_constructor_phase`
   (default 10 epochs).  Training halts if loss does not improve for that many
   consecutive epochs, saving `phase4_epoch{N}` at the actual stopping point.
-  Acts as a safety net when the encoder is unfrozen.
+  Acts as a safety net against runaway encoder updates.
 
 **Current serving state:** the `phase4_best.pt` checkpoint currently on the server
 (uploaded 2026-03-22) is the collapsed model.  **It should not be used for deck
