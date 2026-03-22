@@ -136,12 +136,10 @@ with tab_deck:
                 if _boost_overrides:
                     st.caption(f"Score boosts active: {', '.join(_boost_overrides)}")
 
-    checkpoint = st.text_input("Model checkpoint", value="latest")
-
     if commander and st.button("Generate deck", type="primary"):
         with st.spinner("Generating 99-card deck…"):
             try:
-                deck = generate_deck(str(commander["oracle_id"]), checkpoint, _boost_overrides)
+                deck = generate_deck(str(commander["oracle_id"]), "latest", _boost_overrides)
                 st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
                 st.markdown(f"**Commander:** {deck['commander']['name']}")
 
