@@ -353,6 +353,7 @@ from synergy import (  # noqa: E402
     COMMANDER_VALUE_TRIGGER_PATTERNS,
     COMMANDER_VALUE_PRODUCER_MAP,
     COMMANDER_VALUE_EDGE_SCORES,
+    XMAGE_PRODUCER_MAP,
 )
 
 KEYWORD_RE = re.compile(
@@ -938,6 +939,98 @@ async def compute_synergy() -> None:
         log.info("  %s → %d new edges (existing skipped via ON CONFLICT)", trigger_event, total_inserted)
 
 
+async def compute_synergy_xmage() -> None:
+    """Build XMage-class synergy edges for the compositional training path.
+
+    Reads ``card_abilities`` rows where ``source='xmage'``, groups by
+    ``ability_name`` (the raw XMage class name — e.g.
+    ``SpellCastControllerTriggeredAbility``), then cross-joins each consumer
+    group with the producer cards defined in ``XMAGE_PRODUCER_MAP``.
+
+    Edges are written with ``score_type='xmage_ability_trigger'`` so they are
+    kept entirely separate from the pattern-based ``ability_trigger`` edges used
+    by the co-occurrence training path.  The compositional artifact
+    (``export_dataset_compositional.py``) samples from ``xmage_ability_trigger``
+    only.
+
+    Because XMage class names are finer-grained than the aggregated
+    ``trigger_event`` strings, each class forms its own consumer cluster:
+    ``SpellCastControllerTriggeredAbility`` groups Beast Whisperer, Sythis,
+    Guttersnipe, etc. together — cards that all reward spell-casting regardless
+    of spell type — without the lossy translation step.
+    """
+    log.info("Computing XMage-class synergy edges (compositional path)…")
+
+    for ability_class, producer_where in XMAGE_PRODUCER_MAP.items():
+        async with Session() as db:
+            rows = (await db.execute(text(f"""
+                SELECT id FROM cards WHERE {producer_where}
+            """))).fetchall()
+        producer_ids = [str(r[0]) for r in rows]
+
+        if not producer_ids:
+            log.info("  %s → no producers found, skipping", ability_class)
+            continue
+
+        async with Session() as db:
+            consumer_count = (await db.execute(text("""
+                SELECT COUNT(*) FROM card_abilities
+                WHERE ability_name = :cls AND source = 'xmage'
+            """), {"cls": ability_class})).scalar()
+
+        if not consumer_count:
+            log.info("  %s → 0 xmage consumers, skipping", ability_class)
+            continue
+
+        total_inserted = 0
+        n_chunks = (len(producer_ids) + SYNERGY_CHUNK - 1) // SYNERGY_CHUNK
+        log.info("  %s: %d producers × %d consumers in %d chunks…",
+                 ability_class, len(producer_ids), consumer_count, n_chunks)
+
+        for chunk_idx in range(0, len(producer_ids), SYNERGY_CHUNK):
+            if total_inserted >= SYNERGY_LIMIT:
+                log.info("  %s: SYNERGY_LIMIT=%d reached, stopping early",
+                         ability_class, SYNERGY_LIMIT)
+                break
+
+            chunk = producer_ids[chunk_idx : chunk_idx + SYNERGY_CHUNK]
+            id_list = "'" + "','".join(chunk) + "'"
+
+            async with Session() as db:
+                result = await db.execute(text(f"""
+                    INSERT INTO synergy_edges (card_a, card_b, score_type, score, metadata)
+                    SELECT
+                        c.id::uuid,
+                        ca.card_id,
+                        'xmage_ability_trigger',
+                        1.0,
+                        jsonb_build_object('ability_class', :cls)
+                    FROM (SELECT unnest(ARRAY[{id_list}]::uuid[]) AS id) c
+                    JOIN cards pc ON pc.id = c.id
+                    CROSS JOIN (
+                        SELECT ca.card_id, cc.color_identity AS consumer_ci
+                        FROM card_abilities ca
+                        JOIN cards cc ON cc.id = ca.card_id
+                        WHERE ca.ability_name = :cls AND ca.source = 'xmage'
+                    ) ca
+                    WHERE c.id != ca.card_id
+                      AND (
+                          pc.color_identity = '{{}}'
+                          OR ca.consumer_ci = '{{}}'
+                          OR pc.color_identity && ca.consumer_ci
+                      )
+                    ON CONFLICT (card_a, card_b, score_type) DO NOTHING
+                """), {"cls": ability_class})
+                await db.commit()
+            total_inserted += result.rowcount
+
+            if (chunk_idx // SYNERGY_CHUNK) % 10 == 0:
+                log.info("    chunk %d/%d — %d edges so far",
+                         chunk_idx // SYNERGY_CHUNK + 1, n_chunks, total_inserted)
+
+        log.info("  %s → %d new edges", ability_class, total_inserted)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def import_spellbook_stage() -> None:
@@ -1008,7 +1101,8 @@ if __name__ == "__main__":
             "download", "process",
             # Individual sub-stages
             "embed_cards", "tag_abilities", "tag_abilities_xmage",
-            "compute_synergy", "compute_commander_value_synergy",
+            "compute_synergy", "compute_synergy_xmage",
+            "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
             "export_dataset", "export_dataset_compositional", "composition_profile",
         ],
@@ -1048,6 +1142,8 @@ if __name__ == "__main__":
         asyncio.run(_xmage_tag(_Path(_os.environ.get("XMAGE_DIR", "/mage"))))
     elif args.stage == "compute_synergy":
         asyncio.run(compute_synergy())
+    elif args.stage == "compute_synergy_xmage":
+        asyncio.run(compute_synergy_xmage())
     elif args.stage == "compute_commander_value_synergy":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":

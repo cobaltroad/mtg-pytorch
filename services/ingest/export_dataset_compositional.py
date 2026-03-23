@@ -181,8 +181,10 @@ def main() -> None:
     # 2b. Card metadata (name/type for offline eval on GPU machine)
     card_meta = _load_card_meta(id_to_idx)
 
-    # 3. Synergy pairs (Phase 2) — same as co-occurrence artifact
-    a_idx, b_idx, labels = _load_synergy_pairs(id_to_idx, normed)
+    # 3. Synergy pairs (Phase 2) — XMage class-name edges only
+    a_idx, b_idx, labels = _load_synergy_pairs(
+        id_to_idx, normed, ability_score_type="xmage_ability_trigger"
+    )
 
     # 4. Decks + positions (Phases 3/4) — same as co-occurrence artifact
     color_ids  = _load_color_identities(id_to_idx)

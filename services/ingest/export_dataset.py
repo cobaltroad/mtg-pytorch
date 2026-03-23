@@ -145,17 +145,22 @@ def _mine_hard_negatives(
 def _load_synergy_pairs(
     id_to_idx: dict[str, int],
     normed: np.ndarray,
+    ability_score_type: str = "ability_trigger",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (a_idx, b_idx, labels) int32/float32 arrays.
 
-    Covers all score types (ability_trigger, role_demand, combo, commander_value)
-    plus pre-mined hard negatives and random negatives.  The sampling parameters
-    mirror those in train.py so the artifact reflects what a DB-connected run
-    would produce.
+    Covers ability edges (score_type controlled by *ability_score_type*),
+    role_demand, combo, and commander_value, plus pre-mined hard negatives and
+    random negatives.
+
+    Args:
+        ability_score_type: ``'ability_trigger'`` for the co-occurrence path
+            (oracle-text pattern edges); ``'xmage_ability_trigger'`` for the
+            compositional path (raw XMage class-name edges, no translation).
     """
     log.info(
-        "Loading synergy pairs (ability_per_event=%d, role=%d, combo=%d, cv=%d)…",
-        SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE, CV_SAMPLE,
+        "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d, cv=%d)…",
+        ability_score_type, SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE, CV_SAMPLE,
     )
     positives: list[tuple[int, int, float]] = []
 
@@ -172,13 +177,21 @@ def _load_synergy_pairs(
             #      SAMPLE_PER_EVENT.
             # This gives every event proportional representation without N
             # round-trips to the database.
-            log.info("  Fetching ~10%% sample of ability_trigger edges…")
-            cur.execute("""
+            # For xmage_ability_trigger the event key is stored as
+            # metadata->>'ability_class'; for ability_trigger it's
+            # metadata->>'trigger_event'.  Both fall back to 'unknown'.
+            event_key_expr = (
+                "COALESCE(metadata->>'ability_class', 'unknown')"
+                if ability_score_type == "xmage_ability_trigger"
+                else "COALESCE(metadata->>'trigger_event', 'unknown')"
+            )
+            log.info("  Fetching ~10%% sample of %s edges…", ability_score_type)
+            cur.execute(f"""
                 SELECT card_a::text, card_b::text,
-                       COALESCE(metadata->>'trigger_event', 'unknown') AS te
+                       {event_key_expr} AS te
                 FROM synergy_edges TABLESAMPLE SYSTEM(10)
-                WHERE score_type = 'ability_trigger'
-            """)
+                WHERE score_type = %s
+            """, (ability_score_type,))
             rows_by_event: dict[str, list[tuple[str, str]]] = defaultdict(list)
             for card_a, card_b, te in cur.fetchall():
                 rows_by_event[te].append((card_a, card_b))

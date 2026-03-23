@@ -49,7 +49,7 @@ the pipeline are needed when a sub-module is extended.
 
 from __future__ import annotations
 
-from . import commander_value, deckbuilding, events, lifegain, roles, tribal, utility
+from . import commander_value, deckbuilding, events, lifegain, roles, tribal, utility, xmage
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
@@ -88,6 +88,11 @@ COMMANDER_VALUE_TRIGGER_PATTERNS: list[tuple[str, str, str]] = commander_value.T
 COMMANDER_VALUE_PRODUCER_MAP: dict[str, str] = commander_value.PRODUCER_MAP
 COMMANDER_VALUE_EDGE_SCORES: dict[str, float] = commander_value.EDGE_SCORES
 
+# Compositional training path: XMage class name → producer SQL.
+# Used by compute_synergy_xmage() to build score_type='xmage_ability_trigger'
+# edges without the lossy trigger_event translation layer.
+XMAGE_PRODUCER_MAP: dict[str, str] = xmage.XMAGE_PRODUCER_MAP
+
 __all__ = [
     "TRIGGER_PATTERNS",
     "PRODUCER_MAP",
@@ -99,4 +104,5 @@ __all__ = [
     "COMMANDER_VALUE_TRIGGER_PATTERNS",
     "COMMANDER_VALUE_PRODUCER_MAP",
     "COMMANDER_VALUE_EDGE_SCORES",
+    "XMAGE_PRODUCER_MAP",
 ]
