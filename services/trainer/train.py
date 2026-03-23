@@ -466,28 +466,51 @@ def train_synergy_phase(
     epochs: int,
     lr: float,
     batch_size: int = 256,
-    label_smoothing: float = 0.1,
+    temp_start: float = 0.3,
+    temp_end: float = 0.07,
     encoder_lr_scale: float = 1.0,
     checkpoint_prefix: str = "phase",
 ):
-    """Phase 2: binary cross-entropy on ability-trigger synergy pairs.
+    """Phase 2: NT-Xent (InfoNCE) on positive ability-trigger synergy pairs.
 
-    label_smoothing: ε applied as smooth = label*(1-ε) + ε/2
-    (pos → 1-ε/2, neg → ε/2).  Handles noisy regex-derived positive labels.
+    Positive pairs (label > 0.5) are treated the same way Phase 1 treats
+    reprint pairs: NT-Xent with cosine-annealed temperature.  In-batch
+    negatives are mined automatically — no explicit negative pairs needed.
 
-    encoder_lr_scale: multiply lr by this factor for all encoder parameters.
-    Default 1.0 (no scaling).  Set to 0.1 via run.ps1 to protect Phase 1
-    geometry — the encoder drifts 10× slower while the synergy signal
-    reshapes the metric space.
+    This replaces the BCE formulation which had a degenerate minimum: BCE on
+    cosine similarity in [-1, +1] produces near-random gradients when starting
+    from Phase 1 geometry (epoch-1 loss ≈ log(2) ≈ 0.693), and the 540k
+    gradient steps at low lr accumulate to corrupt Phase 1 clusters by
+    amplifying surface-text features already present in the input embeddings.
 
-    Temperature is intentionally absent from Phase 2.  The BCE logit is the
-    raw cosine similarity in [-1, +1]: sigmoid(1) ≈ 0.73 and sigmoid(-1) ≈
-    0.27 give natural soft boundaries without any scaling.  A cosine-annealed
-    divisor (as used in InfoNCE/NT-Xent) blows up the logit magnitude in later
-    epochs (sim/0.05 = ±20), saturating the sigmoid, collapsing gradients,
-    and overwriting Phase 1 geometry (score compression).
+    NT-Xent has no degenerate collapse solution — the in-batch negatives always
+    provide contrastive signal — and temperature annealing from temp_start to
+    temp_end gives an easy-gradient warmup before sharpening the clusters.
+
+    encoder_lr_scale: multiply lr by this factor for all parameters.
+    Default 1.0 (no scaling).  Set to 0.1 via run.ps1 as a secondary
+    safeguard so the encoder drifts slowly from the Phase 1 optimum.
     """
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    # Filter to positive pairs only — NT-Xent mines its own in-batch negatives.
+    pos_pairs = [(a, b, l) for a, b, l in dataset.pairs if l > 0.5]
+    log.info(
+        "Phase 2: %d positive pairs retained (of %d total, %.1f%%)",
+        len(pos_pairs),
+        len(dataset),
+        100.0 * len(pos_pairs) / max(len(dataset), 1),
+    )
+    pos_dataset = SynergyDataset(pos_pairs, dataset.embeddings)
+    loader = DataLoader(
+        pos_dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
+    )
+    log.info(
+        "Phase 2 loader: %d batches/epoch  batch_size=%d  temp %.3f→%.3f",
+        len(loader),
+        batch_size,
+        temp_start,
+        temp_end,
+    )
+
     effective_lr = lr * encoder_lr_scale
     if encoder_lr_scale != 1.0:
         log.info(
@@ -504,22 +527,16 @@ def train_synergy_phase(
 
     best_loss = float("inf")
     for epoch in range(epochs):
+        temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
         model.train()
         total_loss = 0.0
-        for emb_a, emb_b, labels in loader:
+        for emb_a, emb_b, _ in loader:
             emb_a = emb_a.to(device)
             emb_b = emb_b.to(device)
-            labels = labels.to(device)
 
-            # Label smoothing: pull hard 0/1 targets toward centre
-            if label_smoothing > 0:
-                labels = labels * (1 - label_smoothing) + label_smoothing / 2
-
-            proj_a = model(emb_a)
-            proj_b = model(emb_b)
-            # Raw cosine similarity as logit — bounded [-1, +1], no temp scaling
-            similarity = (proj_a * proj_b).sum(dim=-1)
-            loss = F.binary_cross_entropy_with_logits(similarity, labels)
+            z_a = model(emb_a)
+            z_b = model(emb_b)
+            loss = nt_xent_loss(z_a, z_b, temperature)
 
             optimizer.zero_grad()
             loss.backward()
@@ -530,11 +547,12 @@ def train_synergy_phase(
         scheduler.step()
         avg = total_loss / len(loader)
         log.info(
-            "Phase 2  epoch %d/%d  loss=%.4f  lr=%.2e",
+            "Phase 2  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
             epoch + 1,
             epochs,
             avg,
             scheduler.get_last_lr()[0],
+            temperature,
         )
 
         if WANDB_ENABLED:
@@ -544,6 +562,7 @@ def train_synergy_phase(
                     "epoch": epoch + 1,
                     "loss": avg,
                     "lr": scheduler.get_last_lr()[0],
+                    "temperature": temperature,
                 }
             )
 
@@ -1359,15 +1378,15 @@ def main():
         "--temp-start",
         type=float,
         default=0.5,
-        help="Phase 2/4: initial InfoNCE temperature at epoch 1 "
-        "(high = soft distribution, easier early gradients)",
+        help="Phase 2/4: initial NT-Xent temperature (high=soft gradients). "
+        "Phase 2 default via run.ps1: 0.3.  Phase 4 default: 0.5.",
     )
     parser.add_argument(
         "--temp-end",
         type=float,
         default=0.05,
-        help="Phase 2/4: final InfoNCE temperature at last epoch "
-        "(low = sharp distribution, tight positive clustering)",
+        help="Phase 2/4: final NT-Xent temperature (low=sharp clusters). "
+        "Phase 2 default via run.ps1: 0.07.  Phase 4 default: 0.05.",
     )
     parser.add_argument(
         "--resume",
@@ -1590,7 +1609,8 @@ def main():
             args.epochs,
             args.lr,
             args.batch_size,
-            label_smoothing=args.label_smoothing,
+            temp_start=args.temp_start,
+            temp_end=args.temp_end,
             encoder_lr_scale=args.encoder_lr_scale,
             checkpoint_prefix=pfx,
         )

@@ -26,6 +26,10 @@ param(
     # Phase 2: scale factor applied to lr for all encoder parameters.
     # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.
     [double]$Phase2EncoderLrScale = 0.1,
+    # Phase 2: NT-Xent temperature annealing range.
+    # Start high for soft gradients, end near Phase 1 value to sharpen clusters.
+    [double]$Phase2TempStart = 0.3,
+    [double]$Phase2TempEnd = 0.07,
     [int]$Patience = 10,
     [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
@@ -263,6 +267,7 @@ if ($Mode -eq 'train') {
     if ($Phase -eq 2) {
         $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
         $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
+        $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
     }
 
     if ($Phase -eq 4) {
