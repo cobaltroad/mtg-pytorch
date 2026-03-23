@@ -54,12 +54,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# -Train N shorthand: expand to -Mode train -Phase N -Dataset .\ingest_cache\mtg_dataset.pt
+# -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
+# Artifact path depends on training path: compositional uses mtg_dataset_compositional.pt.
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
     if (-not $Dataset) {
-        $Dataset = Join-Path $PSScriptRoot '..\ingest_cache\mtg_dataset.pt'
+        $artifactName = if ($TrainingPath -eq 'compositional') {
+            'mtg_dataset_compositional.pt'
+        } else {
+            'mtg_dataset.pt'
+        }
+        $Dataset = Join-Path $PSScriptRoot "..\ingest_cache\$artifactName"
     }
 }
 

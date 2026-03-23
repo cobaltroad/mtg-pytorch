@@ -100,7 +100,7 @@ def load_embeddings(model_name: str = EMBEDDING_MODEL) -> dict[str, np.ndarray]:
 # ── Phase 1 data ──────────────────────────────────────────────────────────────
 
 class AllCardsDataset(Dataset):
-    """Phase 1: every card is a sample; two noisy views are created in the loop."""
+    """Phase 1 co-occurrence: every card is a sample; two noisy views created in the loop."""
 
     def __init__(self, embeddings: dict):
         self.ids = list(embeddings.keys())
@@ -111,6 +111,36 @@ class AllCardsDataset(Dataset):
 
     def __getitem__(self, idx):
         return torch.from_numpy(self.embs[idx])
+
+
+class FunctionalPairsDataset(Dataset):
+    """Phase 1 compositional: pre-computed functional equivalence pairs.
+
+    Each sample is a positive pair (emb_a, emb_b) where both cards belong to
+    the same functional equivalence class (same role + color-identity bucket +
+    CMC bracket).  NT-Xent loss treats these as positive pairs; all other
+    cross-pair combinations in the batch are in-batch negatives.
+    """
+
+    def __init__(self, pairs: list[tuple[str, str]], embeddings: dict[str, np.ndarray]):
+        valid = [(a, b) for a, b in pairs if a in embeddings and b in embeddings]
+        if len(valid) < len(pairs):
+            log.warning(
+                "FunctionalPairsDataset: dropped %d pairs with missing embeddings",
+                len(pairs) - len(valid),
+            )
+        self.pairs = valid
+        self.embeddings = embeddings
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, idx):
+        a, b = self.pairs[idx]
+        return (
+            torch.from_numpy(self.embeddings[a]),
+            torch.from_numpy(self.embeddings[b]),
+        )
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -276,6 +306,80 @@ def train_contrastive_phase(
             z1 = model(view1)
             z2 = model(view2)
             loss = nt_xent_loss(z1, z2, temperature)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            total_loss += loss.item()
+
+        scheduler.step()
+        avg = total_loss / len(loader)
+        log.info("Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
+                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+
+        if WANDB_ENABLED:
+            wandb.log({"phase": 1, "epoch": epoch + 1, "loss": avg,
+                       "lr": scheduler.get_last_lr()[0]})
+
+        if avg < best_loss:
+            best_loss = avg
+            save_checkpoint(model, checkpoint_prefix + "1_best")
+
+    save_checkpoint(model, f"{checkpoint_prefix}1_epoch{epochs}")
+
+
+def train_functional_pairs_phase(
+    model: CardEncoder,
+    dataset: FunctionalPairsDataset,
+    epochs: int,
+    lr: float,
+    batch_size: int = 512,
+    noise_std: float = 0.02,
+    temperature: float = 0.07,
+    checkpoint_prefix: str = "comp_phase",
+):
+    """Phase 1 compositional: NT-Xent on functional equivalence pairs.
+
+    Each batch contains (emb_a, emb_b) pairs where both cards share a
+    dominant ability role, color-identity bucket, and CMC bracket.  These
+    real semantic pairs replace the noise-augmented views used in the
+    co-occurrence Phase 1, giving the model a stronger functional signal:
+    Llanowar Elves and Birds of Paradise are pulled together because they
+    are both 'ramp' in a similar color/CMC class, not just because they
+    are noisy copies of the same embedding.
+
+    A small amount of Gaussian noise (noise_std) is still applied to each
+    view before projection — this acts as a regulariser and prevents the
+    model from learning a trivial identity mapping on the exact input vectors.
+    """
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
+                        num_workers=0, drop_last=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    device = next(model.parameters()).device
+
+    log.info(
+        "Phase 1 (compositional): %d pairs, batch=%d, epochs=%d, temp=%.3f",
+        len(dataset), batch_size, epochs, temperature,
+    )
+
+    best_loss = float("inf")
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        for emb_a, emb_b in loader:
+            emb_a = emb_a.to(device)
+            emb_b = emb_b.to(device)
+            # Small noise for regularisation — much less than the co-occurrence
+            # path because the pair signal is already meaningful.
+            if noise_std > 0:
+                emb_a = F.normalize(emb_a + torch.randn_like(emb_a) * noise_std, dim=-1)
+                emb_b = F.normalize(emb_b + torch.randn_like(emb_b) * noise_std, dim=-1)
+
+            z_a = model(emb_a)
+            z_b = model(emb_b)
+            loss = nt_xent_loss(z_a, z_b, temperature)
 
             optimizer.zero_grad()
             loss.backward()
@@ -913,17 +1017,34 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
 # ── Artifact loaders (--dataset mode, no DB required) ─────────────────────────
 
 def load_artifact(path: str) -> dict:
-    """Load the training artifact produced by export_dataset.py."""
+    """Load the training artifact produced by export_dataset*.py."""
     log.info("Loading training artifact: %s", path)
     data = torch.load(path, map_location="cpu", weights_only=False)
     meta = data.get("meta", {})
     log.info(
-        "Artifact: %d cards, %d pairs, %d decks, %d positions (created %s)",
-        meta.get("card_count", 0), meta.get("synergy_count", 0),
-        meta.get("deck_count", 0), meta.get("position_count", 0),
+        "Artifact: %d cards, %d functional pairs, %d synergy pairs, "
+        "%d decks, %d positions (created %s)",
+        meta.get("card_count", 0),
+        meta.get("functional_pair_count", 0),
+        meta.get("synergy_count", 0),
+        meta.get("deck_count", 0),
+        meta.get("position_count", 0),
         meta.get("created_at", "?")[:19],
     )
     return data
+
+
+def load_functional_pairs_from_artifact(
+    data: dict,
+) -> list[tuple[str, str]]:
+    """Reconstruct [(card_id_a, card_id_b)] from a compositional artifact."""
+    fp = data.get("functional_pairs")
+    if not fp:
+        return []
+    card_ids = data["card_ids"]
+    a_list = fp["a_idx"].tolist()
+    b_list = fp["b_idx"].tolist()
+    return [(card_ids[a], card_ids[b]) for a, b in zip(a_list, b_list)]
 
 
 def load_embeddings_from_artifact(data: dict) -> dict[str, np.ndarray]:
@@ -1094,19 +1215,35 @@ def main():
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
 
-        dataset = AllCardsDataset(embeddings)
-        log.info("Dataset: %d cards", len(dataset))
-
         input_dim = len(next(iter(embeddings.values())))
         model = CardEncoder(input_dim=input_dim).to(device)
         if args.resume:
             load_checkpoint(model, pfx + "1_best", device)
 
-        train_contrastive_phase(
-            model, dataset, args.epochs, args.lr, args.batch_size,
-            noise_std=args.noise, temperature=args.temperature,
-            checkpoint_prefix=pfx,
-        )
+        if args.training_path == "compositional":
+            pairs = load_functional_pairs_from_artifact(_artifact) if _artifact else []
+            if not pairs:
+                log.error(
+                    "No functional pairs found in artifact -- "
+                    "run: docker compose run --rm ingest python pipeline.py "
+                    "--stage export_dataset_compositional"
+                )
+                return
+            dataset = FunctionalPairsDataset(pairs, embeddings)
+            log.info("Dataset: %d functional pairs", len(dataset))
+            train_functional_pairs_phase(
+                model, dataset, args.epochs, args.lr, args.batch_size,
+                noise_std=args.noise, temperature=args.temperature,
+                checkpoint_prefix=pfx,
+            )
+        else:
+            dataset = AllCardsDataset(embeddings)
+            log.info("Dataset: %d cards", len(dataset))
+            train_contrastive_phase(
+                model, dataset, args.epochs, args.lr, args.batch_size,
+                noise_std=args.noise, temperature=args.temperature,
+                checkpoint_prefix=pfx,
+            )
 
     elif args.phase == 2:
         embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()

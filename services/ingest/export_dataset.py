@@ -249,6 +249,27 @@ def _load_synergy_pairs(
     )
 
 
+# ── Step 2b: Card metadata (for offline eval — no DB on GPU machine) ──────────
+
+def _load_card_meta(id_to_idx: dict[str, int]) -> dict[str, dict]:
+    """Return {card_id: {name, mana_cost, type_line}} for all embedded cards."""
+    ids = list(id_to_idx.keys())
+    result: dict[str, dict] = {}
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id::text, name, mana_cost, type_line FROM cards WHERE id::text = ANY(%s)",
+                (ids,),
+            )
+            for row in cur.fetchall():
+                result[row["id"]] = {
+                    "name":      row["name"],
+                    "mana_cost": row["mana_cost"] or "",
+                    "type_line": row["type_line"] or "",
+                }
+    return result
+
+
 # ── Step 3: Decks ─────────────────────────────────────────────────────────────
 
 def _load_color_identities(id_to_idx: dict[str, int]) -> dict[str, frozenset]:
@@ -504,6 +525,9 @@ def main() -> None:
     # 2. Synergy pairs (phase 2)
     a_idx, b_idx, labels = _load_synergy_pairs(id_to_idx, normed)
 
+    # 2b. Card metadata (name/type for offline eval on GPU machine)
+    card_meta = _load_card_meta(id_to_idx)
+
     # 3. Decks (phase 3/4)
     color_ids = _load_color_identities(id_to_idx)
     decks     = _load_decks(card_ids, id_to_idx, color_ids)
@@ -538,6 +562,8 @@ def main() -> None:
         # color_identities enables the trainer to reconstruct legal_neg_indices
         # for any commander without a DB connection — needed for synergy-only Phase 4.
         "color_identities":  {cid: sorted(ci) for cid, ci in color_ids.items()},
+        # card_meta enables offline nearest-neighbour eval on the GPU machine.
+        "card_meta":         card_meta,
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

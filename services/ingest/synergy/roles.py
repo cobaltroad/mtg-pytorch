@@ -104,308 +104,312 @@ utility_land  (LAND_ROLE_PATTERNS only)
 from __future__ import annotations
 
 # ── Oracle-text role patterns ─────────────────────────────────────────────────
-# Each entry: (oracle_regex, role_name)
-# Regexes are matched with re.IGNORECASE and re.DOTALL is NOT used — patterns
-# must match within a single oracle-text segment (separated by '\n' for
-# double-faced / modal cards).  Use [\s\S] or (?s) if cross-line matching is
-# required for a specific pattern.
+# Each entry: (oracle_regex, role_name, effect_class)
+#
+# effect_class encodes a structured decomposition of what the card does:
+#   removal  → "{mechanism}:{target_scope}"
+#              e.g. "exile:creature", "destroy:artifact_enchantment"
+#   sweeper  → "{mechanism}:all_{scope}"
+#              e.g. "destroy:all_creatures", "bounce:all_permanents"
+#   ramp     → mechanism/source type, e.g. "tap:mana", "land:battlefield"
+#   draw_*   → delivery mechanism, e.g. "spell:draw", "triggered:draw"
+#   tutor    → target type, e.g. "any_card", "creature", "artifact"
+#   other    → descriptive keyword matching the keyword that fired
+#
+# Regexes are matched with re.IGNORECASE; re.DOTALL is NOT used.
+# Use [\s\S] or (?s) only where cross-line matching is explicitly needed.
+#
+# Removal notes:
+#   - Compound "or" phrasings (e.g. "artifact or enchantment") must come
+#     BEFORE their constituent single-type patterns.
+#   - Single-type removal patterns use (?! or ) so they do not accidentally
+#     match the first type in a compound phrase.
+#   - (?! you control) excludes flicker/blink effects on your own permanents.
 
-ROLE_PATTERNS: list[tuple[str, str]] = [
+ROLE_PATTERNS: list[tuple[str, str, str]] = [
 
     # ── Ramp ──────────────────────────────────────────────────────────────────
 
-    # mana rocks / dorks: "{T}: Add …" is the universal template
-    (r"\{T\}:\s*[Aa]dd", "ramp"),
-    # explicit "add {X}" mana symbols: Sol Ring, Llanowar Elves, etc.
-    (r"\badd \{[WUBRGCXS]\}", "ramp"),
-    (r"\badd \{\d+\}", "ramp"),
-    # variable-mana producers: "add X mana", "add mana of any color", etc.
-    (r"\badd [a-z]+ mana\b", "ramp"),
-    (r"\badd mana (of|in) (any|one|two|three)", "ramp"),
-    # land-to-battlefield tutors: Rampant Growth, Cultivate, Kodama's Reach
-    (r"search your library.{0,80}\bland cards?\b.{0,80}(battlefield|into play)", "ramp"),
-    # basic land type search: Farseek, Nature's Lore, Into the North
-    # Allow "and/or graveyard" and "up to N" wordings; destination up to 100 chars away
+    # permanent tap sources: mana rocks, mana dorks — "{T}: Add …"
+    (r"\{T\}:\s*[Aa]dd", "ramp", "tap:mana"),
+    # spell/ritual mana burst: explicit mana-symbol addition without a tap cost
+    (r"\badd \{[WUBRGCXS]\}", "ramp", "spell:mana"),
+    (r"\badd \{\d+\}", "ramp", "spell:mana"),
+    (r"\badd [a-z]+ mana\b", "ramp", "spell:mana"),
+    (r"\badd mana (of|in) (any|one|two|three)", "ramp", "spell:mana"),
+    # land-to-battlefield: Rampant Growth, Cultivate, Kodama's Reach
+    (r"search your library.{0,80}\bland cards?\b.{0,80}(battlefield|into play)", "ramp", "land:battlefield"),
     (
         r"search your library.{0,30}for (a |an |up to \w+ )?"
         r"(plains|island|swamp|mountain|forest|snow-covered|basic land)"
-        r".{0,100}(battlefield|into play|to your hand)",
+        r".{0,100}(battlefield|into play)",
         "ramp",
+        "land:battlefield",
     ),
-    # put a land onto the battlefield directly
-    (r"put (a|one|two|an?|the) (basic )?land.{0,40}(onto|into) (the )?battlefield", "ramp"),
-    # play additional land(s): Exploration, Azusa, Oracle of Mul Daya
-    (r"play (one|two|three|x|an?)? ?additional lands? (each turn|this turn|per turn)?", "ramp"),
-    # Doubling Cube, Mana Flare type effects
-    (r"double (the amount of|your|all) mana", "ramp"),
+    # land-to-hand: Nature's Lore variants that put land in hand
+    (
+        r"search your library.{0,30}for (a |an |up to \w+ )?"
+        r"(plains|island|swamp|mountain|forest|snow-covered|basic land)"
+        r".{0,100}to your hand",
+        "ramp",
+        "land:hand",
+    ),
+    # direct land placement: "put a land onto the battlefield"
+    (r"put (a|one|two|an?|the) (basic )?land.{0,40}(onto|into) (the )?battlefield", "ramp", "land:battlefield"),
+    # additional land drops: Exploration, Azusa, Oracle of Mul Daya
+    (r"play (one|two|three|x|an?)? ?additional lands? (each turn|this turn|per turn)?", "ramp", "extra_land_drop"),
+    # mana doublers: Doubling Cube, Mana Flare
+    (r"double (the amount of|your|all) mana", "ramp", "mana_double"),
 
     # ── Draw (one-time) ───────────────────────────────────────────────────────
 
-    # direct draw: "draw a card", "draw two cards", "draw X cards"
-    (r"\bdraw (a card|one card|two cards|three cards|four cards|five cards|six cards|seven cards|x cards?|\d+ cards?)\b", "draw_one"),
-    # loot: draw then discard (or discard then draw)
+    (r"\bdraw (a card|one card|two cards|three cards|four cards|five cards|six cards|seven cards|x cards?|\d+ cards?)\b", "draw_one", "spell:draw"),
     (
         r"\bdraw (a card|cards?).{0,40}discard (a card|cards?)"
         r"|\bdiscard.{0,30}draw (a card|cards?)\b",
         "draw_one",
+        "spell:loot",
     ),
-    # impulse draw: exile top of library then may play/cast it (one-time spell)
     (
         r"exile the top \S+ cards? of your library.{0,80}"
         r"(you may (play|cast)|may (play|cast) (it|them))",
         "draw_one",
+        "spell:impulse",
     ),
-    # Necropotence / Dark Confidant style: exile/reveal top and put to hand
     (
         r"exile the top.{0,60}put (that card|them|it).{0,30}into your hand"
         r"|pay \d+ life.{0,60}draw (a card|cards?)"
         r"|you lose \d+ life.{0,30}draw (a card|cards?)",
         "draw_one",
+        "spell:draw",
     ),
-    # "Look at the top X cards … put one/them into your hand" (Scroll Rack, Impulse, etc.)
     (
         r"look at the top.{0,40}put (one|two|\w+) of (them|those cards).{0,30}(your hand|into your hand)"
         r"|look at the top.{0,60}put (it|one of them|that card).{0,30}(your hand|into your hand)",
         "draw_one",
+        "spell:impulse",
     ),
-    # wheel / mass-draw: all players draw simultaneously (Windfall, Wheel of Fortune,
-    # Jace's Archivist, Reforge the Soul).  These are one-shot effects, typically cast
-    # from hand, even though they affect all players.
-    # "\d+ cards?" covers numeric amounts; "seven cards" / "x cards" cover named amounts.
-    (r"each (player|opponent).{0,60}draws? (cards?|a card|\d+ cards?|seven cards?|x cards?)", "draw_one"),
+    (r"each (player|opponent).{0,60}draws? (cards?|a card|\d+ cards?|seven cards?|x cards?)", "draw_one", "spell:wheel"),
 
     # ── Repeatable draw ───────────────────────────────────────────────────────
-    # Static, permanent-based card-advantage engines that keep working as long as
-    # the card remains on the battlefield.
 
-    # "Whenever" triggered draw — fires repeatedly on a recurring condition.
-    # Uses \bwhenever\b (not "when") to exclude single-fire ETB triggers like
-    # "When Mulldrifter enters the battlefield, draw two cards."
-    # Covers: Rhystic Study, Mystic Remora, Beast Whisperer, Consecrated Sphinx,
-    #         Toski Bearer of Secrets, Reconnaissance Mission, etc.
-    (r"\bwhenever\b.{0,120}draws? (a card|\d+ cards?|cards?)", "repeatable_draw"),
-    # "at the beginning of" step-triggered draw — once per turn, every turn.
-    # Covers: Phyrexian Arena, Sylvan Library, Howling Mine, Dictate of Kruphix.
+    (r"\bwhenever\b.{0,120}draws? (a card|\d+ cards?|cards?)", "repeatable_draw", "triggered:draw"),
     (
         r"at the beginning of.{0,80}draws? (a card|\d+ cards?|cards?|an additional card|two additional)",
         "repeatable_draw",
+        "upkeep:draw",
     ),
-    # Activated-ability draw — explicit cost → draw on a permanent.
-    # Covers: War Room ("{3}, {T}, Pay 1 life: Draw a card"),
-    #         Sensei's Divining Top ("{1}, {T}: Draw three cards …"),
-    #         The Immortal Sun, etc.
-    # Matches any activation cost (one or more {symbol} groups) followed by ": draw".
-    (
-        r"\{[^}]+\}[^:]{0,80}:\s*.{0,60}draw (a card|\d+ cards?|cards?)",
-        "repeatable_draw",
-    ),
-    # Repeatable impulse engine — at beginning of turn, exile top and may play.
-    # Covers: Precognition Field, Future Sight, Oracle of Mul Daya.
+    (r"\{[^}]+\}[^:]{0,80}:\s*.{0,60}draw (a card|\d+ cards?|cards?)", "repeatable_draw", "activated:draw"),
     (
         r"at the beginning of.{0,60}"
         r"exile the top.{0,80}(you may (play|cast)|may (play|cast) (it|them))",
         "repeatable_draw",
+        "upkeep:impulse",
     ),
 
     # ── Removal (single-target) ───────────────────────────────────────────────
+    #
+    # Compound "or" phrasings first, then single-type patterns.
+    # (?! or ) prevents single-type patterns from matching inside compound phrases.
+    # (?! you control) excludes blink/flicker effects on your own permanents.
 
-    # destroy target permanent/creature/artifact/enchantment/planeswalker
-    # "non-" prefixes (nonblack, nonwhite, nonartifact, nonland, etc.) covered by \w+
+    # destroy — compound phrasings
+    (r"destroy target (creature or planeswalker|planeswalker or creature)(?! you control)", "removal", "destroy:creature_planeswalker"),
+    (r"destroy target (artifact or enchantment|enchantment or artifact)(?! you control)", "removal", "destroy:artifact_enchantment"),
+    (r"destroy target (creature or enchantment|enchantment or creature)(?! you control)", "removal", "destroy:creature_enchantment"),
+    (r"destroy target (artifact or creature|creature or artifact)(?! you control)", "removal", "destroy:artifact_creature"),
+    # destroy — single-type (broadest first so patterns remain mutually exclusive)
+    (r"destroy target (\w+ )?permanent(?! or )(?! you control)", "removal", "destroy:permanent"),
+    (r"destroy target (\w+ )?nonland permanent(?! or )(?! you control)", "removal", "destroy:nonland_permanent"),
+    (r"destroy target (\w+ )?creature(?! or )(?! you control)", "removal", "destroy:creature"),
+    (r"destroy target (\w+ )?artifact(?! or )(?! you control)", "removal", "destroy:artifact"),
+    (r"destroy target (\w+ )?enchantment(?! or )(?! you control)", "removal", "destroy:enchantment"),
+    (r"destroy target (\w+ )?planeswalker(?! or )(?! you control)", "removal", "destroy:planeswalker"),
+    (r"destroy target (\w+ )?land(?! or )(?! you control)", "removal", "destroy:land"),
+    (r"destroy target (\w+ )?token(?! or )(?! you control)", "removal", "destroy:token"),
+
+    # exile — compound phrasings
+    (r"exile target (creature or planeswalker|planeswalker or creature)(?! you control)", "removal", "exile:creature_planeswalker"),
+    (r"exile target (artifact or enchantment|enchantment or artifact)(?! you control)", "removal", "exile:artifact_enchantment"),
+    (r"exile target (creature or enchantment|enchantment or creature)(?! you control)", "removal", "exile:creature_enchantment"),
+    # exile — single-type
+    (r"exile target (\w+ )?permanent(?! or )(?! you control)", "removal", "exile:permanent"),
+    (r"exile target (\w+ )?nonland permanent(?! or )(?! you control)", "removal", "exile:nonland_permanent"),
+    (r"exile target (\w+ )?creature(?! or )(?! you control)", "removal", "exile:creature"),
+    (r"exile target (\w+ )?artifact(?! or )(?! you control)", "removal", "exile:artifact"),
+    (r"exile target (\w+ )?enchantment(?! or )(?! you control)", "removal", "exile:enchantment"),
+    (r"exile target (\w+ )?planeswalker(?! or )(?! you control)", "removal", "exile:planeswalker"),
+    (r"exile target (\w+ )?land(?! or )(?! you control)", "removal", "exile:land"),
+
+    # burn / direct damage
+    # "any target" = creature, planeswalker, or player — grouped as creature_planeswalker
     (
-        r"destroy target (\w+ )?(creature|permanent|artifact|enchantment|planeswalker"
-        r"|nonland permanent|land|token)",
+        r"deals? \w+ damage to any target"
+        r"|deals? [Xx] damage to any target",
         "removal",
+        "damage:any_target",
     ),
-    # exile target permanent
-    (
-        r"exile target (\w+ )?(creature|permanent|artifact|enchantment|planeswalker"
-        r"|nonland permanent|land|token)",
-        "removal",
-    ),
-    # burn / direct damage to a single target
-    (
-        r"deals? \w+ damage to (any target|target (creature|player|opponent|planeswalker))"
-        r"|deals? [Xx] damage to (any target|target)",
-        "removal",
-    ),
-    # bounce: return target permanent to hand
-    (
-        r"return target (creature|permanent|nonland permanent|artifact|enchantment|planeswalker)"
-        r".{0,40}(to its owner's hand|to their owner's hand|to your hand)",
-        "removal",
-    ),
-    # -X/-X until end of turn on a target (wither-like)
-    (r"target.{0,30}gets? -\d+/-\d+ until end of turn", "removal"),
-    # library-shuffle removal: Chaos Warp, Spin into Myth
+    (r"deals? \w+ damage to target (creature or planeswalker|planeswalker or creature)", "removal", "damage:creature_planeswalker"),
+    (r"deals? \w+ damage to target (creature|player|opponent)(?! or )", "removal", "damage:creature"),
+
+    # bounce — return to owner's hand (opponent's permanent, not yours)
+    (r"return target (creature or planeswalker|planeswalker or creature)(?! you control).{0,40}to (its|their) owner's hand", "removal", "bounce:creature_planeswalker"),
+    (r"return target (permanent|nonland permanent)(?! you control).{0,40}to (its|their) owner's hand", "removal", "bounce:permanent"),
+    (r"return target creature(?! or )(?! you control).{0,40}to (its|their) owner's hand", "removal", "bounce:creature"),
+    (r"return target (artifact|enchantment|planeswalker)(?! or )(?! you control).{0,40}to (its|their) owner's hand", "removal", "bounce:noncreature"),
+
+    # -X/-X until end of turn (Dismember, Grasp of Darkness)
+    (r"target.{0,30}gets? -\d+/-\d+ until end of turn", "removal", "reduce_toughness:creature"),
+
+    # tuck — shuffle target into library (Chaos Warp, Spin into Myth)
     (
         r"(the owner of target|target \w+ permanent).{0,40}shuffles? it into (their|their owner's) library"
         r"|shuffles? target.{0,30}into (their|its owner's) library",
         "removal",
+        "tuck:permanent",
     ),
 
     # ── Sweeper (mass removal) ────────────────────────────────────────────────
 
-    # destroy/exile all creatures/permanents
-    (
-        r"destroy (all|each) (creatures?|permanents?|nonland permanents?"
-        r"|artifacts?|enchantments?|tokens?)",
-        "sweeper",
-    ),
-    (
-        r"exile (all|each) (creatures?|permanents?|nonland permanents?"
-        r"|artifacts?|enchantments?|tokens?)",
-        "sweeper",
-    ),
-    # deal damage to all creatures (Blasphemous Act, Earthquake, etc.)
-    (r"deals? \w+ damage to (all|each) creature", "sweeper"),
-    # mass bounce (Evacuation, Cyclonic Rift overload)
+    (r"destroy all creatures", "sweeper", "destroy:all_creatures"),
+    (r"destroy (all|each) (nonland permanents?|permanents?)", "sweeper", "destroy:all_permanents"),
+    (r"destroy (all|each) (artifacts?|enchantments?|tokens?)", "sweeper", "destroy:all_artifacts"),
+    (r"destroy each creature", "sweeper", "destroy:all_creatures"),
+    (r"exile all creatures", "sweeper", "exile:all_creatures"),
+    (r"exile (all|each) (nonland permanents?|permanents?)", "sweeper", "exile:all_permanents"),
+    (r"exile each creature", "sweeper", "exile:all_creatures"),
+    (r"deals? \w+ damage to (all|each) creature", "sweeper", "damage:all_creatures"),
     (
         r"return (all|each) (nonland permanents?|permanents?|creatures?|tokens?)"
         r".{0,40}(to (its|their|your).{0,10}hand|to their owners'? hand)",
         "sweeper",
+        "bounce:all_permanents",
     ),
-    # -X/-X to all creatures (Toxic Deluge, Black Sun's Zenith)
-    (r"(all|each) creatures?.{0,30}(gets?|takes?|receives?).{0,30}-[\dxX]+/-[\dxX]+", "sweeper"),
-    (r"put.{0,30}-1/-1 counters? on (all|each) creature", "sweeper"),
-    # each player sacrifices (Dictate of Erebos, Grave Pact broad effects)
-    (r"each (player|opponent) sacrifices (a creature|all creatures|creatures?)", "sweeper"),
-    # Overload on a bounce/removal spell: in oracle text the effect line precedes
-    # the Overload keyword, so "return/destroy/exile target … Overload" means the
-    # card CAN clear the whole board when overloaded (Cyclonic Rift).
-    # Use [\s\S] to allow the match to span the newline between the effect and
-    # the Overload reminder line.
-    (
-        r"(return|destroy|exile) target[\s\S]{0,300}\boverload\b",
-        "sweeper",
-    ),
+    (r"(all|each) creatures?.{0,30}(gets?|takes?|receives?).{0,30}-[\dxX]+/-[\dxX]+", "sweeper", "reduce_toughness:all_creatures"),
+    (r"put.{0,30}-1/-1 counters? on (all|each) creature", "sweeper", "reduce_toughness:all_creatures"),
+    (r"each (player|opponent) sacrifices (a creature|all creatures|creatures?)", "sweeper", "sacrifice:all_creatures"),
+    # Overload spells: effect line precedes "Overload" keyword (Cyclonic Rift)
+    (r"(return|destroy|exile) target[\s\S]{0,300}\boverload\b", "sweeper", "bounce:all_permanents"),
 
     # ── Tutor ─────────────────────────────────────────────────────────────────
 
-    # search library (and/or graveyard) for any named card type
-    # Handles: "search your library for a card", "search your library and/or graveyard for a creature card"
+    # Most specific types first; "any card" catch-all last.
     (
         r"search your library( and/or \w+)? for (a |an |up to (one|two|three) )?"
-        r"(card|creature card|artifact card|land card|enchantment card"
-        r"|instant card|sorcery card|legendary card|basic land card"
-        r"|plains|island|swamp|mountain|forest|planeswalker card)",
+        r"(legendary )?creature card",
         "tutor",
+        "creature",
+    ),
+    (
+        r"search your library( and/or \w+)? for (a |an |up to (one|two|three) )?artifact card",
+        "tutor",
+        "artifact",
+    ),
+    (
+        r"search your library( and/or \w+)? for (a |an |up to (one|two|three) )?enchantment card",
+        "tutor",
+        "enchantment",
+    ),
+    (
+        r"search your library( and/or \w+)? for (a |an |up to (one|two|three) )?(instant|sorcery) card",
+        "tutor",
+        "instant_sorcery",
+    ),
+    (
+        r"search your library( and/or \w+)? for (a |an |up to (one|two|three) )?planeswalker card",
+        "tutor",
+        "planeswalker",
+    ),
+    # generic "a card" / "basic land card" (includes land tutors not already caught by ramp)
+    (
+        r"search your library( and/or \w+)? for (a |an |up to (one|two|three) )?"
+        r"(card|basic land card|plains|island|swamp|mountain|forest)",
+        "tutor",
+        "any_card",
     ),
 
     # ── Protection ────────────────────────────────────────────────────────────
 
-    # static or granted keywords
-    (r"\bhexproof\b", "protection"),
-    (r"\bindestructible\b", "protection"),
-    (r"\bshroud\b", "protection"),
-    (r"\bregenerate\b", "protection"),
-    # phase out / protection from everything
-    (r"\bphase out\b", "protection"),
-    (r"\bprotection from (everything|all)\b", "protection"),
+    (r"\bhexproof\b", "protection", "hexproof"),
+    (r"\bindestructible\b", "protection", "indestructible"),
+    (r"\bshroud\b", "protection", "shroud"),
+    (r"\bregenerate\b", "protection", "regenerate"),
+    (r"\bphase out\b", "protection", "phase_out"),
+    (r"\bprotection from (everything|all)\b", "protection", "protection_all"),
 
     # ── Win condition ─────────────────────────────────────────────────────────
 
-    # infect / toxic (10 poison counters = loss)
-    (r"\binfect\b", "win_condition"),
-    (r"\btoxic \d\b", "win_condition"),
-    (r"\bpoison counter", "win_condition"),
-    # explicit win-the-game text
-    (r"(you |the )?(wins?|win) the game\b", "win_condition"),
-    (r"that player (loses|lost) the game\b", "win_condition"),
-    (r"each (opponent|player) loses the game\b", "win_condition"),
-    # commander damage (21 commander damage wins): no oracle text marker, skip
-    # life-total drain as win mechanism (Exquisite Blood + Sanguine Bond style)
-    (r"each opponent loses \d+ life.{0,40}you gain", "win_condition"),
+    (r"\binfect\b", "win_condition", "infect"),
+    (r"\btoxic \d\b", "win_condition", "toxic"),
+    (r"\bpoison counter", "win_condition", "infect"),
+    (r"(you |the )?(wins?|win) the game\b", "win_condition", "alt_win"),
+    (r"that player (loses|lost) the game\b", "win_condition", "alt_win"),
+    (r"each (opponent|player) loses the game\b", "win_condition", "alt_win"),
+    (r"each opponent loses \d+ life.{0,40}you gain", "win_condition", "life_drain"),
 
     # ── Anthem ────────────────────────────────────────────────────────────────
 
-    # global +N/+N to your creatures (includes "tokens" qualifier: Intangible Virtue)
     (
         r"(creatures? (tokens? )?(you control|in your command zone)"
         r"|other creatures you control) get \+\d+/[+\d]",
         "anthem",
+        "static_pump",
     ),
-    (r"each (creature you control|of your creatures) gets? \+\d+/[+\d]", "anthem"),
-    # Coat of Arms / lord-style: "each … gets +1/+1 for each other …"
-    # Also handles Shared Animosity "+1/+0 … for each other attacking creature"
-    (r"(gets?|get) \+\d+/[+\-\d]+.{0,50}for each (other|creature)", "anthem"),
+    (r"each (creature you control|of your creatures) gets? \+\d+/[+\d]", "anthem", "static_pump"),
+    # Coat of Arms / lord-style scaling pump
+    (r"(gets?|get) \+\d+/[+\-\d]+.{0,50}for each (other|creature)", "anthem", "scaling_pump"),
 
     # ── Token generator ───────────────────────────────────────────────────────
 
-    # "create … token" is the universal template since M15
-    (
-        r"create (a|an|one|two|three|four|five|six|x|\d+).{0,50}tokens?",
-        "token_generator",
-    ),
-    # older "put … token" template (pre-M15 sets)
-    (
-        r"put (a|an|one|two|three|\d+).{0,50}token.{0,30}(onto|into) (the )?battlefield",
-        "token_generator",
-    ),
+    (r"create (a|an|one|two|three|four|five|six|x|\d+).{0,50}tokens?", "token_generator", "create_token"),
+    # pre-M15 template
+    (r"put (a|an|one|two|three|\d+).{0,50}token.{0,30}(onto|into) (the )?battlefield", "token_generator", "create_token"),
 
     # ── Recursion ─────────────────────────────────────────────────────────────
 
-    # return a card/creature from graveyard to hand or battlefield
     (
         r"return (target )?.{0,60}card from (your|a|any) graveyard"
-        r".{0,60}(to (your hand|the battlefield|battlefield))",
+        r".{0,60}to (your hand|the battlefield|battlefield)",
         "recursion",
+        "graveyard_to_hand",
     ),
-    # put directly from graveyard to battlefield
     (
         r"put.{0,30}from (your|a|the) graveyard.{0,40}"
         r"(onto|into|to) (the )?battlefield",
         "recursion",
+        "graveyard_to_battlefield",
     ),
-    # exile from graveyard then return (Animate Dead / Dance of the Dead)
-    (
-        r"enchant creature card in (a|the) graveyard",
-        "recursion",
-    ),
-    # "return ~ from your graveyard" self-recursion
-    (
-        r"return (this card|it) from your graveyard",
-        "recursion",
-    ),
-    # triggered return: "whenever X dies, return it"
-    (
-        r"when.{0,60}dies.{0,60}return (it|that card|target creature)",
-        "recursion",
-    ),
+    (r"enchant creature card in (a|the) graveyard", "recursion", "reanimate_aura"),
+    (r"return (this card|it) from your graveyard", "recursion", "self_recursion"),
+    (r"when.{0,60}dies.{0,60}return (it|that card|target creature)", "recursion", "death_trigger"),
 
     # ── Interaction (stack-based) ─────────────────────────────────────────────
 
-    # hard counterspell
-    (r"counter target spell\b", "interaction"),
-    # type-conditional counterspell
+    (r"counter target spell\b", "interaction", "hard_counter"),
     (
         r"counter target (noncreature|creature|instant|sorcery|enchantment|artifact|legendary)"
         r".{0,40}\bspell\b",
         "interaction",
+        "conditional_counter",
     ),
-    # "unless its controller pays" conditional counter
-    (r"counter target spell.{0,80}unless", "interaction"),
-    # redirect / change targets
+    (r"counter target spell.{0,80}unless", "interaction", "conditional_counter"),
     (
         r"change the target.{0,40}target (spell|ability)"
         r"|choose new targets for target (spell|ability)",
         "interaction",
+        "redirect",
     ),
 
     # ── Combat trick ──────────────────────────────────────────────────────────
 
-    # pump effects (+X/+X until end of turn)
-    (
-        r"(get(s)?|gain(s)?).{0,30}\+\d+/\+\d+.{0,30}until end of turn",
-        "combat_trick",
-    ),
-    # combat keyword grants until end of turn
+    (r"(get(s)?|gain(s)?).{0,30}\+\d+/\+\d+.{0,30}until end of turn", "combat_trick", "pump"),
     (
         r"(gain(s)?|get(s)?|has|have).{0,60}"
         r"(trample|deathtouch|first strike|double strike|lifelink|haste|vigilance)"
         r".{0,40}until end of turn",
         "combat_trick",
+        "keyword_grant",
     ),
-    # evasion grants
     (
         r"(gain(s)?|get(s)?|has|have).{0,60}"
         r"(flying|menace|shadow|fear|intimidate|skulk|horsemanship|unblockable)"
@@ -413,6 +417,7 @@ ROLE_PATTERNS: list[tuple[str, str]] = [
         r"|can't be blocked.{0,30}(until end of turn|this turn)"
         r"|\bis unblockable\b",
         "combat_trick",
+        "evasion_grant",
     ),
 ]
 
@@ -428,18 +433,17 @@ def is_land_card(type_line: str) -> bool:
 # ── Land-specific role patterns ───────────────────────────────────────────────
 # Applied ONLY when is_land_card(type_line) is True.
 
-LAND_ROLE_PATTERNS: list[tuple[str, str]] = [
+LAND_ROLE_PATTERNS: list[tuple[str, str, str]] = [
     # mana_land: lands that tap to produce mana
-    (r"\{T\}:\s*[Aa]dd", "mana_land"),
+    (r"\{T\}:\s*[Aa]dd", "mana_land", "tap:mana"),
     # utility_land: fetchlands that search for a specific land by type name or "land card"
-    # Handles both "search your library for a Swamp or Forest card" (fetchlands) and
-    # "search your library for a basic land card" (generic).
     (
         r"search your library for (a |an |up to \w+ )?"
         r"(basic )?("
         r"land card?|plains|island|swamp|mountain|forest"
         r"|snow-covered|nonbasic land)",
         "utility_land",
+        "land_tutor",
     ),
     # utility_land: search for two specific land types (e.g. "a Plains or Forest card")
     (
@@ -447,10 +451,12 @@ LAND_ROLE_PATTERNS: list[tuple[str, str]] = [
         r"(plains|island|swamp|mountain|forest).{0,20} or "
         r"(plains|island|swamp|mountain|forest)",
         "utility_land",
+        "land_tutor",
     ),
     # non-mana activated abilities on lands (Maze of Ith, Bojuka Bog style)
     (
         r"\{T\}.{0,10}:(?!.{0,10}[Aa]dd).{0,60}(exile|untap|prevent|search|draw|create|destroy)",
         "utility_land",
+        "activated:non_mana",
     ),
 ]

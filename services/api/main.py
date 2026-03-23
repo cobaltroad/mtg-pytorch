@@ -32,6 +32,8 @@ DATABASE_URL      = os.environ.get("DATABASE_URL", "")
 ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
 DATASET_PATH      = Path(os.environ.get("DATASET_PATH",      "/data/mtg_dataset.pt"))
 DATASET_META_PATH = Path(os.environ.get("DATASET_META_PATH", "/data/mtg_dataset.json"))
+DATASET_COMP_PATH      = Path(os.environ.get("DATASET_COMP_PATH",      "/data/mtg_dataset_compositional.pt"))
+DATASET_COMP_META_PATH = Path(os.environ.get("DATASET_COMP_META_PATH", "/data/mtg_dataset_compositional.json"))
 DECK_SAVE_DIR     = Path(os.environ.get("DECK_SAVE_DIR",     "/app/generated_decks"))
 
 app = FastAPI(
@@ -541,4 +543,38 @@ async def dataset_download():
         DATASET_PATH,
         media_type="application/octet-stream",
         filename="mtg_dataset.pt",
+    )
+
+
+@app.get("/dataset/compositional/info")
+async def dataset_compositional_info():
+    """Return metadata about the compositional training artifact (no auth required)."""
+    if not DATASET_COMP_META_PATH.exists():
+        raise HTTPException(
+            404,
+            "No compositional dataset available — run: "
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional",
+        )
+    meta = json.loads(DATASET_COMP_META_PATH.read_text())
+    size_bytes = DATASET_COMP_PATH.stat().st_size if DATASET_COMP_PATH.exists() else 0
+    return {**meta, "size_bytes": size_bytes}
+
+
+@app.get("/dataset/compositional/download")
+async def dataset_compositional_download():
+    """Stream the compositional training artifact to the caller (no auth required).
+
+    Contains functional equivalence pairs (Phase 1) in addition to the
+    standard synergy pairs, decks, and Phase 4 positions.
+    """
+    if not DATASET_COMP_PATH.exists():
+        raise HTTPException(
+            404,
+            "No compositional dataset available — run: "
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional",
+        )
+    return FileResponse(
+        DATASET_COMP_PATH,
+        media_type="application/octet-stream",
+        filename="mtg_dataset_compositional.pt",
     )
