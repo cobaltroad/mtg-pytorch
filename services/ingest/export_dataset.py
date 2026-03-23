@@ -24,14 +24,21 @@ Usage
 
 Environment variables
 ---------------------
-  DATASET_SAMPLE         Max ability_trigger positives (default 500 000)
-  DATASET_ROLE_SAMPLE    Max role_demand positives     (default 100 000)
-  DATASET_COMBO_SAMPLE   Max combo pair positives      (default 200 000)
-  DATASET_CV_SAMPLE      Max commander_value positives (default 200 000)
-  DATASET_NEG_RATIO      Negatives per positive        (default 3)
-  DATASET_HARD_NEG_FRAC  Fraction of negs that are hard (default 0.5)
-  DATASET_SYN_LIMIT      Max synergy positions/cmd     (default 300)
-  DATASET_OUTPUT         Output path  (default /data/mtg_dataset.pt)
+  DATASET_SAMPLE_PER_EVENT   Max ability_trigger positives per trigger_event
+                             (default 100 000).  A 10 % table sample is fetched
+                             once, grouped by trigger_event in Python, then each
+                             event is capped independently — so rare events like
+                             adapt_evolve or sac_outlet receive proportional
+                             representation alongside high-volume events like
+                             creature_etb.  Total pairs ≈ n_events × cap.
+                             Alias: DATASET_SAMPLE (legacy, same semantics).
+  DATASET_ROLE_SAMPLE        Max role_demand positives     (default 100 000)
+  DATASET_COMBO_SAMPLE       Max combo pair positives      (default 200 000)
+  DATASET_CV_SAMPLE          Max commander_value positives (default 200 000)
+  DATASET_NEG_RATIO          Negatives per positive        (default 3)
+  DATASET_HARD_NEG_FRAC      Fraction of negs that are hard (default 0.5)
+  DATASET_SYN_LIMIT          Max synergy positions/cmd     (default 300)
+  DATASET_OUTPUT             Output path  (default /data/mtg_dataset.pt)
 """
 
 from __future__ import annotations
@@ -56,10 +63,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 DATABASE_URL    = os.environ["DATABASE_URL"]
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 OUTPUT_PATH     = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
-SAMPLE          = int(os.environ.get("DATASET_SAMPLE",       "500000"))
-ROLE_SAMPLE     = int(os.environ.get("DATASET_ROLE_SAMPLE",  "100000"))
-COMBO_SAMPLE    = int(os.environ.get("DATASET_COMBO_SAMPLE", "200000"))
-CV_SAMPLE       = int(os.environ.get("DATASET_CV_SAMPLE",    "200000"))
+SAMPLE_PER_EVENT = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
+                        os.environ.get("DATASET_SAMPLE", "100000")))
+ROLE_SAMPLE      = int(os.environ.get("DATASET_ROLE_SAMPLE",  "100000"))
+COMBO_SAMPLE     = int(os.environ.get("DATASET_COMBO_SAMPLE", "200000"))
+CV_SAMPLE        = int(os.environ.get("DATASET_CV_SAMPLE",    "200000"))
 NEG_RATIO       = int(os.environ.get("DATASET_NEG_RATIO",    "3"))
 HARD_NEG_FRAC   = float(os.environ.get("DATASET_HARD_NEG_FRAC", "0.5"))
 SYN_LIMIT       = int(os.environ.get("DATASET_SYN_LIMIT",    "300"))
@@ -146,26 +154,48 @@ def _load_synergy_pairs(
     would produce.
     """
     log.info(
-        "Loading synergy pairs (ability=%d, role=%d, combo=%d, cv=%d)…",
-        SAMPLE, ROLE_SAMPLE, COMBO_SAMPLE, CV_SAMPLE,
+        "Loading synergy pairs (ability_per_event=%d, role=%d, combo=%d, cv=%d)…",
+        SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE, CV_SAMPLE,
     )
     positives: list[tuple[int, int, float]] = []
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # ability_trigger (sampled — table can be very large)
+            # ability_trigger — stratified per trigger_event.
+            #
+            # A flat TABLESAMPLE SYSTEM(10) LIMIT N starves rare events (e.g.
+            # adapt_evolve, sac_outlet) when high-volume events like creature_etb
+            # dominate the table.  Instead we:
+            #   1. Fetch a 10 % random sample of all ability_trigger rows once
+            #      (~4 M rows for a 40 M table — manageable in Python).
+            #   2. Group by trigger_event in Python, shuffle each group, cap at
+            #      SAMPLE_PER_EVENT.
+            # This gives every event proportional representation without N
+            # round-trips to the database.
+            log.info("  Fetching ~10%% sample of ability_trigger edges…")
             cur.execute("""
-                SELECT card_a::text, card_b::text
+                SELECT card_a::text, card_b::text,
+                       COALESCE(metadata->>'trigger_event', 'unknown') AS te
                 FROM synergy_edges TABLESAMPLE SYSTEM(10)
                 WHERE score_type = 'ability_trigger'
-                LIMIT %s
-            """, (SAMPLE,))
-            positives += [
-                (id_to_idx[r[0]], id_to_idx[r[1]], 1.0)
-                for r in cur.fetchall()
-                if r[0] in id_to_idx and r[1] in id_to_idx
-            ]
-            log.info("  %d ability_trigger pairs", len(positives))
+            """)
+            rows_by_event: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for card_a, card_b, te in cur.fetchall():
+                rows_by_event[te].append((card_a, card_b))
+
+            ability_start = len(positives)
+            for te, event_rows in sorted(rows_by_event.items()):
+                random.shuffle(event_rows)
+                n_added = 0
+                for card_a, card_b in event_rows[:SAMPLE_PER_EVENT]:
+                    if card_a in id_to_idx and card_b in id_to_idx:
+                        positives.append((id_to_idx[card_a], id_to_idx[card_b], 1.0))
+                        n_added += 1
+                log.info("    %-45s  %6d pairs  (pool %d)", te, n_added, len(event_rows))
+
+            total_ability = len(positives) - ability_start
+            log.info("  %d ability_trigger pairs across %d events",
+                     total_ability, len(rows_by_event))
 
             # role_demand (stored score as soft label)
             if ROLE_SAMPLE > 0:
