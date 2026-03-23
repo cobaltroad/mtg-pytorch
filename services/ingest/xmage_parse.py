@@ -126,6 +126,17 @@ ABILITY_CLASS_TO_EVENT: dict[str, str] = {
 
     # ── Counter placement ─────────────────────────────────────────────────────
     "OneOrMoreCountersAddedTriggeredAbility":         "counter_added",
+
+    # ── Counter growth keywords (adapt_evolve) ────────────────────────────────
+    # These keyword ability classes live in mage.abilities.keyword and are
+    # captured by the keyword branch of _IMPORT_RE.  No direct XMage class
+    # exists for cast_creature_spell, enchantress, or sac_outlet — those rely
+    # on oracle-text pattern matching (synergy/events.py, synergy/deckbuilding.py).
+    "EvolveAbility":                                  "adapt_evolve",
+    "AdaptAbility":                                   "adapt_evolve",
+    "GraftAbility":                                   "adapt_evolve",
+    "ModularAbility":                                 "adapt_evolve",
+    "RiotAbility":                                    "adapt_evolve",
 }
 
 # ── XMage effect-class → effect_class string mapping ─────────────────────────
