@@ -28,12 +28,12 @@ import re
 
 
 def get_roles(oracle_text: str, type_line: str = "") -> set[str]:
-    """Return the set of role names matched for a card."""
+    """Return the set of flat role names matched for a card."""
     seen: set[str] = set()
     patterns = list(ROLE_PATTERNS)
     if is_land_card(type_line):
         patterns = patterns + list(LAND_ROLE_PATTERNS)
-    for pattern, role_name in patterns:
+    for pattern, role_name, _effect_class in patterns:
         if role_name in seen:
             continue
         if re.search(pattern, oracle_text, re.IGNORECASE):

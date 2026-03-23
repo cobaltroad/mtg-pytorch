@@ -380,24 +380,27 @@ def _tag_roles(oracle_text: str, type_line: str) -> list[dict]:
     Returns:
         A list of ``card_abilities``-shaped dicts with ``ability_type='role'``.
     """
-    seen_roles: set[str] = set()
+    # Deduplication key is (role_name, effect_class) so a card can receive
+    # multiple rows for the same flat role if it has distinct effect subtypes
+    # (e.g. a card that both destroys creatures and exiles enchantments).
+    seen_role_classes: set[tuple[str, str]] = set()
     rows: list[dict] = []
 
     patterns = list(ROLE_PATTERNS)
     if is_land_card(type_line):
         patterns = patterns + list(LAND_ROLE_PATTERNS)
 
-    for pattern, role_name in patterns:
-        if role_name in seen_roles:
+    for pattern, role_name, effect_class in patterns:
+        if (role_name, effect_class) in seen_role_classes:
             continue
         m = re.search(pattern, oracle_text, re.IGNORECASE)
         if m:
-            seen_roles.add(role_name)
+            seen_role_classes.add((role_name, effect_class))
             rows.append({
                 "ability_type": "role",
                 "ability_name": role_name,
                 "trigger_event": None,
-                "effect_class": None,
+                "effect_class": effect_class,
                 "raw_text": m.group(0)[:200],
             })
 
@@ -544,19 +547,39 @@ async def tag_abilities(rescan: bool = False) -> None:
         log.info("Gap detection: all trigger events already have consumer rows — nothing to backfill (use --rescan to force)")
 
     # ── Pass 2: functional role tags ──────────────────────────────────────────
-    # Processes cards that have no 'role' ability rows yet.  This is a separate
-    # pass so that role tags can be added (or re-added after a pattern update)
-    # independently of keyword/triggered tagging.
+    # Incremental: processes cards that have no 'role' ability rows yet.
+    # Rescan: deletes all ingest-written role rows (effect_class IS NULL —
+    # the old pre-structured-effect_class format) then re-processes every card,
+    # writing the new structured effect_class values.  API-written role rows
+    # (non-null effect_class in the old API naming convention) are left in place;
+    # they coexist harmlessly in card_abilities and are gradually superseded as
+    # backfill_roles re-runs against the updated tag_card_roles() in the API.
+    if rescan:
+        async with Session() as db:
+            deleted = await db.execute(text("""
+                DELETE FROM card_abilities
+                WHERE ability_type = 'role' AND effect_class IS NULL
+            """))
+            await db.commit()
+        log.info("Rescan: deleted %d stale role rows (effect_class IS NULL)", deleted.rowcount)
+
     async with Session() as db:
-        result = await db.execute(text("""
-            SELECT c.id, c.oracle_text, c.type_line
-            FROM cards c
-            WHERE NOT EXISTS (
-                SELECT 1 FROM card_abilities a
-                WHERE a.card_id = c.id AND a.ability_type = 'role'
-            )
-            AND c.oracle_text IS NOT NULL
-        """))
+        if rescan:
+            result = await db.execute(text("""
+                SELECT c.id, c.oracle_text, c.type_line
+                FROM cards c
+                WHERE c.oracle_text IS NOT NULL
+            """))
+        else:
+            result = await db.execute(text("""
+                SELECT c.id, c.oracle_text, c.type_line
+                FROM cards c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM card_abilities a
+                    WHERE a.card_id = c.id AND a.ability_type = 'role'
+                )
+                AND c.oracle_text IS NOT NULL
+            """))
         role_rows = result.fetchall()
 
     log.info("Tagging roles for %d cards…", len(role_rows))

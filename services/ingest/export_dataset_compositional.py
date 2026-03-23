@@ -18,12 +18,12 @@ Artifact contents
 
 Functional equivalence classes (Phase 1)
 -----------------------------------------
-Two cards are in the same class when they share:
-  • The same dominant ability role (ability_name from card_abilities where
-    ability_type = 'role') — e.g. 'ramp', 'removal', 'repeatable_draw'
-  • The same color identity bucket (sorted color-identity string; 'C' for
-    colorless)
-  • The same CMC bracket (floor(cmc / 2))
+Two cards are in the same class when they share the same ability role
+(ability_name from card_abilities where ability_type = 'role') — e.g.
+'ramp', 'removal', 'repeatable_draw'.  Color identity and CMC are
+intentionally excluded: functional equivalence is about what a card does
+for the caster, not what it costs or what color it is.  Deckbuilding
+constraints are applied downstream.
 
 Each class with ≥ 2 embedded members yields up to MAX_PER_CLASS positive
 pairs, capped to prevent high-frequency roles (e.g. 'ramp') from dominating.
@@ -35,7 +35,9 @@ Usage
 Environment variables
 ---------------------
   DATASET_OUTPUT_COMP    Output path  (default /data/mtg_dataset_compositional.pt)
-  COMP_MAX_PER_CLASS     Max pairs per equivalence class   (default 50)
+  COMP_MAX_PER_CLASS     Hard cap on pairs per equivalence class (default 500).
+                         Actual pairs per class = min(cap, n*log2(n)) where n
+                         is the number of class members.
   DATASET_SAMPLE         Max ability_trigger positives     (default 500 000)
   DATASET_ROLE_SAMPLE    Max role_demand positives         (default 100 000)
   DATASET_COMBO_SAMPLE   Max combo pair positives          (default 200 000)
@@ -77,14 +79,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 OUTPUT_PATH   = Path(os.environ.get("DATASET_OUTPUT_COMP", "/data/mtg_dataset_compositional.pt"))
-MAX_PER_CLASS = int(os.environ.get("COMP_MAX_PER_CLASS", "50"))
-
-
-def _color_identity_bucket(color_identity: list[str] | None) -> str:
-    """Sorted color-identity string; 'C' for colorless."""
-    if not color_identity:
-        return "C"
-    return "".join(sorted(c.upper() for c in color_identity))
+MAX_PER_CLASS = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
 
 
 def _build_functional_pairs(
@@ -94,8 +89,11 @@ def _build_functional_pairs(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build Phase 1 functional equivalence pairs from card_abilities.
 
-    Two cards are placed in the same equivalence class when they share a
-    dominant ability role, color identity bucket, and CMC bracket.
+    Two cards are placed in the same equivalence class when they share the
+    same ability role (e.g. 'removal', 'ramp', 'repeatable_draw').  Color
+    identity and CMC are intentionally excluded — functional equivalence is
+    about what a card does for the caster, not what it costs or what color it
+    is.  Deckbuilding constraints (color, curve) are applied downstream.
 
     Returns (a_idx, b_idx) int32 arrays — indices into card_ids.
     """
@@ -107,32 +105,39 @@ def _build_functional_pairs(
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("""
                 SELECT
-                    ca.card_id::text   AS card_id,
-                    ca.ability_name    AS role,
-                    c.color_identity   AS color_identity,
-                    COALESCE(c.cmc, 0) AS cmc
+                    ca.card_id::text              AS card_id,
+                    ca.ability_name               AS role,
+                    COALESCE(ca.effect_class, '') AS effect_class
                 FROM card_abilities ca
-                JOIN cards c ON c.id = ca.card_id
                 WHERE ca.ability_type = 'role'
             """)
             rows = cur.fetchall()
 
-    # Group card indices by equivalence class key.
-    classes: dict[tuple, list[int]] = defaultdict(list)
-    seen_per_class: dict[tuple, set[int]] = defaultdict(set)
+    # Group card indices by (role, effect_class).
+    # Cards with a non-null effect_class land in the precise subtype class.
+    # Legacy rows with effect_class='' land in a coarse catch-all per role,
+    # which will shrink to zero once tag_abilities --rescan has been run.
+    classes: dict[tuple[str, str], list[int]] = defaultdict(list)
+    seen_per_class: dict[tuple[str, str], set[int]] = defaultdict(set)
     for row in rows:
         card_id = row["card_id"]
         if card_id not in embedded:
             continue
         idx = id_to_idx[card_id]
-        bucket = _color_identity_bucket(row["color_identity"])
-        cmc_bracket = int(math.floor(float(row["cmc"]))) // 2
-        key = (row["role"], bucket, cmc_bracket)
+        key = (row["role"], row["effect_class"])
         if idx not in seen_per_class[key]:
             classes[key].append(idx)
             seen_per_class[key].add(idx)
 
-    # Generate pairs, capped per class.
+    # Generate pairs with a proportional cap.
+    #
+    # Cap per class = min(max_per_class, n * log2(n)) where n is the number of
+    # class members.  This gives each member ~log2(n) positive-pair appearances
+    # on average, growing naturally with class size.  The hard cap (max_per_class)
+    # prevents large classes (draw, combat_trick, ramp) from dominating training.
+    #
+    # Small classes (n < ~55 at default cap=500) are taken in full because
+    # n*log2(n) < all possible pairs before the hard cap activates.
     a_list: list[int] = []
     b_list: list[int] = []
     n_classes_used = 0
@@ -141,10 +146,12 @@ def _build_functional_pairs(
         if len(members) < 2:
             continue
         n_classes_used += 1
+        n = len(members)
+        cap = min(max_per_class, max(1, int(n * math.log2(max(n, 2)))))
         all_pairs = list(itertools.combinations(members, 2))
-        if len(all_pairs) > max_per_class:
+        if len(all_pairs) > cap:
             random.shuffle(all_pairs)
-            all_pairs = all_pairs[:max_per_class]
+            all_pairs = all_pairs[:cap]
         for a, b in all_pairs:
             a_list.append(a)
             b_list.append(b)
