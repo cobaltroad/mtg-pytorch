@@ -1007,7 +1007,7 @@ if __name__ == "__main__":
             # Grouped stages
             "download", "process",
             # Individual sub-stages
-            "embed_cards", "tag_abilities",
+            "embed_cards", "tag_abilities", "tag_abilities_xmage",
             "compute_synergy", "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
             "export_dataset", "export_dataset_compositional", "composition_profile",
@@ -1016,6 +1016,8 @@ if __name__ == "__main__":
         help=(
             "download: fetch MTGJSON + load cards + import combos. "
             "process: embed + tag + synergy + export + composition_profile. "
+            "tag_abilities_xmage: supplement card_abilities from XMage source tree "
+            "(requires XMAGE_DIR env var or --xmage-dir; mount mage/ read-only). "
             "composition_profile: rebuild deck_composition_profile.json "
             "(run after importing new decklists). "
             "Omit to run both."
@@ -1039,6 +1041,11 @@ if __name__ == "__main__":
         asyncio.run(embed_cards())
     elif args.stage == "tag_abilities":
         asyncio.run(tag_abilities(rescan=args.rescan))
+    elif args.stage == "tag_abilities_xmage":
+        from xmage_parse import tag_abilities_xmage as _xmage_tag
+        import os as _os
+        from pathlib import Path as _Path
+        asyncio.run(_xmage_tag(_Path(_os.environ.get("XMAGE_DIR", "/mage"))))
     elif args.stage == "compute_synergy":
         asyncio.run(compute_synergy())
     elif args.stage == "compute_commander_value_synergy":

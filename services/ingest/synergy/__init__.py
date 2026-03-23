@@ -3,15 +3,16 @@
 Sub-modules, each covering one broad theme:
 
 * :mod:`events`           — core event triggers (ETB, dies, attacks, cast, phase,
-                            landfall, discard, token, counter, combat_damage,
-                            sacrifice) and their producer SQL fragments.
+                            landfall, landfall_draw, discard, token, counter,
+                            combat_damage, sacrifice, sac_outlet,
+                            cast_creature_spell) and their producer SQL fragments.
 * :mod:`lifegain`         — four lifegain consumer patterns (``lifegain``,
                             ``lifegain_threshold``, ``lifegain_replacement``,
                             ``lifegain_total``) and their producer SQL fragments.
 * :mod:`deckbuilding`     — cross-archetype deckbuilding themes (equipment,
                             legendary, graveyard, +1/+1 counters, artifacts,
                             modified, aura, proliferate, skullclamp,
-                            play_from_exile).
+                            play_from_exile, enchantress, adapt_evolve).
 * :mod:`tribal`           — dynamically generated tribal patterns for all tribes
                             in :data:`TRIBES`, including Zombie/Angel cross-synergy
                             overrides.

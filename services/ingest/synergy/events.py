@@ -56,6 +56,17 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     ),
     (r"\bmagecraft\b", "Magecraft", "spell_cast"),
 
+    # Creature spell cast: "whenever you cast a creature spell" payoffs —
+    # Beast Whisperer, Garruk's Packleader, Aura Shards, Temur Ascendancy.
+    # Distinct from spell_cast (which captures noncreature / instant/sorcery);
+    # produces edges from creature cards → creature-cast-payoff permanents.
+    (
+        r"when(ever)?\s+(you )?cast(s?)?\s+(a |an )?(legendary |other |nonhuman )?"
+        r"creature (spell|card)",
+        "Creature spell cast trigger",
+        "cast_creature_spell",
+    ),
+
     # ── Phase ─────────────────────────────────────────────────────────────────
     # Drop "combat" here — ambiguous with the attacks trigger above
     (
@@ -66,6 +77,18 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
 
     # ── Common event types ────────────────────────────────────────────────────
     (r"when(ever)?\s+a land enters( the battlefield)?", "Landfall trigger", "landfall"),
+
+    # Landfall draw: more specific than the generic landfall trigger — only
+    # matches cards that explicitly draw cards when a land enters the
+    # battlefield (Tatyova, Benthic Druid; Tireless Tracker-style effects).
+    # Enables tighter edges from fetch lands / ramp spells → draw payoffs.
+    (
+        r"when(ever)?\s+(a |one or more )?lands? enters?( the battlefield)?"
+        r"( under (your|a player's) control)?.{0,100}draw (a card|cards?)",
+        "Landfall draw trigger",
+        "landfall_draw",
+    ),
+
     (r"when(ever)?\s+(you |a player |an opponent )discard", "Discard trigger", "discard"),
     (r"when(ever)?\s+(you )?create.{0,30}token", "Token creation trigger", "token_creation"),
     (r"when(ever)?\s+.{0,40}(counter|counters).{0,20}(placed|put) on", "Counter trigger", "counter_added"),
@@ -75,6 +98,19 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         "combat_damage",
     ),
     (r"when(ever)?\s+(you )?sacrifice", "Sacrifice trigger", "sacrifice"),
+
+    # Sacrifice outlet: permanent with an ACTIVATED ability that uses
+    # "sacrifice a/another creature" as a cost — Viscera Seer, Altar of
+    # Dementia, Carrion Feeder, Greater Good, Phyrexian Altar, High Market.
+    # Activated costs always precede ":" in oracle text; triggered payoffs
+    # use a comma ("whenever you sacrifice a creature,"), so [^,\n]{0,20}
+    # terminates before any such comma and avoids false positives.
+    (
+        r"sacrifice (a |another )?(nontoken |nonland |legendary )?"
+        r"(creature|permanent)[^,\n]{0,20}:",
+        "Sacrifice outlet (activated ability cost)",
+        "sac_outlet",
+    ),
 
 ]
 
@@ -161,6 +197,12 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%with haste%'"
     ),
 
+    # Creature cards are the natural producers for "whenever you cast a creature
+    # spell" payoffs (Beast Whisperer, Garruk's Packleader, Aura Shards).
+    "cast_creature_spell": (
+        "lower(type_line) LIKE '%creature%'"
+    ),
+
     # Instant and sorcery spells are the natural producers of "whenever you cast" triggers.
     # Also includes storm/cascade/flashback which generate extra casts.
     "spell_cast": (
@@ -187,6 +229,20 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%put a land%battlefield%'"
         " OR lower(oracle_text) LIKE '%play an additional land%'"
         " OR lower(oracle_text) LIKE '%land card onto the battlefield%'"
+        # Fetchlands: "search your library for … land … put it onto the battlefield"
+        # (Scalding Tarn, Misty Rainforest, Windswept Heath, etc.)
+        " OR (lower(oracle_text) LIKE '%search your library for%' AND lower(oracle_text) LIKE '%land%' AND lower(oracle_text) LIKE '%put it onto the battlefield%')"
+    ),
+
+    # Landfall-draw payoffs benefit from anything that puts an extra land into
+    # play: fetch lands, green ramp spells, and "play an additional land" effects.
+    "landfall_draw": (
+        "lower(oracle_text) LIKE '%search your library for a%land%'"
+        " OR lower(oracle_text) LIKE '%put a basic land%'"
+        " OR lower(oracle_text) LIKE '%put a land%battlefield%'"
+        " OR lower(oracle_text) LIKE '%play an additional land%'"
+        " OR lower(oracle_text) LIKE '%land card onto the battlefield%'"
+        " OR (lower(oracle_text) LIKE '%search your library for%' AND lower(oracle_text) LIKE '%land%' AND lower(oracle_text) LIKE '%put it onto the battlefield%')"
     ),
 
     # Cards that cause discarding (wheels, loot effects, discard outlets)
@@ -233,5 +289,19 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%sacrifice a permanent%'"
         " OR lower(oracle_text) LIKE '%sacrifice target%'"
         " OR lower(oracle_text) LIKE '%sacrifice:%'"
+    ),
+
+    # Sacrifice outlets consume expendable creatures; token generators are
+    # the best fuel — tokens can be sacrificed without card disadvantage.
+    # Reanimation / recursion also provides repeated sacrifice targets.
+    "sac_outlet": (
+        "lower(oracle_text) LIKE '%create a%token%'"
+        " OR lower(oracle_text) LIKE '%create two%'"
+        " OR lower(oracle_text) LIKE '%create three%'"
+        " OR lower(oracle_text) LIKE '%create x%'"
+        " OR lower(oracle_text) LIKE '%put a%/1%token%'"
+        " OR lower(oracle_text) LIKE '%put a%token%onto the battlefield%'"
+        " OR lower(oracle_text) LIKE '%creature card from%graveyard%battlefield%'"
+        " OR lower(oracle_text) LIKE '%return target creature%graveyard%'"
     ),
 }

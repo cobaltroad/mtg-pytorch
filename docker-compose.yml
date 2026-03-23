@@ -98,6 +98,7 @@ services:
     volumes:
       - ./services/ingest:/app:cached
       - ingest_cache:/data
+      - ./mage:/mage:ro
     depends_on:
       db:
         condition: service_healthy

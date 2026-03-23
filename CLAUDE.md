@@ -63,6 +63,7 @@ docker compose run --rm ingest
 docker compose run --rm ingest python pipeline.py --stage embed_cards
 docker compose run --rm ingest python pipeline.py --stage tag_abilities
 docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan   # re-apply all patterns to all cards
+docker compose run --rm ingest python pipeline.py --stage tag_abilities_xmage      # supplement with XMage source parsing (requires mage/ mount)
 docker compose run --rm ingest python pipeline.py --stage compute_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
