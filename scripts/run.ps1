@@ -23,6 +23,9 @@ param(
     [Nullable[bool]]$Resume = $null,
     [string]$FreezeEncoder = 'false',
     [double]$EncoderLrScale = 0.01,
+    # Phase 2: scale factor applied to lr for all encoder parameters.
+    # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.
+    [double]$Phase2EncoderLrScale = 0.1,
     [int]$Patience = 10,
     [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
@@ -259,6 +262,7 @@ if ($Mode -eq 'train') {
 
     if ($Phase -eq 2) {
         $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
+        $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
     }
 
     if ($Phase -eq 4) {
