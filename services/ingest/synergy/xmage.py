@@ -71,6 +71,48 @@ _ARTIFACT_CREATURE = (
     "lower(type_line) LIKE '%artifact%' AND lower(type_line) LIKE '%creature%'"
 )
 
+_ENCHANTMENT = "lower(type_line) LIKE '%enchantment%'"
+
+_ARTIFACT = "lower(type_line) LIKE '%artifact%'"
+
+_NON_CREATURE = (
+    "lower(type_line) NOT LIKE '%creature%'"
+    " AND lower(type_line) NOT LIKE '%land%'"
+)
+
+_HISTORIC = (
+    "lower(type_line) LIKE '%artifact%'"
+    " OR lower(type_line) LIKE '%legendary%'"
+    " OR lower(oracle_text) LIKE '%saga%'"
+)
+
+_SPIRIT_ARCANE = (
+    "lower(type_line) LIKE '%spirit%'"
+    " OR lower(oracle_text) LIKE '% arcane%'"
+    " OR lower(type_line) LIKE '%arcane%'"
+)
+
+
+# ── SpellCastControllerTriggeredAbility trigger_event → producer SQL ──────────
+#
+# Used by compute_synergy_xmage() to sub-group SpellCastControllerTriggeredAbility
+# consumers by their refined trigger_event (set by the body-scan in xmage_parse.py)
+# and select the appropriate producer cards for each sub-bucket.
+#
+# Keys match the values in xmage_parse.SPELLCAST_FILTER_MAP plus "spell_cast"
+# as the fallback for cards whose constructor call has no StaticFilters argument.
+
+SPELLCAST_TRIGGER_PRODUCER_MAP: dict[str, str] = {
+    "spirit_arcane_cast":    _SPIRIT_ARCANE,
+    "enchantment_cast":      _ENCHANTMENT,
+    "artifact_cast":         _ARTIFACT,
+    "noncreature_cast":      _NON_CREATURE,
+    "creature_cast":         _CREATURE,
+    "instant_sorcery_cast":  _INSTANT_SORCERY,
+    "historic_cast":         _HISTORIC,
+    "spell_cast":            _ANY_SPELL,
+}
+
 
 # ── XMage class → producer SQL ────────────────────────────────────────────────
 
@@ -121,10 +163,10 @@ XMAGE_PRODUCER_MAP: dict[str, str] = {
     "DealsDamageToAPlayerTriggeredAbility":           _CREATURE,
 
     # ── Spellcasting ──────────────────────────────────────────────────────────
-    # SpellCastControllerTriggeredAbility is used for ALL "whenever you cast X"
-    # triggers regardless of spell type — creature, enchantment, instant, etc.
-    # Using _ANY_SPELL as the producer ensures Beast Whisperer, Sythis, and
-    # Guttersnipe all land in the same synergy cluster, which is correct.
+    # SpellCastControllerTriggeredAbility is sub-grouped by trigger_event in
+    # compute_synergy_xmage() using SPELLCAST_TRIGGER_PRODUCER_MAP, so
+    # XMAGE_PRODUCER_MAP entry here acts as the fallback for cards where no
+    # StaticFilters argument was detected (generic "whenever you cast a spell").
     "SpellCastControllerTriggeredAbility":  _ANY_SPELL,
     "SpellCastOpponentTriggeredAbility":    _ANY_SPELL,
     "SpellCastAllTriggeredAbility":         _ANY_SPELL,
