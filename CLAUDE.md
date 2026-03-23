@@ -427,6 +427,48 @@ prompting the user to add decklists for that commander.
 
 ---
 
+## Evaluation scripts (GPU machine, no DB required)
+
+All eval scripts load from the training artifact — no database connection needed.
+
+### `eval_neighbors.ps1` — nearest-neighbour spot-check
+
+Verifies Phase 1 checkpoint quality by projecting all card embeddings through
+the trained `CardEncoder` and printing the top-N nearest neighbours for a
+given card.  Use this to confirm that functionally equivalent cards cluster
+together after training.
+
+```powershell
+.\scripts\eval_neighbors.ps1 "Swords to Plowshares"
+.\scripts\eval_neighbors.ps1 "Llanowar Elves" -Top 30
+.\scripts\eval_neighbors.ps1 "Swords to Plowshares" -TrainingPath cooccurrence
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-Card` | (required) | Card name — partial/case-insensitive match |
+| `-TrainingPath` | `compositional` | Selects checkpoint prefix and artifact |
+| `-Top` | `20` | Number of neighbours to display |
+| `-Checkpoint` | `<prefix>1_best` | Override checkpoint name |
+| `-Dataset` | `ingest_cache\mtg_dataset[_compositional].pt` | Override artifact path |
+
+**Expected results (Phase 1 compositional success criteria):**
+- Swords to Plowshares → Path to Exile, Generous Gift (removal cluster)
+- Llanowar Elves → Birds of Paradise, Elvish Mystic, Fyndhorn Elves (ramp cluster)
+
+### `eval_synergy.py` / `eval_deck.py` — Phase 2/4 eval (requires DB)
+
+These scripts require a live database and run inside the trainer container on
+the Docker host:
+
+```bash
+docker compose run --rm trainer python eval_synergy.py "Skullclamp"
+docker compose run --rm trainer python eval_deck.py --mode topn --commander "Wilhelt, the Rotcleaver"
+docker compose run --rm trainer python eval_deck.py --mode recall
+```
+
+---
+
 ## XMage as a training signal
 
 XMage's Java card implementations encode machine-readable ability structure
