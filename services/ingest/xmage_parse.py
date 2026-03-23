@@ -54,28 +54,78 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # classes are ignored rather than mapped to a generic event.
 
 ABILITY_CLASS_TO_EVENT: dict[str, str] = {
-    # ETB triggers
+    # ── ETB triggers ─────────────────────────────────────────────────────────
     "EntersBattlefieldTriggeredAbility":              "creature_etb",
     "EntersBattlefieldControlledTriggeredAbility":    "creature_etb",
     "EntersBattlefieldAllTriggeredAbility":           "enters_battlefield",
     "EntersBattlefieldThisOrAnotherTriggeredAbility": "creature_etb",
-    # Landfall
+    "EntersBattlefieldOrAttacksSourceTriggeredAbility": "creature_etb",
+    "EntersBattlefieldOrDiesSourceTriggeredAbility":  "creature_etb",
+    "EntersBattlefieldOrLeavesSourceTriggeredAbility": "creature_etb",
+    "AllyEntersBattlefieldTriggeredAbility":          "creature_etb",
+
+    # ── Landfall ──────────────────────────────────────────────────────────────
     "LandfallAbility":                                "landfall",
-    # Death triggers
+
+    # ── Death triggers ────────────────────────────────────────────────────────
     "DiesSourceTriggeredAbility":                     "dies",
     "DiesCreatureTriggeredAbility":                   "dies",
     "DiesAttachedTriggeredAbility":                   "dies",
-    # Combat
+    "DiesThisOrAnotherTriggeredAbility":              "dies",
+    "PutIntoGraveFromBattlefieldSourceTriggeredAbility": "dies",
+    "PutIntoGraveFromBattlefieldAllTriggeredAbility": "dies",
+    "DealtDamageAndDiedTriggeredAbility":             "dies",
+    # Keyword abilities that implement dies-triggered behaviour
+    "UndyingAbility":                                 "dies",
+    "PersistAbility":                                 "dies",
+    "AfterlifeAbility":                               "dies",
+
+    # ── Combat / attacks ──────────────────────────────────────────────────────
     "AttacksTriggeredAbility":                        "attacks",
     "AttacksWithCreaturesTriggeredAbility":           "attacks",
+    "AttacksAllTriggeredAbility":                     "attacks",
+    "AttacksOrBlocksTriggeredAbility":                "attacks",
+    "AttacksCreatureYouControlTriggeredAbility":      "attacks",
+    "AttacksAttachedTriggeredAbility":                "attacks",
+    "AttacksAloneControlledTriggeredAbility":         "attacks",
+    "AttacksAndIsNotBlockedTriggeredAbility":         "attacks",
+    "AttacksWhileSaddledTriggeredAbility":            "attacks",
+
+    # ── Combat damage ─────────────────────────────────────────────────────────
     "DealsCombatDamageToAPlayerTriggeredAbility":     "combat_damage",
-    # Spellcasting
+    "DealsDamageToAPlayerAllTriggeredAbility":        "combat_damage",
+    "OneOrMoreCombatDamagePlayerTriggeredAbility":    "combat_damage",
+    "DealsDamageToOpponentTriggeredAbility":          "combat_damage",
+    "DealsDamageToAPlayerAttachedTriggeredAbility":   "combat_damage",
+    "DealsDamageSourceTriggeredAbility":              "combat_damage",
+    "DealsDamageToAPlayerTriggeredAbility":           "combat_damage",
+
+    # ── Spellcasting ──────────────────────────────────────────────────────────
     "SpellCastControllerTriggeredAbility":            "spell_cast",
     "SpellCastOpponentTriggeredAbility":              "spell_cast",
-    # Sacrifice
+    "SpellCastAllTriggeredAbility":                   "spell_cast",
+    "MagecraftAbility":                               "spell_cast",
+    "CastSecondSpellTriggeredAbility":                "spell_cast",
+    # Heroic triggers on spells that target the card
+    "HeroicAbility":                                  "spell_cast",
+
+    # ── Sacrifice ─────────────────────────────────────────────────────────────
     "SacrificePermanentTriggeredAbility":             "sacrifice",
-    # Draw
+    "ExploitCreatureTriggeredAbility":                "sacrifice",
+
+    # ── Draw / card advantage ─────────────────────────────────────────────────
     "DrawCardControllerTriggeredAbility":             "spell_draw",
+    "DrawNthCardTriggeredAbility":                    "spell_draw",
+
+    # ── Lifegain ──────────────────────────────────────────────────────────────
+    "GainLifeControllerTriggeredAbility":             "lifegain",
+
+    # ── Discard / cycling ─────────────────────────────────────────────────────
+    "CycleTriggeredAbility":                          "discard",
+    "CycleOrDiscardControllerTriggeredAbility":       "discard",
+
+    # ── Counter placement ─────────────────────────────────────────────────────
+    "OneOrMoreCountersAddedTriggeredAbility":         "counter_added",
 }
 
 # ── XMage effect-class → effect_class string mapping ─────────────────────────
@@ -132,16 +182,18 @@ def _camel_to_words(filename_stem: str) -> str:
 # ── Java file parsing ─────────────────────────────────────────────────────────
 
 _IMPORT_RE = re.compile(
-    r"import\s+mage\.abilities\.(common|effects\.common[^;]*)\."
+    r"import\s+mage\.abilities\.(common|keyword|effects\.common[^;]*)\."
     r"([A-Za-z][A-Za-z0-9_]+)\s*;"
 )
+
+_ABILITY_PKGS = {"common", "keyword"}
 
 
 def parse_java_file(path: Path) -> tuple[list[str], list[str]]:
     """Return (ability_classes, effect_classes) imported by a Java card file.
 
-    Only ``mage.abilities.common.*`` (ability classes) and
-    ``mage.abilities.effects.common.*`` (effect classes) are extracted.
+    Captures ``mage.abilities.common.*`` and ``mage.abilities.keyword.*``
+    as ability classes, and ``mage.abilities.effects.common.*`` as effect classes.
     """
     ability_classes: list[str] = []
     effect_classes: list[str] = []
@@ -149,7 +201,7 @@ def parse_java_file(path: Path) -> tuple[list[str], list[str]]:
     text_content = path.read_text(encoding="utf-8", errors="replace")
     for m in _IMPORT_RE.finditer(text_content):
         pkg, cls = m.group(1), m.group(2)
-        if pkg == "common":
+        if pkg in _ABILITY_PKGS:
             ability_classes.append(cls)
         else:
             effect_classes.append(cls)
