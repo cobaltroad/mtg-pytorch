@@ -65,6 +65,7 @@ import torch
 # Re-use the co-occurrence export helpers to avoid duplication.
 from export_dataset import (
     _load_embeddings,
+    _load_card_meta,
     _load_synergy_pairs,
     _load_color_identities,
     _load_decks,
@@ -170,6 +171,9 @@ def main() -> None:
     # 2. Functional pairs (Phase 1)
     fp_a, fp_b = _build_functional_pairs(card_ids, id_to_idx)
 
+    # 2b. Card metadata (name/type for offline eval on GPU machine)
+    card_meta = _load_card_meta(id_to_idx)
+
     # 3. Synergy pairs (Phase 2) — same as co-occurrence artifact
     a_idx, b_idx, labels = _load_synergy_pairs(id_to_idx, normed)
 
@@ -209,6 +213,7 @@ def main() -> None:
         "decks":             decks,
         "synergy_positions": positions,
         "color_identities":  {cid: sorted(ci) for cid, ci in color_ids.items()},
+        "card_meta":         card_meta,
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
