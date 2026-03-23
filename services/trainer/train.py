@@ -52,16 +52,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 CHECKPOINT_DIR = Path(os.environ.get("CHECKPOINT_DIR", "/checkpoints"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
+EMBEDDING_MODEL = os.environ.get(
+    "EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
+)
 
 try:
     import wandb
+
     WANDB_ENABLED = bool(os.environ.get("WANDB_API_KEY"))
 except ImportError:
     WANDB_ENABLED = False
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
+
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -72,11 +76,14 @@ def load_embeddings(model_name: str = EMBEDDING_MODEL) -> dict[str, np.ndarray]:
     log.info("Loading embeddings (model=%s)…", model_name)
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT card_id::text, embedding
                 FROM card_embeddings
                 WHERE model = %s
-            """, (model_name,))
+            """,
+                (model_name,),
+            )
             rows = cur.fetchall()
 
     embeddings = {}
@@ -98,6 +105,7 @@ def load_embeddings(model_name: str = EMBEDDING_MODEL) -> dict[str, np.ndarray]:
 
 
 # ── Phase 1 data ──────────────────────────────────────────────────────────────
+
 
 class AllCardsDataset(Dataset):
     """Phase 1 co-occurrence: every card is a sample; two noisy views created in the loop."""
@@ -145,10 +153,13 @@ class FunctionalPairsDataset(Dataset):
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
+
 class CardEncoder(nn.Module):
     """Projects a pre-computed embedding into a shared latent space."""
 
-    def __init__(self, input_dim: int = 768, hidden_dim: int = 512, output_dim: int = 256):
+    def __init__(
+        self, input_dim: int = 768, hidden_dim: int = 512, output_dim: int = 256
+    ):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -170,12 +181,21 @@ class DeckConstructor(nn.Module):
     attending to the commander as a prefix token.
     """
 
-    def __init__(self, input_dim: int = 768, embed_dim: int = 256, n_heads: int = 4, n_layers: int = 3):
+    def __init__(
+        self,
+        input_dim: int = 768,
+        embed_dim: int = 256,
+        n_heads: int = 4,
+        n_layers: int = 3,
+    ):
         super().__init__()
         self.card_encoder = CardEncoder(input_dim=input_dim, output_dim=embed_dim)
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=embed_dim, nhead=n_heads, dim_feedforward=embed_dim * 4,
-            dropout=0.1, batch_first=True,
+            d_model=embed_dim,
+            nhead=n_heads,
+            dim_feedforward=embed_dim * 4,
+            dropout=0.1,
+            batch_first=True,
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.scorer = nn.Linear(embed_dim, 1)
@@ -190,17 +210,18 @@ class DeckConstructor(nn.Module):
 
     def forward(
         self,
-        commander_emb: torch.Tensor,    # (B, D)
-        deck_embs: torch.Tensor,         # (B, T, D)  partial deck so far
-        candidate_embs: torch.Tensor,    # (B, C, D)  cards to score
+        commander_emb: torch.Tensor,  # (B, D)
+        deck_embs: torch.Tensor,  # (B, T, D)  partial deck so far
+        candidate_embs: torch.Tensor,  # (B, C, D)  cards to score
     ) -> torch.Tensor:
-        memory = commander_emb.unsqueeze(1)             # (B, 1, D)
-        deck_ctx = self.decoder(deck_embs, memory)      # (B, T, D)
-        ctx = deck_ctx.mean(dim=1, keepdim=True)        # (B, 1, D)
-        return (ctx * candidate_embs).sum(dim=-1)       # (B, C)
+        memory = commander_emb.unsqueeze(1)  # (B, 1, D)
+        deck_ctx = self.decoder(deck_embs, memory)  # (B, T, D)
+        ctx = deck_ctx.mean(dim=1, keepdim=True)  # (B, 1, D)
+        return (ctx * candidate_embs).sum(dim=-1)  # (B, C)
 
 
 # ── Datasets ──────────────────────────────────────────────────────────────────
+
 
 class SynergyDataset(Dataset):
     """Phase 2: binary synergy pairs."""
@@ -232,17 +253,22 @@ class DeckDataset(Dataset):
     def __getitem__(self, idx):
         deck = self.decks[idx]
         cmd_emb = torch.from_numpy(self.embeddings[deck["commander_id"]])
-        card_embs = torch.stack([
-            torch.from_numpy(self.embeddings[c])
-            for c in deck["card_ids"]
-            if c in self.embeddings
-        ])
+        card_embs = torch.stack(
+            [
+                torch.from_numpy(self.embeddings[c])
+                for c in deck["card_ids"]
+                if c in self.embeddings
+            ]
+        )
         return cmd_emb, card_embs, deck["legal_neg_indices"]
 
 
 # ── Training loops ────────────────────────────────────────────────────────────
 
-def cosine_temperature(epoch: int, n_epochs: int, t_start: float, t_end: float) -> float:
+
+def cosine_temperature(
+    epoch: int, n_epochs: int, t_start: float, t_end: float
+) -> float:
     """Cosine annealing schedule for InfoNCE temperature.
 
     Returns t_start at epoch 0 and t_end at epoch n_epochs-1.
@@ -251,18 +277,22 @@ def cosine_temperature(epoch: int, n_epochs: int, t_start: float, t_end: float) 
     """
     if n_epochs <= 1:
         return t_end
-    return t_end + 0.5 * (t_start - t_end) * (1 + math.cos(math.pi * epoch / (n_epochs - 1)))
+    return t_end + 0.5 * (t_start - t_end) * (
+        1 + math.cos(math.pi * epoch / (n_epochs - 1))
+    )
 
 
-def nt_xent_loss(z_i: torch.Tensor, z_j: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
+def nt_xent_loss(
+    z_i: torch.Tensor, z_j: torch.Tensor, temperature: float = 0.07
+) -> torch.Tensor:
     """NT-Xent (InfoNCE) loss for a batch of positive pairs.
 
     z_i, z_j: (B, D) L2-normalised embeddings.
     Each (z_i[k], z_j[k]) is a positive pair; all cross-pairs are negatives.
     """
     B = z_i.size(0)
-    z = torch.cat([z_i, z_j], dim=0)                       # (2B, D)
-    sim = (z @ z.T) / temperature                           # (2B, 2B)
+    z = torch.cat([z_i, z_j], dim=0)  # (2B, D)
+    sim = (z @ z.T) / temperature  # (2B, 2B)
     # Mask self-similarity (diagonal) so a sample isn't its own negative
     mask = torch.eye(2 * B, device=z.device).bool()
     sim = sim.masked_fill(mask, float("-inf"))
@@ -287,8 +317,9 @@ def train_contrastive_phase(
     NT-Xent loss over in-batch negatives.  Large batches help significantly
     (more in-batch negatives); default 512 gives 511 negatives per anchor.
     """
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                        num_workers=0, drop_last=True)
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
@@ -315,12 +346,23 @@ def train_contrastive_phase(
 
         scheduler.step()
         avg = total_loss / len(loader)
-        log.info("Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+        log.info(
+            "Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+        )
 
         if WANDB_ENABLED:
-            wandb.log({"phase": 1, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0]})
+            wandb.log(
+                {
+                    "phase": 1,
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                }
+            )
 
         if avg < best_loss:
             best_loss = avg
@@ -353,15 +395,19 @@ def train_functional_pairs_phase(
     view before projection — this acts as a regulariser and prevents the
     model from learning a trivial identity mapping on the exact input vectors.
     """
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                        num_workers=0, drop_last=True)
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
 
     log.info(
         "Phase 1 (compositional): %d pairs, batch=%d, epochs=%d, temp=%.3f",
-        len(dataset), batch_size, epochs, temperature,
+        len(dataset),
+        batch_size,
+        epochs,
+        temperature,
     )
 
     best_loss = float("inf")
@@ -389,12 +435,23 @@ def train_functional_pairs_phase(
 
         scheduler.step()
         avg = total_loss / len(loader)
-        log.info("Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+        log.info(
+            "Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+        )
 
         if WANDB_ENABLED:
-            wandb.log({"phase": 1, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0]})
+            wandb.log(
+                {
+                    "phase": 1,
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                }
+            )
 
         if avg < best_loss:
             best_loss = avg
@@ -409,22 +466,62 @@ def train_synergy_phase(
     epochs: int,
     lr: float,
     batch_size: int = 256,
-    label_smoothing: float = 0.1,
-    temp_start: float = 0.5,
-    temp_end: float = 0.05,
+    temp_start: float = 0.3,
+    temp_end: float = 0.07,
+    encoder_lr_scale: float = 1.0,
     checkpoint_prefix: str = "phase",
 ):
-    """Phase 2: binary cross-entropy on ability-trigger synergy pairs.
+    """Phase 2: NT-Xent (InfoNCE) on positive ability-trigger synergy pairs.
 
-    label_smoothing: ε applied as smooth = label*(1-ε) + ε/2
-    (pos → 1-ε/2, neg → ε/2).  Handles noisy regex-derived positive labels.
+    Positive pairs (label > 0.5) are treated the same way Phase 1 treats
+    reprint pairs: NT-Xent with cosine-annealed temperature.  In-batch
+    negatives are mined automatically — no explicit negative pairs needed.
 
-    temp_start / temp_end: cosine-annealed temperature applied to the cosine
-    similarity logit before BCE.  High temperature early smooths the signal;
-    low temperature late sharpens the decision boundary.
+    This replaces the BCE formulation which had a degenerate minimum: BCE on
+    cosine similarity in [-1, +1] produces near-random gradients when starting
+    from Phase 1 geometry (epoch-1 loss ≈ log(2) ≈ 0.693), and the 540k
+    gradient steps at low lr accumulate to corrupt Phase 1 clusters by
+    amplifying surface-text features already present in the input embeddings.
+
+    NT-Xent has no degenerate collapse solution — the in-batch negatives always
+    provide contrastive signal — and temperature annealing from temp_start to
+    temp_end gives an easy-gradient warmup before sharpening the clusters.
+
+    encoder_lr_scale: multiply lr by this factor for all parameters.
+    Default 1.0 (no scaling).  Set to 0.1 via run.ps1 as a secondary
+    safeguard so the encoder drifts slowly from the Phase 1 optimum.
     """
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    # Filter to positive pairs only — NT-Xent mines its own in-batch negatives.
+    pos_pairs = [(a, b, l) for a, b, l in dataset.pairs if l > 0.5]
+    log.info(
+        "Phase 2: %d positive pairs retained (of %d total, %.1f%%)",
+        len(pos_pairs),
+        len(dataset),
+        100.0 * len(pos_pairs) / max(len(dataset), 1),
+    )
+    pos_dataset = SynergyDataset(pos_pairs, dataset.embeddings)
+    loader = DataLoader(
+        pos_dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
+    )
+    log.info(
+        "Phase 2 loader: %d batches/epoch  batch_size=%d  temp %.3f→%.3f",
+        len(loader),
+        batch_size,
+        temp_start,
+        temp_end,
+    )
+
+    effective_lr = lr * encoder_lr_scale
+    if encoder_lr_scale != 1.0:
+        log.info(
+            "Phase 2: encoder_lr_scale=%.2f  effective lr=%.2e  (base lr=%.2e)",
+            encoder_lr_scale,
+            effective_lr,
+            lr,
+        )
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=effective_lr, weight_decay=1e-4
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
 
@@ -433,20 +530,13 @@ def train_synergy_phase(
         temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
         model.train()
         total_loss = 0.0
-        for emb_a, emb_b, labels in loader:
-            emb_a  = emb_a.to(device)
-            emb_b  = emb_b.to(device)
-            labels = labels.to(device)
+        for emb_a, emb_b, _ in loader:
+            emb_a = emb_a.to(device)
+            emb_b = emb_b.to(device)
 
-            # Label smoothing: pull hard 0/1 targets toward centre
-            if label_smoothing > 0:
-                labels = labels * (1 - label_smoothing) + label_smoothing / 2
-
-            proj_a = model(emb_a)
-            proj_b = model(emb_b)
-            # Scale cosine similarity by temperature before BCE
-            similarity = (proj_a * proj_b).sum(dim=-1) / temperature
-            loss = F.binary_cross_entropy_with_logits(similarity, labels)
+            z_a = model(emb_a)
+            z_b = model(emb_b)
+            loss = nt_xent_loss(z_a, z_b, temperature)
 
             optimizer.zero_grad()
             loss.backward()
@@ -456,12 +546,25 @@ def train_synergy_phase(
 
         scheduler.step()
         avg = total_loss / len(loader)
-        log.info("Phase 2  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0], temperature)
+        log.info(
+            "Phase 2  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+            temperature,
+        )
 
         if WANDB_ENABLED:
-            wandb.log({"phase": 2, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0], "temperature": temperature})
+            wandb.log(
+                {
+                    "phase": 2,
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                    "temperature": temperature,
+                }
+            )
 
         if avg < best_loss:
             best_loss = avg
@@ -497,9 +600,7 @@ def train_deck_phase(
         in the dict default to a weight of 1.0.  Pass None to disable.
     """
     all_ids = list(embeddings.keys())
-    all_embs = torch.from_numpy(
-        np.stack([embeddings[k] for k in all_ids])
-    )  # (N, D)
+    all_embs = torch.from_numpy(np.stack([embeddings[k] for k in all_ids]))  # (N, D)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
@@ -519,30 +620,36 @@ def train_deck_phase(
 
         for idx in deck_indices:
             cmd_emb, card_embs, legal_neg_idx = dataset[idx]
-            cmd_emb   = cmd_emb.to(device)    # (D,)
-            card_embs = card_embs.to(device)   # (K, D)
+            cmd_emb = cmd_emb.to(device)  # (D,)
+            card_embs = card_embs.to(device)  # (K, D)
 
             if card_embs.size(0) < 2:
                 continue
 
             # Per-deck archetype loss weight
             deck_archetype = dataset.decks[idx].get("archetype", "unknown")
-            weight = archetype_weight.get(deck_archetype, 1.0) if archetype_weight else 1.0
+            weight = (
+                archetype_weight.get(deck_archetype, 1.0) if archetype_weight else 1.0
+            )
 
             # Project commander and deck cards
-            z_cmd  = model(cmd_emb.unsqueeze(0))            # (1, D')
-            z_pos  = model(card_embs)                       # (K, D')
+            z_cmd = model(cmd_emb.unsqueeze(0))  # (1, D')
+            z_pos = model(card_embs)  # (K, D')
 
             # Sample K random negatives restricted to the commander's color identity
             K = card_embs.size(0)
-            neg_pool = legal_neg_idx.numpy() if hasattr(legal_neg_idx, "numpy") else legal_neg_idx
+            neg_pool = (
+                legal_neg_idx.numpy()
+                if hasattr(legal_neg_idx, "numpy")
+                else legal_neg_idx
+            )
             chosen = np.random.choice(neg_pool, size=K, replace=True)
             neg_idx = torch.from_numpy(chosen).to(device)
-            z_neg  = model(all_embs[neg_idx])               # (K, D')
+            z_neg = model(all_embs[neg_idx])  # (K, D')
 
             # BPR: cosine similarity between commander and pos/neg cards
-            score_pos = (z_cmd * z_pos).sum(dim=-1)         # (K,)
-            score_neg = (z_cmd * z_neg).sum(dim=-1)         # (K,)
+            score_pos = (z_cmd * z_pos).sum(dim=-1)  # (K,)
+            score_neg = (z_cmd * z_neg).sum(dim=-1)  # (K,)
 
             loss = -F.logsigmoid(score_pos - score_neg).mean() * weight
 
@@ -552,16 +659,27 @@ def train_deck_phase(
             optimizer.step()
 
             total_loss += loss.item()
-            n_batches  += 1
+            n_batches += 1
 
         scheduler.step()
         avg = total_loss / max(n_batches, 1)
-        log.info("Phase 3  epoch %d/%d  loss=%.4f  lr=%.2e",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0])
+        log.info(
+            "Phase 3  epoch %d/%d  loss=%.4f  lr=%.2e",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+        )
 
         if WANDB_ENABLED:
-            wandb.log({"phase": 3, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0]})
+            wandb.log(
+                {
+                    "phase": 3,
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                }
+            )
 
         if avg < best_loss:
             best_loss = avg
@@ -576,6 +694,7 @@ def train_deck_phase(
 
 
 # ── Phase 4: Synergy-only training loop (Option A) ────────────────────────────
+
 
 def train_synergy_positions_phase(
     model: "DeckConstructor",
@@ -626,12 +745,20 @@ def train_synergy_positions_phase(
         encoder_lr = lr * encoder_lr_scale
         log.info(
             "Phase 4 (synergy-only): encoder unfrozen — encoder lr=%.2e, decoder lr=%.2e",
-            encoder_lr, lr,
+            encoder_lr,
+            lr,
         )
-        optimizer = torch.optim.AdamW([
-            {"params": model.card_encoder.parameters(), "lr": encoder_lr},
-            {"params": list(model.decoder.parameters()) + list(model.scorer.parameters()), "lr": lr},
-        ], weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": model.card_encoder.parameters(), "lr": encoder_lr},
+                {
+                    "params": list(model.decoder.parameters())
+                    + list(model.scorer.parameters()),
+                    "lr": lr,
+                },
+            ],
+            weight_decay=1e-4,
+        )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
@@ -644,7 +771,9 @@ def train_synergy_positions_phase(
 
     log.info(
         "Phase 4 (synergy-only): %d positions, batch_size=%d, %d epochs",
-        len(positions), batch_size, epochs,
+        len(positions),
+        batch_size,
+        epochs,
     )
     if patience > 0:
         log.info("Phase 4: early stopping patience=%d epochs", patience)
@@ -659,10 +788,13 @@ def train_synergy_positions_phase(
         # Pre-project the full card pool for negative sampling (no grad).
         model.eval()
         with torch.no_grad():
-            all_proj = torch.cat([
-                model.card_encoder(all_raw[i: i + 512])
-                for i in range(0, all_raw.size(0), 512)
-            ], dim=0)
+            all_proj = torch.cat(
+                [
+                    model.card_encoder(all_raw[i : i + 512])
+                    for i in range(0, all_raw.size(0), 512)
+                ],
+                dim=0,
+            )
         model.train()
 
         epoch_positions = positions[:]
@@ -672,22 +804,24 @@ def train_synergy_positions_phase(
         n_steps = 0
 
         for batch_start in range(0, len(epoch_positions), batch_size):
-            batch = epoch_positions[batch_start: batch_start + batch_size]
+            batch = epoch_positions[batch_start : batch_start + batch_size]
             B = len(batch)
 
             cmd_indices = torch.tensor(
                 [id_to_idx[p["commander_id"]] for p in batch],
-                dtype=torch.long, device=device,
+                dtype=torch.long,
+                device=device,
             )
             tgt_indices = torch.tensor(
                 [id_to_idx[p["target_card_id"]] for p in batch],
-                dtype=torch.long, device=device,
+                dtype=torch.long,
+                device=device,
             )
 
             if freeze_encoder:
                 # Encoder frozen: use pre-projected embeddings (no grad needed).
-                z_cmd = all_proj[cmd_indices]   # (B, D)
-                z_tgt = all_proj[tgt_indices]   # (B, D)
+                z_cmd = all_proj[cmd_indices]  # (B, D)
+                z_tgt = all_proj[tgt_indices]  # (B, D)
             else:
                 # Encoder unfrozen: encode fresh to capture gradient.
                 z_cmd = model.card_encoder(all_raw[cmd_indices])  # (B, D)
@@ -700,10 +834,12 @@ def train_synergy_positions_phase(
             z_ctx = model.query_token.expand(B, -1, -1)
 
             # Sample color-legal negatives from the pre-projected pool: (B, n_neg, D).
-            neg_idx = np.vstack([
-                np.random.choice(p["legal_neg_indices"], size=n_neg, replace=True)
-                for p in batch
-            ])
+            neg_idx = np.vstack(
+                [
+                    np.random.choice(p["legal_neg_indices"], size=n_neg, replace=True)
+                    for p in batch
+                ]
+            )
             z_neg = all_proj[torch.from_numpy(neg_idx).to(device)]  # (B, n_neg, D)
 
             # Candidates: target (pos 0) followed by negatives → (B, 1+n_neg, D).
@@ -712,7 +848,9 @@ def train_synergy_positions_phase(
             scores = model(z_cmd, z_ctx, candidates)  # (B, 1+n_neg)
 
             weights = torch.tensor(
-                [p["weight"] for p in batch], dtype=torch.float32, device=device,
+                [p["weight"] for p in batch],
+                dtype=torch.float32,
+                device=device,
             )
             per_pos_loss = -F.log_softmax(scores / temperature, dim=1)[:, 0]  # (B,)
             loss = (per_pos_loss * weights).mean()
@@ -728,12 +866,25 @@ def train_synergy_positions_phase(
 
         scheduler.step()
         avg = total_loss / max(n_steps, 1)
-        log.info("Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0], temperature)
+        log.info(
+            "Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+            temperature,
+        )
 
         if WANDB_ENABLED:
-            wandb.log({"phase": 4, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0], "temperature": temperature})
+            wandb.log(
+                {
+                    "phase": 4,
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                    "temperature": temperature,
+                }
+            )
 
         final_epoch = epoch + 1
         if avg < best_loss:
@@ -746,7 +897,10 @@ def train_synergy_positions_phase(
                 log.info(
                     "Phase 4: early stopping at epoch %d/%d "
                     "(no improvement for %d consecutive epochs, best=%.4f)",
-                    final_epoch, epochs, patience, best_loss,
+                    final_epoch,
+                    epochs,
+                    patience,
+                    best_loss,
                 )
                 break
 
@@ -754,6 +908,7 @@ def train_synergy_positions_phase(
 
 
 # ── Phase 4: Autoregressive deck construction (legacy) ────────────────────────
+
 
 def train_deck_constructor_phase(
     model: DeckConstructor,
@@ -812,12 +967,21 @@ def train_deck_constructor_phase(
         encoder_lr = lr * encoder_lr_scale
         log.info(
             "Phase 4: encoder unfrozen — encoder lr=%.2e (%.0f%% of decoder lr=%.2e)",
-            encoder_lr, encoder_lr_scale * 100, lr,
+            encoder_lr,
+            encoder_lr_scale * 100,
+            lr,
         )
-        optimizer = torch.optim.AdamW([
-            {"params": model.card_encoder.parameters(), "lr": encoder_lr},
-            {"params": list(model.decoder.parameters()) + list(model.scorer.parameters()), "lr": lr},
-        ], weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": model.card_encoder.parameters(), "lr": encoder_lr},
+                {
+                    "params": list(model.decoder.parameters())
+                    + list(model.scorer.parameters()),
+                    "lr": lr,
+                },
+            ],
+            weight_decay=1e-4,
+        )
 
     all_ids = list(embeddings.keys())
     all_raw = torch.from_numpy(
@@ -832,8 +996,12 @@ def train_deck_constructor_phase(
 
     n_syn_total = len(synergy_positions) if synergy_positions else 0
     n_syn_epoch = min(n_syn_total, syn_per_epoch) if synergy_positions else 0
-    log.info("Phase 4: %d deck sequences + %d/%d synergy positions per epoch",
-             len(dataset), n_syn_epoch, n_syn_total)
+    log.info(
+        "Phase 4: %d deck sequences + %d/%d synergy positions per epoch",
+        len(dataset),
+        n_syn_epoch,
+        n_syn_total,
+    )
     if patience > 0:
         log.info("Phase 4: early stopping patience=%d epochs", patience)
 
@@ -846,78 +1014,83 @@ def train_deck_constructor_phase(
         # ── Pre-project the full card pool for fast negative sampling ──────────
         model.eval()
         with torch.no_grad():
-            all_proj = torch.cat([
-                model.card_encoder(all_raw[i: i + 512])
-                for i in range(0, all_raw.size(0), 512)
-            ], dim=0)  # (N, D), L2-normalised, no grad
+            all_proj = torch.cat(
+                [
+                    model.card_encoder(all_raw[i : i + 512])
+                    for i in range(0, all_raw.size(0), 512)
+                ],
+                dim=0,
+            )  # (N, D), L2-normalised, no grad
         model.train()
 
         total_loss = 0.0
-        n_steps    = 0
+        n_steps = 0
 
         # ── Build unified shuffle of deck + synergy steps ─────────────────────
         # Sample a fresh random subset of synergy positions each epoch so the
         # model sees different positions over time while keeping epoch length
         # manageable.  Over many epochs the full synergy pool is covered.
         syn_sample = (
-            random.sample(range(n_syn_total), n_syn_epoch)
-            if synergy_positions else []
+            random.sample(range(n_syn_total), n_syn_epoch) if synergy_positions else []
         )
-        step_list: list[tuple[str, int]] = (
-            [("deck", i) for i in range(len(dataset))]
-            + [("syn",  i) for i in syn_sample]
-        )
+        step_list: list[tuple[str, int]] = [
+            ("deck", i) for i in range(len(dataset))
+        ] + [("syn", i) for i in syn_sample]
         random.shuffle(step_list)
 
         for step_type, step_idx in step_list:
-
             # ── Deck step ─────────────────────────────────────────────────────
             if step_type == "deck":
                 cmd_raw, card_raw, legal_neg_idx = dataset[step_idx]
                 card_raw = card_raw.to(device)
-                cmd_raw  = cmd_raw.to(device)
+                cmd_raw = cmd_raw.to(device)
                 K = card_raw.size(0)
                 if K < 2:
                     continue
 
-                n_pos      = min(positions_per_deck, K - 1)
-                pos_list   = random.sample(range(1, K), n_pos)
-                legal_pool = (legal_neg_idx if isinstance(legal_neg_idx, np.ndarray)
-                              else legal_neg_idx.numpy())
+                n_pos = min(positions_per_deck, K - 1)
+                pos_list = random.sample(range(1, K), n_pos)
+                legal_pool = (
+                    legal_neg_idx
+                    if isinstance(legal_neg_idx, np.ndarray)
+                    else legal_neg_idx.numpy()
+                )
 
                 deck_loss = torch.tensor(0.0, device=device)
                 for pos in pos_list:
-                    z_cmd     = model.card_encoder(cmd_raw.unsqueeze(0))         # (1, D)
-                    z_context = model.card_encoder(card_raw[:pos])               # (pos, D)
-                    z_target  = model.card_encoder(card_raw[pos].unsqueeze(0))   # (1, D)
+                    z_cmd = model.card_encoder(cmd_raw.unsqueeze(0))  # (1, D)
+                    z_context = model.card_encoder(card_raw[:pos])  # (pos, D)
+                    z_target = model.card_encoder(card_raw[pos].unsqueeze(0))  # (1, D)
 
-                    chosen  = np.random.choice(legal_pool, size=n_neg, replace=True)
-                    z_neg   = all_proj[torch.from_numpy(chosen).to(device)].detach()
+                    chosen = np.random.choice(legal_pool, size=n_neg, replace=True)
+                    z_neg = all_proj[torch.from_numpy(chosen).to(device)].detach()
 
-                    candidates = torch.cat([z_target, z_neg], dim=0)             # (1+n_neg, D)
+                    candidates = torch.cat([z_target, z_neg], dim=0)  # (1+n_neg, D)
                     scores = model(
                         z_cmd,
                         z_context.unsqueeze(0),
                         candidates.unsqueeze(0),
                     ).squeeze(0)
-                    deck_loss = deck_loss + (-F.log_softmax(scores / temperature, dim=0)[0])
+                    deck_loss = deck_loss + (
+                        -F.log_softmax(scores / temperature, dim=0)[0]
+                    )
 
                 step_loss = deck_loss / n_pos
 
             # ── Synergy step ──────────────────────────────────────────────────
             else:
                 sp = synergy_positions[step_idx]
-                cmd_id    = sp["commander_id"]
+                cmd_id = sp["commander_id"]
                 target_id = sp["target_card_id"]
                 if cmd_id not in id_to_idx or target_id not in id_to_idx:
                     continue
 
-                cmd_raw_t    = all_raw[id_to_idx[cmd_id]]
+                cmd_raw_t = all_raw[id_to_idx[cmd_id]]
                 target_raw_t = all_raw[id_to_idx[target_id]]
-                legal_pool   = sp["legal_neg_indices"]
+                legal_pool = sp["legal_neg_indices"]
 
-                z_cmd    = model.card_encoder(cmd_raw_t.unsqueeze(0))    # (1, D)
-                z_target = model.card_encoder(target_raw_t.unsqueeze(0)) # (1, D)
+                z_cmd = model.card_encoder(cmd_raw_t.unsqueeze(0))  # (1, D)
+                z_target = model.card_encoder(target_raw_t.unsqueeze(0))  # (1, D)
 
                 # Context: combo siblings projected live; empty context uses
                 # commander as the seed token so the decoder has something to attend to.
@@ -926,21 +1099,21 @@ def train_deck_constructor_phase(
                     ctx_raw = torch.stack(
                         [all_raw[id_to_idx[c]] for c in ctx_ids if c in id_to_idx]
                     )  # (C, D)
-                    z_context = model.card_encoder(ctx_raw)              # (C, D)
+                    z_context = model.card_encoder(ctx_raw)  # (C, D)
                 else:
-                    z_context = z_cmd.detach()                           # (1, D) — commander as seed
+                    z_context = z_cmd.detach()  # (1, D) — commander as seed
 
-                chosen  = np.random.choice(legal_pool, size=n_neg, replace=True)
-                z_neg   = all_proj[torch.from_numpy(chosen).to(device)].detach()
+                chosen = np.random.choice(legal_pool, size=n_neg, replace=True)
+                z_neg = all_proj[torch.from_numpy(chosen).to(device)].detach()
 
-                candidates = torch.cat([z_target, z_neg], dim=0)        # (1+n_neg, D)
+                candidates = torch.cat([z_target, z_neg], dim=0)  # (1+n_neg, D)
                 scores = model(
                     z_cmd,
                     z_context.unsqueeze(0),
                     candidates.unsqueeze(0),
                 ).squeeze(0)
 
-                raw_loss  = -F.log_softmax(scores / temperature, dim=0)[0]
+                raw_loss = -F.log_softmax(scores / temperature, dim=0)[0]
                 step_loss = raw_loss * sp["weight"]
 
             optimizer.zero_grad()
@@ -948,17 +1121,34 @@ def train_deck_constructor_phase(
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             # Log unweighted loss so the curve stays interpretable
-            total_loss += (step_loss / sp["weight"]).item() if step_type == "syn" else step_loss.item()
+            total_loss += (
+                (step_loss / sp["weight"]).item()
+                if step_type == "syn"
+                else step_loss.item()
+            )
             n_steps += 1
 
         scheduler.step()
         avg = total_loss / max(n_steps, 1)
-        log.info("Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
-                 epoch + 1, epochs, avg, scheduler.get_last_lr()[0], temperature)
+        log.info(
+            "Phase 4  epoch %d/%d  loss=%.4f  lr=%.2e  temp=%.4f",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+            temperature,
+        )
 
         if WANDB_ENABLED:
-            wandb.log({"phase": 4, "epoch": epoch + 1, "loss": avg,
-                       "lr": scheduler.get_last_lr()[0], "temperature": temperature})
+            wandb.log(
+                {
+                    "phase": 4,
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                    "temperature": temperature,
+                }
+            )
 
         final_epoch = epoch + 1
         if avg < best_loss:
@@ -971,7 +1161,10 @@ def train_deck_constructor_phase(
                 log.info(
                     "Phase 4: early stopping at epoch %d/%d "
                     "(no improvement for %d consecutive epochs, best=%.4f)",
-                    final_epoch, epochs, patience, best_loss,
+                    final_epoch,
+                    epochs,
+                    patience,
+                    best_loss,
                 )
                 break
 
@@ -979,6 +1172,7 @@ def train_deck_constructor_phase(
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
+
 
 def save_checkpoint(model: nn.Module, name: str):
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1004,9 +1198,14 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
     model_keys = set(model.state_dict().keys())
     if not model_keys.issubset(set(state.keys())):
         prefix = "card_encoder."
-        extracted = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)}
+        extracted = {
+            k[len(prefix) :]: v for k, v in state.items() if k.startswith(prefix)
+        }
         if extracted and model_keys.issubset(set(extracted.keys())):
-            log.info("Extracting card_encoder weights from DeckConstructor checkpoint: %s", path)
+            log.info(
+                "Extracting card_encoder weights from DeckConstructor checkpoint: %s",
+                path,
+            )
             state = extracted
 
     model.load_state_dict(state, strict=False)
@@ -1015,6 +1214,7 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
 
 
 # ── Artifact loaders (--dataset mode, no DB required) ─────────────────────────
+
 
 def load_artifact(path: str) -> dict:
     """Load the training artifact produced by export_dataset*.py."""
@@ -1061,7 +1261,9 @@ def load_synergy_pairs_from_artifact(data: dict) -> list[tuple[str, str, float]]
     a_list = syn["a_idx"].tolist()
     b_list = syn["b_idx"].tolist()
     l_list = syn["labels"].tolist()
-    return [(card_ids[a], card_ids[b], float(l)) for a, b, l in zip(a_list, b_list, l_list)]
+    return [
+        (card_ids[a], card_ids[b], float(l)) for a, b, l in zip(a_list, b_list, l_list)
+    ]
 
 
 def load_decks_from_artifact(data: dict) -> list[dict]:
@@ -1070,13 +1272,15 @@ def load_decks_from_artifact(data: dict) -> list[dict]:
     decks = []
     for d in data["decks"]:
         cmd_idx = d["commander_idx"]
-        decks.append({
-            "commander_id":      card_ids[cmd_idx],
-            "card_ids":          [card_ids[i] for i in d["card_idxs"]],
-            "color_identity":    frozenset(d.get("color_identity", [])),
-            "legal_neg_indices": d["legal_neg_indices"].numpy(),
-            "archetype":         d.get("archetype", "unknown"),
-        })
+        decks.append(
+            {
+                "commander_id": card_ids[cmd_idx],
+                "card_ids": [card_ids[i] for i in d["card_idxs"]],
+                "color_identity": frozenset(d.get("color_identity", [])),
+                "legal_neg_indices": d["legal_neg_indices"].numpy(),
+                "archetype": d.get("archetype", "unknown"),
+            }
+        )
     return decks
 
 
@@ -1085,105 +1289,209 @@ def load_synergy_positions_from_artifact(data: dict) -> list[dict]:
     card_ids = data["card_ids"]
     positions = []
     for p in data.get("synergy_positions", []):
-        positions.append({
-            "commander_id":     card_ids[p["commander_idx"]],
-            "context_card_ids": [card_ids[i] for i in p["context_card_idxs"]],
-            "target_card_id":   card_ids[p["target_card_idx"]],
-            "weight":           float(p["weight"]),
-            "legal_neg_indices": p["legal_neg_indices"].numpy(),
-        })
+        positions.append(
+            {
+                "commander_id": card_ids[p["commander_idx"]],
+                "context_card_ids": [card_ids[i] for i in p["context_card_idxs"]],
+                "target_card_id": card_ids[p["target_card_idx"]],
+                "weight": float(p["weight"]),
+                "legal_neg_indices": p["legal_neg_indices"].numpy(),
+            }
+        )
     return positions
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="",
-                        help="Path to pre-built training artifact (.pt from export_dataset.py). "
-                             "When set, all DB queries are skipped — no DATABASE_URL required.")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="",
+        help="Path to pre-built training artifact (.pt from export_dataset.py). "
+        "When set, all DB queries are skipped — no DATABASE_URL required.",
+    )
     parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4], default=2)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--neg-ratio", type=int, default=3,
-                        help="Negative pairs per positive for phase 2")
-    parser.add_argument("--hard-neg-frac", type=float, default=0.5,
-                        help="Fraction of negatives that are hard (nearest-neighbour) vs random")
-    parser.add_argument("--sample", type=int, default=500_000,
-                        help="Max positive pairs to sample from synergy_edges")
-    parser.add_argument("--role-demand-sample", type=int, default=100_000,
-                        help="Max role_demand edges to include as soft-label positives "
-                             "(0 to disable; uses stored score as label)")
-    parser.add_argument("--combo-sample", type=int, default=200_000,
-                        help="Max combo_package card pairs to include as hard positives "
-                             "(0 to disable; requires import_spellbook.py to have run)")
-    parser.add_argument("--commander-value-sample", type=int, default=200_000,
-                        help="Max commander_value edges to include as soft-label positives "
-                             "(0 to disable; uses stored score 1.0/0.8/0.6 as label)")
-    parser.add_argument("--label-smoothing", type=float, default=0.1,
-                        help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2")
-    parser.add_argument("--noise", type=float, default=0.05,
-                        help="Phase 1: std of Gaussian noise added to create augmented views")
-    parser.add_argument("--temperature", type=float, default=0.07,
-                        help="Phase 1: NT-Xent temperature (lower=sharper contrast)")
-    parser.add_argument("--temp-start", type=float, default=0.5,
-                        help="Phase 2/4: initial InfoNCE temperature at epoch 1 "
-                             "(high = soft distribution, easier early gradients)")
-    parser.add_argument("--temp-end", type=float, default=0.05,
-                        help="Phase 2/4: final InfoNCE temperature at last epoch "
-                             "(low = sharp distribution, tight positive clustering)")
-    parser.add_argument("--resume", action="store_true",
-                        help="Resume from latest checkpoint (phase2→phase2_best, "
-                             "phase1→phase1_best; falls back to previous phase if not found)")
-    parser.add_argument("--archetype-weight", type=str, default="",
-                        dest="archetype_weight",
-                        help="Phase 3: comma-separated archetype=weight pairs to upweight "
-                             "certain deck types in BPR loss "
-                             "(e.g. 'combo=2.0,tokens=1.5').  Archetypes not listed "
-                             "default to 1.0.  Leave empty to treat all decks equally.")
-    parser.add_argument("--freeze-encoder", action="store_true", default=True,
-                        dest="freeze_encoder",
-                        help="Phase 4: freeze card_encoder weights so the decoder learns "
-                             "to use fixed Phase 3 representations without collapsing them "
-                             "(default: True; use --no-freeze-encoder to disable)")
-    parser.add_argument("--no-freeze-encoder", action="store_false", dest="freeze_encoder")
-    parser.add_argument("--encoder-lr-scale", type=float, default=0.1,
-                        help="Phase 4 --no-freeze-encoder: encoder lr as fraction of decoder lr "
-                             "(default 0.1 — encoder updates 10× slower to prevent collapse)")
-    parser.add_argument("--patience", type=int, default=10,
-                        help="Phase 4: early-stopping patience in epochs — halt if loss does not "
-                             "improve for this many consecutive epochs (0 = disabled, default 10)")
-    parser.add_argument("--syn-per-epoch", type=int, default=1000,
-                        help="Phase 4: max synergy positions sampled per epoch "
-                             "(default 1000; fresh random sample each epoch covers "
-                             "the full pool over many epochs)")
-    parser.add_argument("--combo-weight", type=float, default=3.0,
-                        help="Phase 4: loss multiplier for combo-completion synergy positions "
-                             "(default 3.0 — combo pieces must be played together, high signal)")
-    parser.add_argument("--ability-weight", type=float, default=2.0,
-                        help="Phase 4: loss multiplier for ability_trigger synergy positions "
-                             "(default 2.0 — oracle-text derived trigger/payoff relationships)")
-    parser.add_argument("--tribal-weight", type=float, default=1.5,
-                        help="Phase 4: loss multiplier for tribal_typeline synergy positions "
-                             "(default 1.5 — type-based membership, slightly softer signal)")
-    parser.add_argument("--synergy-limit", type=int, default=300,
-                        help="Phase 4: max synergy positions per commander "
-                             "(default 300; increase if commanders have sparse edge coverage)")
-    parser.add_argument("--synergy-only", action=argparse.BooleanOptionalAction, default=True,
-                        help="Phase 4: train purely on synergy positions (Option A, default). "
-                             "Drops human deck sequences; scales to all legal commanders; "
-                             "eliminates deck-memorisation.  Pass --no-synergy-only to use "
-                             "the legacy interleaved deck+synergy loop.")
-    parser.add_argument("--syn-batch-size", type=int, default=256,
-                        help="Phase 4 --synergy-only: positions per gradient step "
-                             "(default 256 — larger than deck batch=32 to saturate the GPU)")
-    parser.add_argument("--training-path",
-                        choices=["cooccurrence", "compositional"],
-                        default="cooccurrence",
-                        help="Training path: cooccurrence (default) uses human deck "
-                             "co-occurrence; compositional uses rules-derived "
-                             "oracle-text signal (see issue #71).")
+    parser.add_argument(
+        "--neg-ratio",
+        type=int,
+        default=3,
+        help="Negative pairs per positive for phase 2",
+    )
+    parser.add_argument(
+        "--hard-neg-frac",
+        type=float,
+        default=0.5,
+        help="Fraction of negatives that are hard (nearest-neighbour) vs random",
+    )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=500_000,
+        help="Max positive pairs to sample from synergy_edges",
+    )
+    parser.add_argument(
+        "--role-demand-sample",
+        type=int,
+        default=100_000,
+        help="Max role_demand edges to include as soft-label positives "
+        "(0 to disable; uses stored score as label)",
+    )
+    parser.add_argument(
+        "--combo-sample",
+        type=int,
+        default=200_000,
+        help="Max combo_package card pairs to include as hard positives "
+        "(0 to disable; requires import_spellbook.py to have run)",
+    )
+    parser.add_argument(
+        "--commander-value-sample",
+        type=int,
+        default=200_000,
+        help="Max commander_value edges to include as soft-label positives "
+        "(0 to disable; uses stored score 1.0/0.8/0.6 as label)",
+    )
+    parser.add_argument(
+        "--label-smoothing",
+        type=float,
+        default=0.1,
+        help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2",
+    )
+    parser.add_argument(
+        "--noise",
+        type=float,
+        default=0.05,
+        help="Phase 1: std of Gaussian noise added to create augmented views",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.07,
+        help="Phase 1: NT-Xent temperature (lower=sharper contrast)",
+    )
+    parser.add_argument(
+        "--temp-start",
+        type=float,
+        default=0.5,
+        help="Phase 2/4: initial NT-Xent temperature (high=soft gradients). "
+        "Phase 2 default via run.ps1: 0.3.  Phase 4 default: 0.5.",
+    )
+    parser.add_argument(
+        "--temp-end",
+        type=float,
+        default=0.05,
+        help="Phase 2/4: final NT-Xent temperature (low=sharp clusters). "
+        "Phase 2 default via run.ps1: 0.07.  Phase 4 default: 0.05.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from latest checkpoint (phase2→phase2_best, "
+        "phase1→phase1_best; falls back to previous phase if not found)",
+    )
+    parser.add_argument(
+        "--archetype-weight",
+        type=str,
+        default="",
+        dest="archetype_weight",
+        help="Phase 3: comma-separated archetype=weight pairs to upweight "
+        "certain deck types in BPR loss "
+        "(e.g. 'combo=2.0,tokens=1.5').  Archetypes not listed "
+        "default to 1.0.  Leave empty to treat all decks equally.",
+    )
+    parser.add_argument(
+        "--freeze-encoder",
+        action="store_true",
+        default=True,
+        dest="freeze_encoder",
+        help="Phase 4: freeze card_encoder weights so the decoder learns "
+        "to use fixed Phase 3 representations without collapsing them "
+        "(default: True; use --no-freeze-encoder to disable)",
+    )
+    parser.add_argument(
+        "--no-freeze-encoder", action="store_false", dest="freeze_encoder"
+    )
+    parser.add_argument(
+        "--encoder-lr-scale",
+        type=float,
+        default=0.1,
+        help="Phase 2: lr scale factor for all encoder parameters (default 0.1 — encoder "
+        "drifts 10× slower to protect Phase 1 geometry). "
+        "Phase 4 --no-freeze-encoder: encoder lr as fraction of decoder lr "
+        "(same semantics, same default).",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=10,
+        help="Phase 4: early-stopping patience in epochs — halt if loss does not "
+        "improve for this many consecutive epochs (0 = disabled, default 10)",
+    )
+    parser.add_argument(
+        "--syn-per-epoch",
+        type=int,
+        default=1000,
+        help="Phase 4: max synergy positions sampled per epoch "
+        "(default 1000; fresh random sample each epoch covers "
+        "the full pool over many epochs)",
+    )
+    parser.add_argument(
+        "--combo-weight",
+        type=float,
+        default=3.0,
+        help="Phase 4: loss multiplier for combo-completion synergy positions "
+        "(default 3.0 — combo pieces must be played together, high signal)",
+    )
+    parser.add_argument(
+        "--ability-weight",
+        type=float,
+        default=2.0,
+        help="Phase 4: loss multiplier for ability_trigger synergy positions "
+        "(default 2.0 — oracle-text derived trigger/payoff relationships)",
+    )
+    parser.add_argument(
+        "--tribal-weight",
+        type=float,
+        default=1.5,
+        help="Phase 4: loss multiplier for tribal_typeline synergy positions "
+        "(default 1.5 — type-based membership, slightly softer signal)",
+    )
+    parser.add_argument(
+        "--synergy-limit",
+        type=int,
+        default=300,
+        help="Phase 4: max synergy positions per commander "
+        "(default 300; increase if commanders have sparse edge coverage)",
+    )
+    parser.add_argument(
+        "--synergy-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Phase 4: train purely on synergy positions (Option A, default). "
+        "Drops human deck sequences; scales to all legal commanders; "
+        "eliminates deck-memorisation.  Pass --no-synergy-only to use "
+        "the legacy interleaved deck+synergy loop.",
+    )
+    parser.add_argument(
+        "--syn-batch-size",
+        type=int,
+        default=256,
+        help="Phase 4 --synergy-only: positions per gradient step "
+        "(default 256 — larger than deck batch=32 to saturate the GPU)",
+    )
+    parser.add_argument(
+        "--training-path",
+        choices=["cooccurrence", "compositional"],
+        default="cooccurrence",
+        help="Training path: cooccurrence (default) uses human deck "
+        "co-occurrence; compositional uses rules-derived "
+        "oracle-text signal (see issue #71).",
+    )
     args = parser.parse_args()
 
     # Select path module -- determines data loading and checkpoint prefix.
@@ -1210,7 +1518,9 @@ def main():
         _artifact = load_artifact(args.dataset)
 
     if args.phase == 1:
-        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        embeddings = (
+            load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        )
         if not embeddings:
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
@@ -1232,21 +1542,33 @@ def main():
             dataset = FunctionalPairsDataset(pairs, embeddings)
             log.info("Dataset: %d functional pairs", len(dataset))
             train_functional_pairs_phase(
-                model, dataset, args.epochs, args.lr, args.batch_size,
-                noise_std=args.noise, temperature=args.temperature,
+                model,
+                dataset,
+                args.epochs,
+                args.lr,
+                args.batch_size,
+                noise_std=args.noise,
+                temperature=args.temperature,
                 checkpoint_prefix=pfx,
             )
         else:
             dataset = AllCardsDataset(embeddings)
             log.info("Dataset: %d cards", len(dataset))
             train_contrastive_phase(
-                model, dataset, args.epochs, args.lr, args.batch_size,
-                noise_std=args.noise, temperature=args.temperature,
+                model,
+                dataset,
+                args.epochs,
+                args.lr,
+                args.batch_size,
+                noise_std=args.noise,
+                temperature=args.temperature,
                 checkpoint_prefix=pfx,
             )
 
     elif args.phase == 2:
-        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        embeddings = (
+            load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        )
         if not embeddings:
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
@@ -1282,20 +1604,30 @@ def main():
                 load_checkpoint(model, fallback, device)
 
         train_synergy_phase(
-            model, dataset, args.epochs, args.lr, args.batch_size,
-            label_smoothing=args.label_smoothing,
+            model,
+            dataset,
+            args.epochs,
+            args.lr,
+            args.batch_size,
             temp_start=args.temp_start,
             temp_end=args.temp_end,
+            encoder_lr_scale=args.encoder_lr_scale,
             checkpoint_prefix=pfx,
         )
 
     elif args.phase == 3:
-        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        embeddings = (
+            load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        )
         if not embeddings:
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
 
-        decks = load_decks_from_artifact(_artifact) if _artifact else path_mod.load_decks(embeddings)
+        decks = (
+            load_decks_from_artifact(_artifact)
+            if _artifact
+            else path_mod.load_decks(embeddings)
+        )
         if not decks:
             log.error("No decks found -- run import_decklists.py first.")
             return
@@ -1323,18 +1655,27 @@ def main():
                     try:
                         archetype_weight[name.strip()] = float(val.strip())
                     except ValueError:
-                        log.warning("Invalid --archetype-weight entry %r -- skipped", part)
+                        log.warning(
+                            "Invalid --archetype-weight entry %r -- skipped", part
+                        )
             if archetype_weight:
                 log.info("Archetype weights: %s", archetype_weight)
 
         train_deck_phase(
-            model, dataset, embeddings, args.epochs, args.lr, args.batch_size,
+            model,
+            dataset,
+            embeddings,
+            args.epochs,
+            args.lr,
+            args.batch_size,
             archetype_weight=archetype_weight,
             checkpoint_prefix=pfx,
         )
 
     elif args.phase == 4:
-        embeddings = load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        embeddings = (
+            load_embeddings_from_artifact(_artifact) if _artifact else load_embeddings()
+        )
         if not embeddings:
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
@@ -1357,7 +1698,9 @@ def main():
         if args.synergy_only:
             if _artifact:
                 syn_positions = load_synergy_positions_from_artifact(_artifact)
-                log.info("Synergy-only mode: %d positions from artifact", len(syn_positions))
+                log.info(
+                    "Synergy-only mode: %d positions from artifact", len(syn_positions)
+                )
             else:
                 syn_positions = path_mod.load_synergy_positions_global(
                     embeddings,
@@ -1367,7 +1710,11 @@ def main():
                 )
 
             train_synergy_positions_phase(
-                model, syn_positions, embeddings, args.epochs, args.lr,
+                model,
+                syn_positions,
+                embeddings,
+                args.epochs,
+                args.lr,
                 batch_size=args.syn_batch_size,
                 n_neg=64,
                 temp_start=args.temp_start,
@@ -1378,7 +1725,11 @@ def main():
                 checkpoint_prefix=pfx,
             )
         else:
-            decks = load_decks_from_artifact(_artifact) if _artifact else path_mod.load_decks(embeddings)
+            decks = (
+                load_decks_from_artifact(_artifact)
+                if _artifact
+                else path_mod.load_decks(embeddings)
+            )
             if not decks:
                 log.error("No decks found -- run import_decklists.py first.")
                 return
@@ -1390,7 +1741,8 @@ def main():
                 syn_positions = load_synergy_positions_from_artifact(_artifact)
             else:
                 syn_positions = path_mod.load_synergy_positions(
-                    decks, embeddings,
+                    decks,
+                    embeddings,
                     combo_weight=args.combo_weight,
                     ability_weight=args.ability_weight,
                     tribal_weight=args.tribal_weight,
@@ -1398,10 +1750,15 @@ def main():
                 )
 
             train_deck_constructor_phase(
-                model, dataset, embeddings, args.epochs, args.lr,
+                model,
+                dataset,
+                embeddings,
+                args.epochs,
+                args.lr,
                 synergy_positions=syn_positions,
                 syn_per_epoch=args.syn_per_epoch,
-                n_neg=64, positions_per_deck=10,
+                n_neg=64,
+                positions_per_deck=10,
                 temp_start=args.temp_start,
                 temp_end=args.temp_end,
                 freeze_encoder=args.freeze_encoder,

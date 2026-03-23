@@ -24,7 +24,7 @@ from typing import Any
 from synergy.roles import ROLE_PATTERNS, LAND_ROLE_PATTERNS, is_land_card
 
 _COMPILED_BY_ROLE: dict[str, list[re.Pattern]] = {}
-for _pat, _role in ROLE_PATTERNS + LAND_ROLE_PATTERNS:
+for _pat, _role, *_ in ROLE_PATTERNS + LAND_ROLE_PATTERNS:
     _COMPILED_BY_ROLE.setdefault(_role, []).append(
         re.compile(_pat, re.IGNORECASE)
     )

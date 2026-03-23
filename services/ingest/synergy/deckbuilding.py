@@ -109,6 +109,31 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         "proliferate_matters",
     ),
 
+    # Enchantress: draw a card whenever you cast an enchantment spell or an
+    # enchantment enters the battlefield.  More focused than aura_matters
+    # (which includes non-draw enchantment payoffs); produces edges directly
+    # from enchantment cards → enchantress-draw permanents.
+    # Consumers: Sythis Harvest's Hand, Argothian Enchantress, Eidolon of
+    # Blossoms, Setessan Champion, Enchantress's Presence.
+    (
+        r"when(ever)?\s+(you cast an? (enchantment|aura) spell"
+        r"|an enchantment enters?( the battlefield)?( under your control)?)"
+        r".{0,100}draw (a card|cards?)",
+        "Enchantress draw trigger",
+        "enchantress",
+    ),
+
+    # Adapt / evolve / graft / bolster / modular / riot — counter-growth keywords.
+    # Cards with these keywords grow when +1/+1 counters are placed on them,
+    # making counter-placement engines strong enablers.
+    # Consumers: Zegana Utopian Speaker (evolve), Hydroid Krasis (adapt),
+    # Simic Basilisk (graft), Arcbound Ravager (modular).
+    (
+        r"\b(evolve|adapt|graft|bolster|modular|riot)\b",
+        "Counter growth keyword (adapt/evolve/graft/bolster/modular/riot)",
+        "adapt_evolve",
+    ),
+
     # Play-from-exile / impulse-draw payoffs
     # Covers: cast-from-exile triggers (Laelia, Birgi/Harnfel), the paradox keyword and
     # its explicit wording ("from anywhere other than your hand") used in the Dr Who set
@@ -259,6 +284,25 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%poison counter%'"
         " OR lower(oracle_text) LIKE '%-1/-1 counter%'"
         " OR lower(type_line) LIKE '%planeswalker%'"
+    ),
+
+    # Enchantress draw payoffs are triggered by casting or playing enchantment
+    # cards.  Any enchantment is a valid producer.
+    "enchantress": (
+        "lower(type_line) LIKE '%enchantment%'"
+    ),
+
+    # Counter-growth keywords (adapt, evolve, graft, bolster, modular, riot)
+    # are enabled by effects that place +1/+1 counters on creatures.
+    "adapt_evolve": (
+        "lower(oracle_text) LIKE '%put a +1/+1 counter%'"
+        " OR lower(oracle_text) LIKE '%put two +1/+1 counters%'"
+        " OR lower(oracle_text) LIKE '%put x +1/+1 counters%'"
+        " OR lower(oracle_text) LIKE '%+1/+1 counter on each%'"
+        " OR lower(oracle_text) LIKE '%proliferate%'"
+        " OR lower(oracle_text) LIKE '%double the number of counters%'"
+        " OR lower(oracle_text) LIKE '%one additional +1/+1 counter%'"
+        " OR lower(oracle_text) LIKE '%an additional +1/+1 counter%'"
     ),
 
     # Play-from-exile producers: cards that create windows to cast from exile.

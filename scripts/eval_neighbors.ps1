@@ -18,9 +18,15 @@
 .PARAMETER Top
     Number of nearest neighbours to display (default 20).
 
+.PARAMETER Phase
+    Which phase checkpoint to evaluate against (1–4, default 1).  The encoder
+    is projected for nearest-neighbour comparison regardless of phase; later
+    phases have a fine-tuned encoder that reflects synergy / deck / generation
+    training signal.
+
 .PARAMETER Checkpoint
-    Override the checkpoint name.  Defaults to <prefix>1_best derived from
-    -TrainingPath.
+    Override the checkpoint name.  Defaults to <prefix><phase>_best derived
+    from -TrainingPath and -Phase.
 
 .PARAMETER Dataset
     Override the artifact path.  Defaults to
@@ -30,10 +36,13 @@
     .\scripts\eval_neighbors.ps1 "Swords to Plowshares"
 
 .EXAMPLE
+    .\scripts\eval_neighbors.ps1 "Beast Whisperer" -Phase 2
+
+.EXAMPLE
     .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Top 30
 
 .EXAMPLE
-    .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -TrainingPath cooccurrence
+    .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -TrainingPath cooccurrence -Phase 2
 #>
 
 param(
@@ -42,6 +51,9 @@ param(
 
     [ValidateSet('cooccurrence', 'compositional')]
     [string]$TrainingPath = 'compositional',
+
+    [ValidateRange(1, 4)]
+    [int]$Phase = 1,
 
     [int]$Top = 20,
 
@@ -59,7 +71,8 @@ if (-not (Test-Path "$RepoRoot\.venv\Scripts\python.exe")) {
 # -- Resolve defaults from TrainingPath ---------------------------------------
 
 if (-not $Checkpoint) {
-    $Checkpoint = if ($TrainingPath -eq 'compositional') { 'comp_phase1_best' } else { 'phase1_best' }
+    $prefix     = if ($TrainingPath -eq 'compositional') { 'comp_phase' } else { 'phase' }
+    $Checkpoint = "${prefix}${Phase}_best"
 }
 
 if (-not $Dataset) {
