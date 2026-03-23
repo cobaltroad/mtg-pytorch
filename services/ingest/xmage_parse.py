@@ -254,22 +254,23 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
     for java_file in tqdm(java_files, desc="Parsing XMage sources"):
         ability_classes, effect_classes = parse_java_file(java_file)
 
-        # Map to known events; skip files with no recognised ability classes
-        events: list[tuple[str, str, str]] = []  # (trigger_event, ability_class, effect_class)
-        for ac in ability_classes:
-            event = ABILITY_CLASS_TO_EVENT.get(ac)
-            if event is None:
-                continue
-            # Find the best effect for this file (first match wins)
-            effect = next(
-                (EFFECT_CLASS_TO_EFFECT[ec] for ec in effect_classes if ec in EFFECT_CLASS_TO_EFFECT),
-                None,
-            )
-            events.append((event, ac, effect or ""))
-
-        if not events:
+        # All parsed ability classes are stored; ABILITY_CLASS_TO_EVENT provides
+        # the trigger_event translation for the co-occurrence path.  Unmapped
+        # classes get trigger_event=None so compute_synergy (pattern-based) ignores
+        # them, while compute_synergy_xmage (compositional path) finds them via
+        # ability_name regardless of trigger_event.
+        if not ability_classes:
             skipped_no_abilities += 1
             continue
+
+        effect = next(
+            (EFFECT_CLASS_TO_EFFECT[ec] for ec in effect_classes if ec in EFFECT_CLASS_TO_EFFECT),
+            None,
+        )
+        events: list[tuple[str | None, str, str]] = [  # (trigger_event, ability_class, effect_class)
+            (ABILITY_CLASS_TO_EVENT.get(ac), ac, effect or "")
+            for ac in ability_classes
+        ]
 
         # Normalise file stem → card name → DB lookup
         stem = java_file.stem  # e.g. "WarrenWarleader"
@@ -281,12 +282,12 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
 
         for trigger_event, ability_class, effect_cls in events:
             batch.append({
-                "card_id": card_id,
+                "card_id":      card_id,
                 "ability_type": "triggered",
                 "ability_name": ability_class,
-                "trigger_event": trigger_event,
+                "trigger_event": trigger_event,   # None for unmapped classes
                 "effect_class": effect_cls or None,
-                "raw_text": ability_class,
+                "raw_text":     ability_class,
             })
 
     log.info(
