@@ -456,16 +456,6 @@ together after training.
 - Swords to Plowshares → Path to Exile, Generous Gift (removal cluster)
 - Llanowar Elves → Birds of Paradise, Elvish Mystic, Fyndhorn Elves (ramp cluster)
 
-### `eval_synergy.py` / `eval_deck.py` — Phase 2/4 eval (requires DB)
-
-These scripts require a live database and run inside the trainer container on
-the Docker host:
-
-```bash
-docker compose run --rm trainer python eval_synergy.py "Skullclamp"
-docker compose run --rm trainer python eval_deck.py --mode topn --commander "Wilhelt, the Rotcleaver"
-docker compose run --rm trainer python eval_deck.py --mode recall
-```
 
 ---
 
