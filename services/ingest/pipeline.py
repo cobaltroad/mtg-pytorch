@@ -14,7 +14,8 @@ Run process only:   python pipeline.py --stage process
 
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan], compute_synergy,
-  compute_commander_value_synergy, compute_tribal_typeline_synergy, export_dataset
+  compute_commander_value_synergy, compute_tribal_typeline_synergy,
+  export_dataset, export_dataset_compositional
 
 Data sources
 ------------
@@ -928,6 +929,12 @@ def export_dataset_stage() -> None:
     export_dataset.main()
 
 
+def export_dataset_compositional_stage() -> None:
+    """Serialize the compositional training artifact to /data/mtg_dataset_compositional.pt."""
+    import export_dataset_compositional
+    export_dataset_compositional.main()
+
+
 async def composition_profile_stage() -> None:
     """Rebuild /data/deck_composition_profile.json from the imported deck pool.
 
@@ -980,7 +987,7 @@ if __name__ == "__main__":
             "embed_cards", "tag_abilities",
             "compute_synergy", "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
-            "export_dataset", "composition_profile",
+            "export_dataset", "export_dataset_compositional", "composition_profile",
         ],
         default=None,
         help=(
@@ -1017,6 +1024,8 @@ if __name__ == "__main__":
         asyncio.run(compute_tribal_typeline_synergy())
     elif args.stage == "export_dataset":
         export_dataset_stage()
+    elif args.stage == "export_dataset_compositional":
+        export_dataset_compositional_stage()
     elif args.stage == "composition_profile":
         asyncio.run(composition_profile_stage())
     else:

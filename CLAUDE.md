@@ -312,12 +312,37 @@ Changing land embeddings invalidates all checkpoints — retrain from Phase 1.
 
 ### Training path
 
-Two parallel training paths are planned (see #71):
+Two parallel training paths run side by side (see #71):
 
 | Path | Artifact | Checkpoint prefix |
 |------|----------|-------------------|
-| Co-occurrence (current) | `mtg_dataset.pt` | `phase*` |
-| Compositional (planned) | `mtg_dataset_compositional.pt` | `comp_phase*` |
+| Co-occurrence | `mtg_dataset.pt` | `phase*` |
+| Compositional | `mtg_dataset_compositional.pt` | `comp_phase*` |
+
+The compositional artifact is produced by a separate export stage:
+
+```bash
+docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional
+```
+
+On the GPU machine, download it alongside the standard artifact and train with
+`-TrainingPath compositional`:
+
+```powershell
+.\scripts\download_dataset.ps1          # downloads mtg_dataset.pt
+# (download mtg_dataset_compositional.pt manually or extend the script)
+
+.\scripts\run.ps1 -TrainingPath compositional -Train 1
+.\scripts\run.ps1 -TrainingPath compositional -Train 2
+.\scripts\run.ps1 -TrainingPath compositional -Train 3
+.\scripts\run.ps1 -TrainingPath compositional -Train 4
+```
+
+Phase 1 of the compositional path uses **functional equivalence pairs** from
+`card_abilities` instead of noise-augmented single-card views.  Two cards are
+paired when they share the same ability role (e.g. `ramp`, `removal`), color
+identity bucket, and CMC bracket — so Llanowar Elves and Elvish Mystic are
+positive pairs, not just reprints of the same oracle text.
 
 ---
 
