@@ -1,12 +1,14 @@
 <#
 .SYNOPSIS
-    Download the training artifact from the Docker host to the local GPU machine.
+    Download training artifact(s) from the Docker host to the local GPU machine.
 
 .DESCRIPTION
-    Fetches mtg_dataset.pt from the API's /dataset/download endpoint and saves
-    it to the local ingest_cache/ directory.  The trainer uses it with:
+    Fetches mtg_dataset.pt (and optionally mtg_dataset_compositional.pt) from
+    the API's /dataset/download endpoints and saves them to ingest_cache/.
 
-        .\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt
+    The trainer uses them with:
+        .\scripts\run.ps1 -Train 1 -Dataset .\ingest_cache\mtg_dataset.pt
+        .\scripts\run.ps1 -Train 1 -TrainingPath compositional
 
 .PARAMETER DatasetUrl
     Full URL to the /dataset/download endpoint.
@@ -15,16 +17,23 @@
 .PARAMETER OutputDir
     Local directory to save the file (default: .\ingest_cache).
 
+.PARAMETER Compositional
+    Also download mtg_dataset_compositional.pt (from /dataset/compositional/download).
+
 .EXAMPLE
     .\scripts\download_dataset.ps1
+
+.EXAMPLE
+    .\scripts\download_dataset.ps1 -Compositional
 
 .EXAMPLE
     .\scripts\download_dataset.ps1 -DatasetUrl https://edh-api.cardtrak.app/dataset/download
 #>
 
 param(
-    [string]$DatasetUrl = "",
-    [string]$OutputDir  = ""
+    [string]$DatasetUrl   = "",
+    [string]$OutputDir    = "",
+    [switch]$Compositional
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,12 +45,10 @@ if (-not $OutputDir) {
     $OutputDir = Join-Path $RepoRoot 'ingest_cache'
 }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-$OutputPath = Join-Path $OutputDir 'mtg_dataset.pt'
 
-# -- Resolve download URL -----------------------------------------------------
+# -- Resolve base API URL from .env -------------------------------------------
 
 if (-not $DatasetUrl) {
-    # Load .env to find API_HOST
     $envFile = Join-Path $RepoRoot '.env'
     if (Test-Path $envFile) {
         Get-Content $envFile | ForEach-Object {
@@ -61,53 +68,83 @@ if (-not $DatasetUrl) {
     $DatasetUrl = "https://$apiHost/dataset/download"
 }
 
-# -- Fetch metadata first (fast, shows what we're about to download) ----------
+# -- Helper: fetch metadata + download one artifact ---------------------------
 
-$infoUrl = $DatasetUrl -replace '/download$', '/info'
-try {
-    Write-Host "Checking artifact metadata at $infoUrl..."
-    $info = Invoke-RestMethod -Uri $infoUrl -TimeoutSec 10
-    $sizeMb = [math]::Round($info.size_bytes / 1MB, 0)
-    $created = $info.created_at.Substring(0, 19).Replace('T', ' ')
+function Download-Artifact {
+    param(
+        [string]$Url,
+        [string]$OutputPath,
+        [string]$Label
+    )
+
+    $infoUrl = $Url -replace '/download$', '/info'
+    try {
+        Write-Host "[$Label] Checking metadata at $infoUrl..."
+        $info = Invoke-RestMethod -Uri $infoUrl -TimeoutSec 10
+        $sizeMb  = [math]::Round($info.size_bytes / 1MB, 0)
+        $created = $info.created_at.Substring(0, 19).Replace('T', ' ')
+        Write-Host ""
+        Write-Host "  Cards:             $($info.card_count.ToString('N0'))" -ForegroundColor Cyan
+        if ($info.functional_pair_count) {
+            Write-Host "  Functional pairs:  $($info.functional_pair_count.ToString('N0'))" -ForegroundColor Cyan
+        }
+        Write-Host "  Synergy pairs:     $($info.synergy_count.ToString('N0'))" -ForegroundColor Cyan
+        Write-Host "  Decks:             $($info.deck_count.ToString('N0'))" -ForegroundColor Cyan
+        Write-Host "  Phase 4 positions: $($info.position_count.ToString('N0'))" -ForegroundColor Cyan
+        Write-Host "  Model:             $($info.model)" -ForegroundColor Cyan
+        Write-Host "  Size:              $sizeMb MB" -ForegroundColor Cyan
+        Write-Host "  Created:           $created UTC" -ForegroundColor Cyan
+        Write-Host ""
+    } catch {
+        Write-Warning "Could not fetch metadata ($infoUrl): $_"
+        Write-Host "Proceeding with download anyway..."
+        Write-Host ""
+    }
+
+    Write-Host "[$Label] Downloading $Url"
+    Write-Host "  -> $OutputPath"
     Write-Host ""
-    Write-Host "  Cards:            $($info.card_count.ToString('N0'))" -ForegroundColor Cyan
-    Write-Host "  Training pairs:   $($info.synergy_count.ToString('N0'))" -ForegroundColor Cyan
-    Write-Host "  Decks:            $($info.deck_count.ToString('N0'))" -ForegroundColor Cyan
-    Write-Host "  Phase 4 positions:$($info.position_count.ToString('N0'))" -ForegroundColor Cyan
-    Write-Host "  Model:            $($info.model)" -ForegroundColor Cyan
-    Write-Host "  Size:             $sizeMb MB" -ForegroundColor Cyan
-    Write-Host "  Created:          $created UTC" -ForegroundColor Cyan
-    Write-Host ""
-} catch {
-    Write-Warning "Could not fetch metadata ($infoUrl): $_"
-    Write-Host "Proceeding with download anyway..."
-    Write-Host ""
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $wc = New-Object System.Net.WebClient
+        $wc.DownloadFile($Url, $OutputPath)
+        $sw.Stop()
+        $finalMb = [math]::Round((Get-Item $OutputPath).Length / 1MB, 1)
+        $elapsed  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        Write-Host "[$Label] Downloaded $finalMb MB in ${elapsed}s" -ForegroundColor Green
+        Write-Host ""
+    } catch {
+        $sw.Stop()
+        Write-Error "[$Label] Download failed: $_"
+        exit 1
+    }
 }
 
-# -- Download -----------------------------------------------------------------
+# -- Download co-occurrence artifact (always) ---------------------------------
 
-Write-Host "Downloading $DatasetUrl"
-Write-Host "  -> $OutputPath"
-Write-Host ""
+$cooccOutputPath = Join-Path $OutputDir 'mtg_dataset.pt'
+Download-Artifact -Url $DatasetUrl -OutputPath $cooccOutputPath -Label 'co-occurrence'
 
-$sw = [System.Diagnostics.Stopwatch]::StartNew()
+# -- Download compositional artifact (opt-in) ---------------------------------
 
-try {
-    $wc = New-Object System.Net.WebClient
-    $wc.DownloadFile($DatasetUrl, $OutputPath)
-    $sw.Stop()
+if ($Compositional) {
+    $compUrl        = $DatasetUrl -replace '/dataset/download$', '/dataset/compositional/download'
+    $compOutputPath = Join-Path $OutputDir 'mtg_dataset_compositional.pt'
+    Download-Artifact -Url $compUrl -OutputPath $compOutputPath -Label 'compositional'
+}
 
-    $finalMb = [math]::Round((Get-Item $OutputPath).Length / 1MB, 1)
-    $elapsed  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-    Write-Host "Downloaded $finalMb MB in ${elapsed}s" -ForegroundColor Green
+# -- Usage hint ---------------------------------------------------------------
+
+Write-Host "Train with:" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 1   # co-occurrence path" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 3" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 4" -ForegroundColor Yellow
+if ($Compositional) {
     Write-Host ""
-    Write-Host "Train with:" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Mode train -Phase 1 -Dataset .\ingest_cache\mtg_dataset.pt" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Mode train -Phase 3 -Dataset .\ingest_cache\mtg_dataset.pt" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Mode train -Phase 4 -Dataset .\ingest_cache\mtg_dataset.pt" -ForegroundColor Yellow
-} catch {
-    $sw.Stop()
-    Write-Error "Download failed: $_"
-    exit 1
+    Write-Host "  .\scripts\run.ps1 -Train 1 -TrainingPath compositional   # compositional path" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 2 -TrainingPath compositional" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 3 -TrainingPath compositional" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 4 -TrainingPath compositional" -ForegroundColor Yellow
 }
