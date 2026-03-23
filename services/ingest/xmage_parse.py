@@ -235,13 +235,14 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
         log.warning("No rows to insert — check XMAGE_DIR and DB connectivity.")
         return
 
-    # Bulk upsert in chunks of 1 000
+    # Bulk upsert in chunks of 1 000.
+    # Note: executemany rowcount is unreliable for ON CONFLICT DO NOTHING via asyncpg
+    # (returns -1 or a negative aggregate).  We query the final count instead.
     chunk_size = 1_000
-    total_inserted = 0
     async with Session() as db:
         for i in range(0, len(batch), chunk_size):
             chunk = batch[i : i + chunk_size]
-            result = await db.execute(
+            await db.execute(
                 text("""
                     INSERT INTO card_abilities
                         (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text, source)
@@ -252,10 +253,15 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
                 """),
                 chunk,
             )
-            total_inserted += result.rowcount
         await db.commit()
 
-    log.info("XMage tagging complete: %d rows inserted (duplicates skipped)", total_inserted)
+    async with Session() as db:
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM card_abilities WHERE source = 'xmage'")
+        )
+        xmage_total = result.scalar()
+
+    log.info("XMage tagging complete: %d xmage rows now in card_abilities", xmage_total)
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
