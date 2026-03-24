@@ -233,13 +233,14 @@ if ($Mode -eq 'train') {
 
     if ($null -eq $Epochs) {
         if ($Phase -eq 1)    { $Epochs = 50 }
-        elseif ($Phase -eq 2) { $Epochs = 30 }
+        elseif ($Phase -eq 2) { $Epochs = 60 }
         elseif ($Phase -eq 3) { $Epochs = 50 }
         else                  { $Epochs = 30 }
     }
 
     if ($null -eq $LearningRate) {
-        $LearningRate = 1e-4
+        if ($Phase -eq 2) { $LearningRate = 1e-3 }
+        else              { $LearningRate = 1e-4  }
     }
 
     if ($null -eq $Resume) {
