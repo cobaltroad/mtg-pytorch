@@ -22,6 +22,13 @@ mtg-pytorch/
 │   │       ├── commander_analysis.py  # Pure oracle-text signal extractor (no DB)
 │   │       └── decks.py               # Deck generation + tribal/heuristic boosts
 │   ├── ingest/                 # Pipeline: MTGJSON → pgvector embeddings
+│   │   └── stages/             # Focused stage modules (pipeline.py delegates here)
+│   │       ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
+│   │       ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
+│   │       ├── tag.py          #   embed_cards + tag_abilities (3 passes)
+│   │       ├── dataset.py      #   compute_synergy + compute_synergy_xmage
+│   │       ├── commander.py    #   compute_commander_value_synergy + compute_tribal_typeline_synergy
+│   │       └── export.py       #   Thin wrappers for all export sub-stages
 │   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
 │   └── ui/                     # Streamlit interface
 ├── models/                     # Model architecture files (shared into jupyter)
@@ -65,9 +72,15 @@ docker compose run --rm ingest python pipeline.py --stage tag_abilities
 docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan   # re-apply all patterns to all cards
 docker compose run --rm ingest python pipeline.py --stage tag_abilities_xmage      # supplement with XMage source parsing (requires mage/ mount)
 docker compose run --rm ingest python pipeline.py --stage compute_synergy
+docker compose run --rm ingest python pipeline.py --stage compute_synergy_xmage
+docker compose run --rm ingest python pipeline.py --stage export_dataset
+
+# Commander artifact pipeline (required before export_dataset_commanders):
+# These stages are NOT part of process — run them explicitly after process
+# before building mtg_commanders.pt.
 docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
-docker compose run --rm ingest python pipeline.py --stage export_dataset
+docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
 # Research: decompose all ~3000 commanders into structured synergy signals.
 # Read-only — queries the DB and XMage source tree, writes JSON to the ingest_cache volume.
