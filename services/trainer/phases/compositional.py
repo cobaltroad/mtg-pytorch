@@ -15,7 +15,7 @@ import logging
 import os
 import random
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 import psycopg2
@@ -344,13 +344,63 @@ def load_synergy_positions(
     tribal_weight: float = 1.5,
     synergy_limit_per_commander: int = 300,
 ) -> list[dict]:
-    """Phase 4 compositional: role-gap sequencing positions.
+    """Phase 4 compositional: synergy positions scoped to decks already loaded.
 
-    Not yet implemented.  See #68.
+    Mirrors the co-occurrence implementation but queries xmage_ability_trigger
+    edges instead of ability_trigger edges, matching the compositional path's
+    synergy signal source.
     """
-    raise NotImplementedError(
-        "Phase 4 compositional synergy positions not yet implemented -- see issue #68"
+    log.info(
+        "Building synergy positions (ability=%.1f×, tribal=%.1f×, limit=%d/commander)…",
+        ability_weight, tribal_weight, synergy_limit_per_commander,
     )
+
+    emb_set   = set(embeddings.keys())
+    cmd_legal = {d["commander_id"]: d["legal_neg_indices"] for d in decks}
+    commander_ids = list(cmd_legal.keys())
+
+    positions: list[dict] = []
+    cmd_count: Counter = Counter()
+
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_a::text, card_b::text, score_type
+                FROM synergy_edges
+                WHERE score_type IN ('xmage_ability_trigger', 'tribal_typeline')
+                  AND card_a::text = ANY(%s)
+            """, (commander_ids,))
+            fwd = list(cur.fetchall())
+
+            cur.execute("""
+                SELECT card_b::text AS card_a, card_a::text AS card_b, score_type
+                FROM synergy_edges
+                WHERE score_type IN ('xmage_ability_trigger', 'tribal_typeline')
+                  AND card_b::text = ANY(%s)
+            """, (commander_ids,))
+            rev = list(cur.fetchall())
+
+    syn_count = 0
+    for card_a, card_b, score_type in fwd + rev:
+        if card_a not in cmd_legal or card_b not in emb_set:
+            continue
+        if cmd_count[card_a] >= synergy_limit_per_commander:
+            continue
+        weight = ability_weight if score_type == "xmage_ability_trigger" else tribal_weight
+        positions.append({
+            "commander_id":      card_a,
+            "context_card_ids":  [],
+            "target_card_id":    card_b,
+            "weight":            weight,
+            "legal_neg_indices": cmd_legal[card_a],
+        })
+        cmd_count[card_a] += 1
+        syn_count += 1
+
+    log.info("  %d ability/tribal positions across %d commanders",
+             syn_count, len(cmd_count))
+    log.info("Total synergy positions: %d", len(positions))
+    return positions
 
 
 def load_synergy_positions_global(
@@ -359,10 +409,66 @@ def load_synergy_positions_global(
     tribal_weight: float = 1.5,
     synergy_limit_per_commander: int = 300,
 ) -> list[dict]:
-    """Phase 4 compositional: global role-gap positions (all legal commanders).
+    """Phase 4 compositional: global synergy positions for all legal commanders.
 
-    Not yet implemented.  See #68.
+    Mirrors the co-occurrence implementation but queries xmage_ability_trigger
+    edges instead of ability_trigger edges, matching the compositional path's
+    synergy signal source.  No decks required — positions are built directly
+    from synergy_edges for every embedded legal commander.
     """
-    raise NotImplementedError(
-        "Phase 4 compositional global positions not yet implemented -- see issue #68"
-    )
+    log.info("Building global synergy positions (all legal commanders)…")
+
+    emb_set  = set(embeddings.keys())
+    all_ids  = list(embeddings.keys())
+    color_ids = _load_color_identities(embeddings)
+
+    _legal_cache: dict[frozenset, np.ndarray] = {}
+
+    def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
+        if cmd_ci not in _legal_cache:
+            idx = np.array(
+                [i for i, cid in enumerate(all_ids)
+                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                dtype=np.int64,
+            )
+            _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(len(all_ids), dtype=np.int64)
+        return _legal_cache[cmd_ci]
+
+    positions: list[dict] = []
+    cmd_count: Counter = Counter()
+
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT se.card_a::text, se.card_b::text, se.score_type
+                FROM synergy_edges se
+                JOIN cards c ON c.id = se.card_a
+                WHERE se.score_type IN ('xmage_ability_trigger', 'tribal_typeline')
+                  AND se.card_b IS NOT NULL
+                  AND c.legalities->>'commander' = 'legal'
+                  AND (c.type_line ILIKE '%Legendary Creature%'
+                    OR c.type_line ILIKE '%Legendary Planeswalker%'
+                    OR c.oracle_text ILIKE '%can be your commander%')
+                ORDER BY se.card_a, se.score DESC
+            """)
+            rows = cur.fetchall()
+
+    for card_a, card_b, score_type in rows:
+        if card_a not in emb_set or card_b not in emb_set:
+            continue
+        if cmd_count[card_a] >= synergy_limit_per_commander:
+            continue
+        cmd_ci = color_ids.get(card_a, frozenset())
+        weight = ability_weight if score_type == "xmage_ability_trigger" else tribal_weight
+        positions.append({
+            "commander_id":      card_a,
+            "context_card_ids":  [],
+            "target_card_id":    card_b,
+            "weight":            weight,
+            "legal_neg_indices": _legal_indices(cmd_ci),
+        })
+        cmd_count[card_a] += 1
+
+    log.info("Global synergy positions: %d across %d commanders",
+             len(positions), len(cmd_count))
+    return positions
