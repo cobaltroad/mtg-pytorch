@@ -93,6 +93,11 @@ COMMANDER_VALUE_EDGE_SCORES: dict[str, float] = commander_value.EDGE_SCORES
 # edges without the lossy trigger_event translation layer.
 XMAGE_PRODUCER_MAP: dict[str, str] = xmage.XMAGE_PRODUCER_MAP
 
+# SpellCastControllerTriggeredAbility sub-bucket → producer SQL.
+# Used by compute_synergy_xmage() to select type-specific producers for each
+# refined trigger_event (e.g. "enchantment_cast" → enchantment producers only).
+SPELLCAST_TRIGGER_PRODUCER_MAP: dict[str, str] = xmage.SPELLCAST_TRIGGER_PRODUCER_MAP
+
 __all__ = [
     "TRIGGER_PATTERNS",
     "PRODUCER_MAP",
@@ -105,4 +110,5 @@ __all__ = [
     "COMMANDER_VALUE_PRODUCER_MAP",
     "COMMANDER_VALUE_EDGE_SCORES",
     "XMAGE_PRODUCER_MAP",
+    "SPELLCAST_TRIGGER_PRODUCER_MAP",
 ]

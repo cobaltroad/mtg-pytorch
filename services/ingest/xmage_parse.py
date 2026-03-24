@@ -101,6 +101,9 @@ ABILITY_CLASS_TO_EVENT: dict[str, str] = {
     "DealsDamageToAPlayerTriggeredAbility":           "combat_damage",
 
     # ── Spellcasting ──────────────────────────────────────────────────────────
+    # SpellCastControllerTriggeredAbility gets a refined trigger_event at parse
+    # time via SPELLCAST_FILTER_MAP (body scan).  The default "spell_cast" is
+    # only used when no StaticFilters argument is found in the Java body.
     "SpellCastControllerTriggeredAbility":            "spell_cast",
     "SpellCastOpponentTriggeredAbility":              "spell_cast",
     "SpellCastAllTriggeredAbility":                   "spell_cast",
@@ -138,6 +141,29 @@ ABILITY_CLASS_TO_EVENT: dict[str, str] = {
     "ModularAbility":                                 "adapt_evolve",
     "RiotAbility":                                    "adapt_evolve",
 }
+
+# ── SpellCastControllerTriggeredAbility filter → refined trigger_event ────────
+#
+# XMage uses StaticFilters.FILTER_SPELL_* as the second argument to
+# SpellCastControllerTriggeredAbility to restrict which spell types trigger the
+# ability.  By scanning the Java body for this argument we can assign a refined
+# trigger_event (e.g. "enchantment_cast") instead of the generic "spell_cast".
+#
+# Regex matches:  new SpellCastControllerTriggeredAbility(effect, StaticFilters.FILTER_SPELL_*, ...)
+# The StaticFilters constant is the second constructor argument.
+
+SPELLCAST_FILTER_MAP: dict[str, str] = {
+    "FILTER_SPELL_SPIRIT_OR_ARCANE":      "spirit_arcane_cast",
+    "FILTER_SPELL_AN_ENCHANTMENT":        "enchantment_cast",
+    "FILTER_SPELL_AN_ARTIFACT":           "artifact_cast",
+    "FILTER_SPELL_A_NON_CREATURE":        "noncreature_cast",
+    "FILTER_SPELL_A_CREATURE":            "creature_cast",
+    "FILTER_SPELL_AN_INSTANT_OR_SORCERY": "instant_sorcery_cast",
+    "FILTER_SPELL_HISTORIC":              "historic_cast",
+}
+
+_SPELLCAST_FILTER_RE = re.compile(r"StaticFilters\.(FILTER_SPELL_\w+)")
+
 
 # ── XMage effect-class → effect_class string mapping ─────────────────────────
 #
@@ -200,11 +226,22 @@ _IMPORT_RE = re.compile(
 _ABILITY_PKGS = {"common", "keyword"}
 
 
-def parse_java_file(path: Path) -> tuple[list[str], list[str]]:
-    """Return (ability_classes, effect_classes) imported by a Java card file.
+def parse_java_file(path: Path) -> tuple[list[str], list[str], dict[str, str]]:
+    """Return (ability_classes, effect_classes, trigger_event_overrides) for a Java card file.
 
     Captures ``mage.abilities.common.*`` and ``mage.abilities.keyword.*``
     as ability classes, and ``mage.abilities.effects.common.*`` as effect classes.
+
+    ``trigger_event_overrides`` maps ability class name → refined trigger_event
+    for any ability whose trigger_event can be narrowed by a body scan.  The
+    caller uses this to override the default from ``ABILITY_CLASS_TO_EVENT``.
+    Currently populated by:
+
+    - ``SpellCastControllerTriggeredAbility`` → refined event from the
+      ``StaticFilters.FILTER_SPELL_*`` constructor argument (e.g. ``"enchantment_cast"``).
+
+    The dict is empty when no refinements are found.  New body-scan rules can be
+    added here without changing the function signature.
     """
     ability_classes: list[str] = []
     effect_classes: list[str] = []
@@ -217,7 +254,17 @@ def parse_java_file(path: Path) -> tuple[list[str], list[str]]:
         else:
             effect_classes.append(cls)
 
-    return ability_classes, effect_classes
+    trigger_event_overrides: dict[str, str] = {}
+
+    # Body scan: SpellCastControllerTriggeredAbility filter argument
+    if "SpellCastControllerTriggeredAbility" in ability_classes:
+        m = _SPELLCAST_FILTER_RE.search(text_content)
+        if m:
+            refined = SPELLCAST_FILTER_MAP.get(m.group(1))
+            if refined:
+                trigger_event_overrides["SpellCastControllerTriggeredAbility"] = refined
+
+    return ability_classes, effect_classes, trigger_event_overrides
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -252,7 +299,7 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
     batch: list[dict] = []
 
     for java_file in tqdm(java_files, desc="Parsing XMage sources"):
-        ability_classes, effect_classes = parse_java_file(java_file)
+        ability_classes, effect_classes, trigger_event_overrides = parse_java_file(java_file)
 
         # All parsed ability classes are stored; ABILITY_CLASS_TO_EVENT provides
         # the trigger_event translation for the co-occurrence path.  Unmapped
@@ -267,10 +314,10 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
             (EFFECT_CLASS_TO_EFFECT[ec] for ec in effect_classes if ec in EFFECT_CLASS_TO_EFFECT),
             None,
         )
-        events: list[tuple[str | None, str, str]] = [  # (trigger_event, ability_class, effect_class)
-            (ABILITY_CLASS_TO_EVENT.get(ac), ac, effect or "")
-            for ac in ability_classes
-        ]
+        events: list[tuple[str | None, str, str]] = []  # (trigger_event, ability_class, effect_class)
+        for ac in ability_classes:
+            trigger_event = trigger_event_overrides.get(ac) or ABILITY_CLASS_TO_EVENT.get(ac)
+            events.append((trigger_event, ac, effect or ""))
 
         # Normalise file stem → card name → DB lookup
         stem = java_file.stem  # e.g. "WarrenWarleader"
@@ -313,7 +360,7 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
                     VALUES
                         (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text, 'xmage')
                     ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, ''))
-                    DO NOTHING
+                    DO UPDATE SET trigger_event = EXCLUDED.trigger_event
                 """),
                 chunk,
             )
