@@ -12,7 +12,7 @@ Artifact contents
   embeddings              – Tensor(N, D) float32
   functional_pairs        – dict with a_idx / b_idx int32 tensors (Phase 1)
   synergy                 – a_idx / b_idx / labels (Phase 2)
-  card_meta               – {card_id: {name, mana_cost, type_line}} for offline eval
+  card_meta               – {card_id: {name, mana_cost, type_line, cmc, color_identity}} for offline eval
 
   Phases 3/4 (deck co-occurrence + generative) use the commanders artifact
   produced by export_dataset_commanders.py (mtg_commanders.pt), not this one.
@@ -79,6 +79,26 @@ OUTPUT_PATH   = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
 MAX_PER_CLASS = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
 
 
+def _type_bucket(type_line: str) -> str:
+    """Map a card's type_line to a coarse super-type bucket.
+
+    Functional equivalence is only meaningful within the same bucket — a Land
+    and a Creature cannot substitute for each other in a deck slot.
+
+    Buckets:
+      land             – any card with Land in its type line
+      instant_sorcery  – Instant or Sorcery (non-permanent spells)
+      nonland_permanent – everything else (Creature, Artifact, Enchantment,
+                          Planeswalker, Battle …)
+    """
+    tl = type_line.lower()
+    if "land" in tl:
+        return "land"
+    if "instant" in tl or "sorcery" in tl:
+        return "instant_sorcery"
+    return "nonland_permanent"
+
+
 def _build_functional_pairs(
     card_ids: list[str],
     id_to_idx: dict[str, int],
@@ -87,10 +107,12 @@ def _build_functional_pairs(
     """Build Phase 1 functional equivalence pairs from card_abilities.
 
     Two cards are placed in the same equivalence class when they share the
-    same ability role (e.g. 'removal', 'ramp', 'repeatable_draw').  Color
-    identity and CMC are intentionally excluded — functional equivalence is
-    about what a card does for the caster, not what it costs or what color it
-    is.  Deckbuilding constraints (color, curve) are applied downstream.
+    same ability role (e.g. 'removal', 'ramp', 'repeatable_draw') **and**
+    belong to the same super-type bucket (land / instant_sorcery /
+    nonland_permanent).  Color identity and CMC are intentionally excluded —
+    functional equivalence is about what a card does for the caster, not what
+    it costs or what color it is.  Deckbuilding constraints are applied
+    downstream.
 
     Returns (a_idx, b_idx) int32 arrays — indices into card_ids.
     """
@@ -104,24 +126,27 @@ def _build_functional_pairs(
                 SELECT
                     ca.card_id::text              AS card_id,
                     ca.ability_name               AS role,
-                    COALESCE(ca.effect_class, '') AS effect_class
+                    COALESCE(ca.effect_class, '') AS effect_class,
+                    COALESCE(c.type_line, '')     AS type_line
                 FROM card_abilities ca
+                JOIN cards c ON c.id = ca.card_id
                 WHERE ca.ability_type = 'role'
             """)
             rows = cur.fetchall()
 
-    # Group card indices by (role, effect_class).
+    # Group card indices by (role, effect_class, type_bucket).
     # Cards with a non-null effect_class land in the precise subtype class.
     # Legacy rows with effect_class='' land in a coarse catch-all per role,
     # which will shrink to zero once tag_abilities --rescan has been run.
-    classes: dict[tuple[str, str], list[int]] = defaultdict(list)
-    seen_per_class: dict[tuple[str, str], set[int]] = defaultdict(set)
+    # The type_bucket prevents cross-type pairings (e.g. Land ↔ Creature).
+    classes: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+    seen_per_class: dict[tuple[str, str, str], set[int]] = defaultdict(set)
     for row in rows:
         card_id = row["card_id"]
         if card_id not in embedded:
             continue
         idx = id_to_idx[card_id]
-        key = (row["role"], row["effect_class"])
+        key = (row["role"], row["effect_class"], _type_bucket(row["type_line"]))
         if idx not in seen_per_class[key]:
             classes[key].append(idx)
             seen_per_class[key].add(idx)

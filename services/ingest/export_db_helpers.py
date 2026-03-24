@@ -77,20 +77,23 @@ def _load_embeddings() -> tuple[list[str], np.ndarray]:
 # ── Card metadata ─────────────────────────────────────────────────────────────
 
 def _load_card_meta(id_to_idx: dict[str, int]) -> dict[str, dict]:
-    """Return {card_id: {name, mana_cost, type_line}} for all embedded cards."""
+    """Return {card_id: {name, mana_cost, type_line, cmc, color_identity}} for all embedded cards."""
     ids = list(id_to_idx.keys())
     result: dict[str, dict] = {}
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
-                "SELECT id::text, name, mana_cost, type_line FROM cards WHERE id::text = ANY(%s)",
+                "SELECT id::text, name, mana_cost, type_line, cmc, color_identity"
+                " FROM cards WHERE id::text = ANY(%s)",
                 (ids,),
             )
             for row in cur.fetchall():
                 result[row["id"]] = {
-                    "name":      row["name"],
-                    "mana_cost": row["mana_cost"] or "",
-                    "type_line": row["type_line"] or "",
+                    "name":           row["name"],
+                    "mana_cost":      row["mana_cost"] or "",
+                    "type_line":      row["type_line"] or "",
+                    "cmc":            float(row["cmc"]) if row["cmc"] is not None else None,
+                    "color_identity": sorted(row["color_identity"] or []),
                 }
     return result
 
