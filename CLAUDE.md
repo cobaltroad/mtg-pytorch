@@ -69,12 +69,18 @@ docker compose run --rm ingest python pipeline.py --stage compute_commander_valu
 docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
 docker compose run --rm ingest python pipeline.py --stage export_dataset
 
-# Research: decompose all ~3000 commanders into synergy signals (read-only, outputs JSON)
+# Research: decompose all ~3000 commanders into structured synergy signals.
+# Read-only — queries the DB and XMage source tree, writes JSON to the ingest_cache volume.
+# Two signal sources per commander: oracle text regex patterns + XMage ability/effect classes.
+# Output: /data/commander_decomposition.json
 docker compose run --rm ingest python scripts/decompose_commanders.py
-# Spot-check the decomposition output:
-docker compose run --rm ingest python scripts/eval_commander.py "Anje Falkenrath"
-docker compose run --rm ingest python scripts/eval_commander.py --stats
-docker compose run --rm ingest python scripts/eval_commander.py --no-signals
+
+# Spot-check the decomposition output with eval_commander.py:
+docker compose run --rm ingest python scripts/eval_commander.py "Anje Falkenrath"   # named lookup (partial match)
+docker compose run --rm ingest python scripts/eval_commander.py --stats             # coverage summary + pattern frequency histogram
+docker compose run --rm ingest python scripts/eval_commander.py --no-signals        # list commanders with zero signals (gap analysis)
+docker compose run --rm ingest python scripts/eval_commander.py --pattern goad      # list all commanders that matched a specific pattern_key
+docker compose run --rm ingest python scripts/eval_commander.py --pattern goad --limit 0  # remove cap (default 50)
 
 # 5. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
@@ -514,3 +520,102 @@ XMage uses one class (`SpellCastControllerTriggeredAbility`) for all "whenever y
 | `spell_cast` | any non-land card (generic fallback) |
 
 Cards with no recognised `StaticFilters` argument keep `trigger_event='spell_cast'` and use the generic `_ANY_SPELL` producer SQL.
+
+---
+
+## Commander decomposition (`scripts/decompose_commanders.py`)
+
+A standalone read-only research script that enumerates all ~3,000 legal commanders and decomposes each into structured synergy signals.  Run after the pipeline has been processed (requires populated `cards` and `card_abilities` tables and the `mage/` XMage mount).
+
+```bash
+docker compose run --rm ingest python scripts/decompose_commanders.py
+```
+
+Output: `/data/commander_decomposition.json` (backed by the `ingest_cache` volume).
+
+### Signal sources
+
+Each commander entry contains two lists of signals:
+
+| Source | How it works |
+|--------|-------------|
+| `oracle_text` | ~32 regex patterns against the commander's rules text.  Each match produces a `pattern_key`, `matched_phrase`, and `score`. |
+| `xmage` | Java ability/effect class names from `xmage_parse.parse_java_file()` translated via `ABILITY_CLASS_TO_EVENT` / `EFFECT_CLASS_TO_EFFECT`.  Includes `SpellCastControllerTriggeredAbility` filter refinement (see XMage section above). |
+
+Entries also include `unmatched_triggers[]` — oracle trigger clauses (sentences starting with `when/whenever/if/each`) that fired no pattern.  Use these for gap analysis.
+
+### Pattern library (oracle text)
+
+| Pattern key | Description | Notable commanders |
+|---|---|---|
+| `etb_trigger` | ETB trigger (generic + proper-name subjects) | Panharmonicon payoffs |
+| `attack_trigger` | Attack trigger | Isshin, Raiyuu, Gahiji |
+| `cast_trigger_creature` | Creature cast trigger | Beast Whisperer analogues |
+| `cast_trigger_instant_sorcery` | Instant/sorcery cast trigger | Guttersnipe analogues |
+| `cast_trigger_enchantment` | Enchantment cast trigger | Sythis, Eidolon |
+| `cast_trigger_artifact` | Artifact cast trigger | Breya, Daretti |
+| `cast_trigger_historic` | Historic spell cast trigger | Jhoira, Teshar, Sarah Jane Smith |
+| `cast_trigger_colored` | Color-based cast trigger | Chandra, K'rrik, Aragorn |
+| `death_trigger` | Creature death trigger | Syr Konrad, Teysa |
+| `graveyard_from_play` | Permanent to graveyard | Meren |
+| `graveyard_payoff` | Cast/return from graveyard | Karador, Muldrotha |
+| `combat_damage_to_player` | Combat damage to player | Voltron payoffs |
+| `sacrifice_payoff` | Sacrifice outlet/payoff | Prossh, Korvold |
+| `discard_outlet` | Discard outlet | Anje, Waste Not |
+| `madness_payoff` | Madness | Anje Falkenrath |
+| `landfall` | Landfall | Omnath variants |
+| `counter_placement` | +1/+1 counter placement | Atraxa, Ezuri |
+| `counter_doubler` | Counter doubling | Vorinclex |
+| `proliferate_matters` | Proliferate | Atraxa |
+| `lifegain_trigger` | Life gain trigger | Oloro, Dina |
+| `draw_trigger` | Draw trigger | Niv-Mizzet |
+| `token_trigger` | Token creation trigger | Brudiclad |
+| `trigger_doubling` | Trigger doubling | Isshin, Wulfgar |
+| `keyword_lord` | Keyword grant to creatures | Odric, Akroma |
+| `cycling_trigger` | Cycling trigger | Gavi, Ominous Seas |
+| `second_spell` | Second spell matters | Veyran |
+| `punisher` | Damage/drain each opponent | Mogis, Nekusar |
+| `weenie_matters` | Low-power creature payoff | Edric |
+| `extra_combat` | Extra combat phase | Aurelia, Moraug, Raiyuu |
+| `equipment_matters` | Equipment ETB/attack/static | Kemba, Sram, Wyleth, Akiri |
+| `opponent_restriction` | Opponents can't (stax) | Narset, Dragonlord Dromoka |
+| `activated_restriction` | Activated abilities locked (stax) | Linvala, Karn |
+| `tax_effect` | Opponents' spells cost more | Grand Arbiter |
+| `enters_tapped_opponent` | Opponents' permanents enter tapped | Thalia Heretic Cathar |
+| `monarch` | Monarch mechanic | Queen Marchesa, Aragorn |
+| `initiative` | Initiative mechanic | Rilsa Rael, Safana |
+| `goad` | Goad | Karazikar, Marisi, Kitt Kanto |
+| `forced_attack` | Attacks each combat if able | Thantis, Zurgo, Toski |
+| `poison_infect` | Infect / toxic / poison counter | Skithiryx, Fynn, Ixhel |
+| `group_hug` | Draw/resource grants to all players | Kami, Kwain, Kynaios and Tiro |
+
+### Spot-check with `eval_commander.py`
+
+```bash
+# Named lookup (partial, case-insensitive):
+docker compose run --rm ingest python scripts/eval_commander.py "Anje"
+docker compose run --rm ingest python scripts/eval_commander.py "Syr Konrad, the Grim"
+
+# Coverage summary + pattern frequency histogram:
+docker compose run --rm ingest python scripts/eval_commander.py --stats
+
+# Gap analysis — commanders with zero signals:
+docker compose run --rm ingest python scripts/eval_commander.py --no-signals
+
+# All commanders matching a specific pattern_key:
+docker compose run --rm ingest python scripts/eval_commander.py --pattern goad
+docker compose run --rm ingest python scripts/eval_commander.py --pattern goad --limit 0  # remove 50-result cap
+```
+
+### Adding a new pattern
+
+Add one entry to `ORACLE_PATTERNS` in `decompose_commanders.py`:
+
+```python
+("pattern_key",
+ "Human-readable label",
+ re.compile(r"your regex here", re.I),
+ 0.9),   # score: 1.0 exact keyword, 0.9 strong trigger, 0.8 broad/static
+```
+
+Then re-run `decompose_commanders.py` and spot-check with `eval_commander.py --pattern <key>`.  No other files require modification.
