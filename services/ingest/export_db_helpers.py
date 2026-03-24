@@ -282,7 +282,7 @@ def _load_synergy_pairs(
             if include_effect_peer and EFFECT_PEER_SAMPLE > 0:
                 cur.execute("""
                     SELECT card_a::text, card_b::text,
-                           metadata->>'trigger_event' || '/' || metadata->>'effect_class' AS bucket
+                           (metadata->>'trigger_event') || '/' || (metadata->>'effect_class') AS bucket
                     FROM synergy_edges TABLESAMPLE SYSTEM(10)
                     WHERE score_type = 'effect_peer'
                 """)
