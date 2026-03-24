@@ -144,6 +144,38 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      re.compile(r"when(?:ever)?\s+you cast (?:a |an )?artifact", re.I),
      0.9),
 
+    # Spell cast — historic (artifacts, legendaries, and Sagas).
+    # Distinct from cast_trigger_artifact: historic includes legendary
+    # permanents and Sagas.  Key commanders: Jhoira, Teshar, Sarah Jane Smith,
+    # The Sixth Doctor, Moira and Teshar, Glóin, Alistair, Surtr, Basim.
+    # (~10 commanders with the "whenever you cast a historic spell" trigger)
+    ("cast_trigger_historic",
+     "Historic spell cast trigger",
+     re.compile(r"when(?:ever)?\s+you cast (?:a |an )?historic", re.I),
+     0.9),
+
+    # Equipment matters — commander cares about Equipment being attached,
+    # entering, or equipped creatures attacking.  Covers:
+    #   "equipped creature" — attack triggers (Akiri, Syr Gwyn, Nahiri, Cloud)
+    #   "Equipment you control" — ETB / static (Barret, Chishiro, Kemba, Balan)
+    #   "Equipment attached" — counter-per-equipment (Wyleth, Kemba Regent)
+    #   "Equipment spell" — cost-reduction (Danitha Capashen, Sokka, Cid)
+    #   "target Equipment" — attach-on-attack (Ardenn, Raubahn, Amy Rose)
+    #   "Aura or Equipment" / "Aura, Equipment" — broad (Sram, Galea, Tiana)
+    # (~60+ commanders including Kemba, Sram, Galea, Wyleth, Balan, Bruenor)
+    ("equipment_matters",
+     "Equipment matters",
+     re.compile(
+         r"equipped creature"
+         r"|equipment (?:you control|attached|spell|token|are)"
+         r"|target equipment"
+         r"|aura or equipment"
+         r"|aura,?\s+and equipment"
+         r"|aura,\s+equipment",
+         re.I,
+     ),
+     0.8),
+
     # Death / dies trigger
     ("death_trigger",
      "Death trigger",
