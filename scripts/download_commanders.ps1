@@ -4,16 +4,17 @@
 
 .DESCRIPTION
     Fetches mtg_commanders.pt from the API and saves it to ingest_cache/.
-    This artifact is used for Phase 3 commander-path BPR training and does
-    not require human decklists — positives are derived from pattern decomposition.
+    This artifact is used for Phases 3 and 4 of the compositional training
+    path — positives are derived from synergy_edges (no human decklists needed).
 
     Prerequisites (run on the Docker host before downloading):
-        docker compose run --rm ingest python scripts/decompose_commanders.py
         docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
     Train with:
-        .\scripts\run.ps1 -Mode train -Phase 3 -TrainingPath commander `
-            -Dataset .\ingest_cache\mtg_commanders.pt
+        .\scripts\run.ps1 -Train 3
+        .\scripts\run.ps1 -Train 4
+    For Phases 1/2, download the main dataset artifact instead:
+        .\scripts\download_dataset.ps1
 
 .PARAMETER DatasetUrl
     Override the download URL.  Defaults to https://<API_HOST>/dataset/commanders/download

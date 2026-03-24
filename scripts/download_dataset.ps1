@@ -9,7 +9,9 @@
 
     The trainer uses it with:
         .\scripts\run.ps1 -Train 1
-        .\scripts\run.ps1 -Train 1 -TrainingPath cooccurrence
+        .\scripts\run.ps1 -Train 2
+    For Phases 3/4 (compositional path), download the commanders artifact instead:
+        .\scripts\download_commanders.ps1
 
 .PARAMETER TrainingPath
     Which artifact to download: 'compositional' (default) or 'cooccurrence'.
