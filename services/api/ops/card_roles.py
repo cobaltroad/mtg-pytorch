@@ -15,6 +15,7 @@ tutor           — library search
 protection      — hexproof / indestructible / shroud / regenerate / recursion
 win_condition   — infect, alternate win cons, storm, combat finishers
 token           — creature/token generation
+aura_equipment  — the card is an Equipment or creature-targeting Aura
 combat_trick    — evasion / unblockable grants that help a creature connect
 discard_trigger — payoffs that fire when a card is discarded (Bone Miser, Waste Not)
 """
@@ -68,6 +69,11 @@ _ROLE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("protection", re.compile(r"\bregenerate\b", re.I), "regenerate"),
     ("protection", re.compile(r"return .{0,40} from (your |a )graveyard to .{0,20}(hand|battlefield)", re.I), "recursion"),
     ("protection", re.compile(r"(prevents? all damage|prevent that damage)", re.I), "damage_prevention"),
+
+    # aura_equipment — the card IS an equipment or an aura targeting creatures;
+    # these are the primary deckbuilding payload for voltron commanders.
+    ("aura_equipment",  re.compile(r"\bequip \{", re.I), "equipment"),
+    ("aura_equipment",  re.compile(r"\benchant (creature|permanent)", re.I), "aura"),
 
     # combat_trick — *grants* evasion to another creature; what you want when
     # your commander needs to connect to trigger its ability.  Patterns require
@@ -216,9 +222,13 @@ _ARCHETYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("spellslinger",    re.compile(r"whenever you cast (an instant|a sorcery|a noncreature spell)", re.I)),
     ("spellslinger",    re.compile(r"\bmagecraft\b|\bstorm\b", re.I)),
 
-    # Voltron / equipment
+    # Voltron / equipment — catches both cards that are equipment/auras and
+    # commanders whose payoff references being equipped/enchanted themselves.
     ("voltron",         re.compile(r"equipped creature gets?\b|\bequip \{", re.I)),
     ("voltron",         re.compile(r"whenever .{0,30}becomes? enchanted", re.I)),
+    ("voltron",         re.compile(r"(aura|equipment).{0,60}attached to (it|him|her)", re.I)),
+    ("voltron",         re.compile(r"for each (aura|equipment)", re.I)),
+    ("voltron",         re.compile(r"whenever .{0,40}attacks,.{0,60}(aura|equipment|equipped|enchanted)", re.I)),
 
     # Landfall
     ("landfall",        re.compile(r"\blandfall\b|whenever (a |one or more )?land.{0,20}enters", re.I)),
@@ -256,7 +266,7 @@ ARCHETYPE_ROLE_WEIGHTS: dict[str, dict[str, float]] = {
     "counters":      {"draw": 1.2, "protection": 1.3},
     "graveyard":     {"tutor": 1.3, "protection": 0.8},
     "spellslinger":  {"draw": 1.5, "tutor": 1.3, "removal": 0.8},
-    "voltron":       {"protection": 2.0, "win_condition": 1.5},
+    "voltron":       {"aura_equipment": 2.0, "combat_trick": 1.5, "protection": 1.3},
     "landfall":      {"ramp": 1.4},
     "lifegain":      {"win_condition": 1.3},
     # Combat-damage commanders need the commander itself to connect — evasion
