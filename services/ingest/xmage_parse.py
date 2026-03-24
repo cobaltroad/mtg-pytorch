@@ -171,24 +171,72 @@ _SPELLCAST_FILTER_RE = re.compile(r"StaticFilters\.(FILTER_SPELL_\w+)")
 # card_abilities.  Provides a secondary signal for what the ability does.
 
 EFFECT_CLASS_TO_EFFECT: dict[str, str] = {
+    # ── Draw ──────────────────────────────────────────────────────────────────
     "DrawCardSourceControllerEffect":   "draw",
     "DrawCardsControllerEffect":        "draw",
     "DrawCardTargetEffect":             "draw",
+    "DrawCardsTargetEffect":            "draw",
+
+    # ── Graveyard recursion — return to hand (Eternal Witness, Archaeomancer) ─
+    "ReturnFromGraveyardToHandTargetEffect":         "regrowth",
+    "ReturnFromGraveyardToHandAllEffect":            "regrowth",
+    "ReturnFromGraveyardToHandChooseEffect":         "regrowth",
+
+    # ── Graveyard recursion — return to battlefield (Reveillark, Sun Titan) ──
+    "ReturnFromGraveyardToBattlefieldTargetEffect":                         "reanimate",
+    "ReturnFromGraveyardToBattlefieldAllEffect":                            "reanimate",
+    "ReturnFromGraveyardToBattlefieldWithCounterTargetEffect":              "reanimate",
+    "ReturnFromGraveyardToBattlefieldUnderOwnerControlTargetEffect":        "reanimate",
+
+    # ── Lifegain ──────────────────────────────────────────────────────────────
     "GainLifeEffect":                   "lifegain",
+    "GainLifeControllerEffect":         "lifegain",
+    "GainLifeAllEffect":                "lifegain",
+
+    # ── Life drain (Gray Merchant, Kokusho) ───────────────────────────────────
+    "LoseLifeOpponentsEffect":          "drain",
+    "LoseLifeTargetEffect":             "drain",
+
+    # ── Tokens ────────────────────────────────────────────────────────────────
     "CreateTokenEffect":                "create_token",
+    "CreateTokenCopyTargetEffect":      "create_token",
+    "CreateTokenCopySourceEffect":      "create_token",
+
+    # ── Counters ──────────────────────────────────────────────────────────────
     "AddCountersSourceEffect":          "counter_add",
     "AddCountersTargetEffect":          "counter_add",
+    "AddCountersAllEffect":             "counter_add",
+
+    # ── Removal ───────────────────────────────────────────────────────────────
     "DestroyTargetEffect":              "destroy",
+    "DestroyAllEffect":                 "wrath",
     "ExileTargetEffect":                "exile",
+    "ExileAllEffect":                   "wrath",
+
+    # ── Bounce ────────────────────────────────────────────────────────────────
     "ReturnToHandTargetEffect":         "bounce",
+    "ReturnToHandAllEffect":            "bounce",
+
+    # ── Damage ────────────────────────────────────────────────────────────────
     "DamageTargetEffect":               "damage",
     "DamagePlayersEffect":              "damage",
+    "DamageAllEffect":                  "damage",
+
+    # ── Pump ──────────────────────────────────────────────────────────────────
     "BoostControlledEffect":            "pump_controlled",
     "BoostSourceEffect":                "self_pump",
     "BoostTargetEffect":                "target_pump",
+
+    # ── Search / tutor ────────────────────────────────────────────────────────
     "SearchLibraryPutInHandEffect":     "tutor",
-    "SearchLibraryPutInPlayEffect":     "tutor",
+    "SearchLibraryPutInPlayEffect":     "reanimate",   # "put onto battlefield" = reanimate bucket
+    "BasicLandSearchEffect":            "ramp",
+    "LandSearchEffect":                 "ramp",
+
+    # ── Counterspell ──────────────────────────────────────────────────────────
     "CounterTargetEffect":              "counter_spell",
+
+    # ── Mill ──────────────────────────────────────────────────────────────────
     "MillCardsTargetEffect":            "mill",
     "MillCardsControllerEffect":        "mill",
 }
