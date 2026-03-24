@@ -33,11 +33,10 @@ TRIBAL_MEMBER_LIMIT = int(os.environ.get("TRIBAL_MEMBER_LIMIT", "50_000"))
 COMMANDER_VALUE_LIMIT = int(os.environ.get("COMMANDER_VALUE_LIMIT", "500_000"))
 """Maximum commander_value edges per trigger_event."""
 
-from synergy import (  # noqa: E402
-    TRIBES,
-    ALL_TYPES_SQL,
-    COMMANDER_VALUE_PRODUCER_MAP,
-    COMMANDER_VALUE_EDGE_SCORES,
+from synergy import TRIBES, ALL_TYPES_SQL  # noqa: E402
+from synergy.commander_value import (  # noqa: E402
+    PRODUCER_MAP as COMMANDER_VALUE_PRODUCER_MAP,
+    EDGE_SCORES as COMMANDER_VALUE_EDGE_SCORES,
 )
 
 

@@ -184,6 +184,7 @@ def main() -> None:
     a_idx, b_idx, labels = _load_synergy_pairs(
         id_to_idx, normed,
         ability_score_type="xmage_ability_trigger",
+        include_effect_peer=True,
     )
 
     # 4. Assemble and save

@@ -26,7 +26,7 @@ mtg-pytorch/
 │   │       ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
 │   │       ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
 │   │       ├── tag.py          #   embed_cards + tag_abilities (3 passes)
-│   │       ├── dataset.py      #   compute_synergy + compute_synergy_xmage
+│   │       ├── dataset.py      #   compute_synergy + compute_synergy_xmage + compute_effect_peer_synergy
 │   │       ├── commander.py    #   compute_commander_value_synergy + compute_tribal_typeline_synergy
 │   │       └── export.py       #   Thin wrappers for all export sub-stages
 │   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
@@ -73,20 +73,22 @@ docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan
 docker compose run --rm ingest python pipeline.py --stage tag_abilities_xmage      # supplement with XMage source parsing (requires mage/ mount)
 docker compose run --rm ingest python pipeline.py --stage compute_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_synergy_xmage
+docker compose run --rm ingest python pipeline.py --stage compute_effect_peer_synergy  # requires tag_abilities_xmage
 docker compose run --rm ingest python pipeline.py --stage export_dataset
 
 # Commander artifact pipeline (required before export_dataset_commanders):
 # These stages are NOT part of process — run them explicitly after process
 # before building mtg_commanders.pt.
+
+# Step 1: decompose commanders → writes card_abilities rows (source='decompose')
+#   required by compute_synergy to build producer→commander ability_trigger edges.
+#   Must run BEFORE compute_synergy when building the commander artifact.
+docker compose run --rm ingest python scripts/decompose_commanders.py
+
+# Step 2: commander-value and tribal synergy edges
 docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
-
-# Research: decompose all ~3000 commanders into structured synergy signals.
-# Read-only — queries the DB and XMage source tree, writes JSON to the ingest_cache volume.
-# Two signal sources per commander: oracle text regex patterns + XMage ability/effect classes.
-# Output: /data/commander_decomposition.json
-docker compose run --rm ingest python scripts/decompose_commanders.py
 
 # Spot-check the decomposition output with eval_commander.py:
 docker compose run --rm ingest python scripts/eval_commander.py "Anje Falkenrath"   # named lookup (partial match)
@@ -574,7 +576,9 @@ Cards with no recognised `StaticFilters` argument keep `trigger_event='spell_cas
 
 ## Commander decomposition (`scripts/decompose_commanders.py`)
 
-A standalone read-only research script that enumerates all ~3,000 legal commanders and decomposes each into structured synergy signals.  Run after the pipeline has been processed (requires populated `cards` and `card_abilities` tables and the `mage/` XMage mount).
+Decomposes all ~3,000 legal commanders into structured synergy signals.  **Required pipeline step** — writes `card_abilities` rows with `source='decompose'` that `compute_synergy` needs to build producer→commander `ability_trigger` edges.  Without it, commanders have zero edges and are skipped by `export_dataset_commanders`.  Also writes a JSON file for spot-checking and gap analysis.
+
+Run after `process` (requires populated `cards` and `card_abilities` tables and the `mage/` XMage mount), and before `compute_commander_value_synergy`.
 
 ```bash
 docker compose run --rm ingest python scripts/decompose_commanders.py

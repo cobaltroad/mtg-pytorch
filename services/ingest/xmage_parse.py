@@ -134,7 +134,7 @@ ABILITY_CLASS_TO_EVENT: dict[str, str] = {
     # These keyword ability classes live in mage.abilities.keyword and are
     # captured by the keyword branch of _IMPORT_RE.  No direct XMage class
     # exists for cast_creature_spell, enchantress, or sac_outlet — those rely
-    # on oracle-text pattern matching (synergy/events.py, synergy/deckbuilding.py).
+    # on oracle-text pattern matching (synergy/events.py, synergy/archetypes.py).
     "EvolveAbility":                                  "adapt_evolve",
     "AdaptAbility":                                   "adapt_evolve",
     "GraftAbility":                                   "adapt_evolve",

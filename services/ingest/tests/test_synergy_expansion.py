@@ -22,7 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from synergy.events import TRIGGER_PATTERNS as EVENTS_TRIGGERS, PRODUCER_MAP as EVENTS_PRODUCERS
-from synergy.deckbuilding import TRIGGER_PATTERNS as DECK_TRIGGERS, PRODUCER_MAP as DECK_PRODUCERS
+from synergy.archetypes import TRIGGER_PATTERNS as DECK_TRIGGERS, CARD_SYNERGY_MAP as DECK_PRODUCERS
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

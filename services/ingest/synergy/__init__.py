@@ -9,10 +9,12 @@ Sub-modules, each covering one broad theme:
 * :mod:`lifegain`         — four lifegain consumer patterns (``lifegain``,
                             ``lifegain_threshold``, ``lifegain_replacement``,
                             ``lifegain_total``) and their producer SQL fragments.
-* :mod:`deckbuilding`     — cross-archetype deckbuilding themes (equipment,
-                            legendary, graveyard, +1/+1 counters, artifacts,
-                            modified, aura, proliferate, skullclamp,
-                            play_from_exile, enchantress, adapt_evolve).
+* :mod:`archetypes`       — commander-agnostic archetype engines (skullclamp
+                            mini-combo, graveyard reanimator/fill, artifact
+                            matters, modified, aura/enchantress, play_from_exile /
+                            cascade).  Written as ``score_type='card_synergy'``
+                            so they flow into the dataset artifact, not the
+                            commander artifact.
 * :mod:`tribal`           — dynamically generated tribal patterns for all tribes
                             in :data:`TRIBES`, including Zombie/Angel cross-synergy
                             overrides.
@@ -51,13 +53,14 @@ Sub-modules, each covering one broad theme:
 
 ``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`,
 :data:`TRIBES`, :data:`ROLE_PATTERNS`, :data:`LAND_ROLE_PATTERNS`, and
-:data:`COMMANDER_VALUE_EDGE_SCORES` from this package — no other changes to
-the pipeline are needed when a sub-module is extended.
+:data:`CARD_SYNERGY_MAP` from this package — no other changes to the pipeline
+are needed when a sub-module is extended.  Commander-specific maps
+(``commander_value``) are imported directly by ``stages/commander.py``.
 """
 
 from __future__ import annotations
 
-from . import commander_value, commander_mechanics, deckbuilding, events, lifegain, roles, tribal, utility, xmage
+from . import archetypes, commander_value, commander_mechanics, events, lifegain, roles, tribal, utility, xmage
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
@@ -66,7 +69,7 @@ ALL_TYPES_SQL = tribal.ALL_TYPES_SQL
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     *events.TRIGGER_PATTERNS,
     *lifegain.TRIGGER_PATTERNS,
-    *deckbuilding.TRIGGER_PATTERNS,
+    *archetypes.TRIGGER_PATTERNS,
     *tribal.TRIGGER_PATTERNS,
     *utility.TRIGGER_PATTERNS,
     *commander_value.TRIGGER_PATTERNS,
@@ -82,7 +85,7 @@ PRODUCER_MAP: dict[str, str] = {
     # any pattern keys that overlap, e.g. equipment_matters, proliferate_matters).
     **events.PRODUCER_MAP,
     **lifegain.PRODUCER_MAP,
-    **deckbuilding.PRODUCER_MAP,
+    # archetypes uses CARD_SYNERGY_MAP / score_type='card_synergy' — not merged here.
     **tribal.PRODUCER_MAP,
     **utility.PRODUCER_MAP,
     # commander_value producers are NOT merged into PRODUCER_MAP — they use a
@@ -93,15 +96,11 @@ PRODUCER_MAP: dict[str, str] = {
     # card_abilities so the dedicated stage can cross-join against them.
 }
 
+CARD_SYNERGY_MAP: dict[str, str] = archetypes.CARD_SYNERGY_MAP
+
 ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
 LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
 is_land_card = roles.is_land_card
-
-# Per-trigger-event scores for commander_value edges (used by the dedicated
-# compute_commander_value_synergy() pipeline stage).
-COMMANDER_VALUE_TRIGGER_PATTERNS: list[tuple[str, str, str]] = commander_value.TRIGGER_PATTERNS
-COMMANDER_VALUE_PRODUCER_MAP: dict[str, str] = commander_value.PRODUCER_MAP
-COMMANDER_VALUE_EDGE_SCORES: dict[str, float] = commander_value.EDGE_SCORES
 
 # Compositional training path: XMage class name → producer SQL.
 # Used by compute_synergy_xmage() to build score_type='xmage_ability_trigger'
@@ -121,9 +120,7 @@ __all__ = [
     "ROLE_PATTERNS",
     "LAND_ROLE_PATTERNS",
     "is_land_card",
-    "COMMANDER_VALUE_TRIGGER_PATTERNS",
-    "COMMANDER_VALUE_PRODUCER_MAP",
-    "COMMANDER_VALUE_EDGE_SCORES",
     "XMAGE_PRODUCER_MAP",
     "SPELLCAST_TRIGGER_PRODUCER_MAP",
+    "CARD_SYNERGY_MAP",
 ]
