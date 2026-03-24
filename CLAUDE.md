@@ -332,6 +332,7 @@ Two parallel training paths run side by side (see #71):
 |------|----------|-------------------|
 | Co-occurrence | `mtg_dataset.pt` | `phase*` |
 | Compositional | `mtg_dataset_compositional.pt` | `comp_phase*` |
+| Commander | `mtg_commanders.pt` | `cmd_phase*` |
 
 The compositional artifact is produced by a separate export stage:
 
@@ -357,6 +358,40 @@ Phase 1 of the compositional path uses **functional equivalence pairs** from
 paired when they share the same ability role (e.g. `ramp`, `removal`), color
 identity bucket, and CMC bracket — so Llanowar Elves and Elvish Mystic are
 positive pairs, not just reprints of the same oracle text.
+
+### Commander training path (`mtg_commanders.pt`)
+
+The commander artifact enables Phase 3 BPR training **without human decklists**,
+avoiding the representation-collapse failure mode where all commanders converge
+toward an indistinct high-similarity cluster because they all need the same
+generic roles (draw, ramp, removal).
+
+**How it works:** `export_dataset_commanders.py` reads directly from `synergy_edges`
+— no JSON intermediate required.  For each legal commander two edge types contribute
+positives: `ability_trigger` edges (producers of the commander's trigger → commander)
+and `commander_value` edges (commander → payoff cards).  Color-identity legality is
+re-applied strictly (⊆) in Python.  The result is a per-commander positive set that
+is genuinely distinct from other commanders', giving BPR a meaningful gradient.
+
+```bash
+# Requires compute_synergy and compute_commander_value_synergy to have been run.
+docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
+
+# Or call directly:
+docker compose run --rm ingest python export_dataset_commanders.py
+```
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `COMMANDERS_OUTPUT` | `/data/mtg_commanders.pt` | Output artifact path |
+| `COMMANDERS_MIN_POS` | `10` | Skip commanders with fewer producer cards |
+| `COMMANDERS_MAX_POS` | `300` | Cap per-commander positives (shuffle + truncate) |
+
+The artifact schema is identical to `mtg_dataset.pt` for the `decks` key
+(`commander_idx`, `card_idxs`, `color_identity`, `legal_neg_indices`, `archetype`)
+so the existing `DeckDataset` and `train_deck_phase` in `train.py` work unchanged.
+The `archetype` field contains the top-5 most frequent `trigger_event` values from
+the commander's edges (e.g. `"creature_etb, death_trigger, tribal_zombie_typeline"`).
 
 ---
 

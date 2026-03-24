@@ -41,6 +41,14 @@ Sub-modules, each covering one broad theme:
                             Stored as ``ability_type = 'role'`` rows in
                             ``card_abilities``.
 
+* :mod:`commander_mechanics` — producer SQL for commander-specific
+                            pattern keys (``goad``, ``extra_combat``, ``monarch``,
+                            ``initiative``, ``forced_attack``, ``poison_infect``,
+                            ``group_hug``, ``second_spell``, etc.).  Merged into
+                            :data:`PRODUCER_MAP` so ``compute_synergy`` builds
+                            edges for commanders tagged by ``decompose_commanders.py``.
+                            Also used by that script directly for gap analysis.
+
 ``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`,
 :data:`TRIBES`, :data:`ROLE_PATTERNS`, :data:`LAND_ROLE_PATTERNS`, and
 :data:`COMMANDER_VALUE_EDGE_SCORES` from this package — no other changes to
@@ -49,7 +57,7 @@ the pipeline are needed when a sub-module is extended.
 
 from __future__ import annotations
 
-from . import commander_value, deckbuilding, events, lifegain, roles, tribal, utility, xmage
+from . import commander_value, commander_mechanics, deckbuilding, events, lifegain, roles, tribal, utility, xmage
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
@@ -65,6 +73,13 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
 ]
 
 PRODUCER_MAP: dict[str, str] = {
+    # Commander-specific mechanics (goad, extra_combat, monarch, etc.) — SQL
+    # lives in commander_mechanics.py, which is also used by
+    # decompose_commanders.py for gap analysis.  Merged first so that the
+    # existing sub-modules below can override any key they handle more precisely.
+    **commander_mechanics.PATTERN_KEY_TO_PRODUCER_SQL,
+    # Core synergy sub-modules (take precedence over commander mechanics for
+    # any pattern keys that overlap, e.g. equipment_matters, proliferate_matters).
     **events.PRODUCER_MAP,
     **lifegain.PRODUCER_MAP,
     **deckbuilding.PRODUCER_MAP,

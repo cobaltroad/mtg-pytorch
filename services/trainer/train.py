@@ -64,6 +64,21 @@ except ImportError:
     WANDB_ENABLED = False
 
 
+def _wandb_log(data: dict) -> None:
+    """wandb.log with network-error tolerance.
+
+    W&B uses a local socket to its service process.  On Windows a transient
+    network event (VPN drop, sleep/resume, WinError 64) can break that socket
+    mid-run and raise ConnectionResetError, killing training.  Swallow those
+    errors so the training loop continues; the run will be incomplete in the
+    W&B UI but the checkpoint is unaffected.
+    """
+    try:
+        wandb.log(data)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("wandb.log failed (network error?) — skipping: %s", exc)
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 
@@ -355,7 +370,7 @@ def train_contrastive_phase(
         )
 
         if WANDB_ENABLED:
-            wandb.log(
+            _wandb_log(
                 {
                     "phase": 1,
                     "epoch": epoch + 1,
@@ -444,7 +459,7 @@ def train_functional_pairs_phase(
         )
 
         if WANDB_ENABLED:
-            wandb.log(
+            _wandb_log(
                 {
                     "phase": 1,
                     "epoch": epoch + 1,
@@ -556,7 +571,7 @@ def train_synergy_phase(
         )
 
         if WANDB_ENABLED:
-            wandb.log(
+            _wandb_log(
                 {
                     "phase": 2,
                     "epoch": epoch + 1,
@@ -585,6 +600,7 @@ def train_deck_phase(
     batch_size: int = 32,
     archetype_weight: dict[str, float] | None = None,
     checkpoint_prefix: str = "phase",
+    encoder_lr_scale: float = 1.0,
 ):
     """Phase 3: BPR ranking loss on human Commander decklists.
 
@@ -598,11 +614,23 @@ def train_deck_phase(
     archetype_weight: optional dict mapping archetype label → loss multiplier
         (e.g. {"combo": 2.0, "tokens": 1.5}).  Decks whose archetype is not
         in the dict default to a weight of 1.0.  Pass None to disable.
+
+    encoder_lr_scale: multiplier on lr for all encoder parameters.  Set below
+        1.0 for the compositional path where the dataset is much larger than
+        the co-occurrence path (~thousands of role-matched commanders vs ~171
+        human decklists) to prevent the Phase 2 geometry from collapsing.
+        Default 1.0 preserves existing co-occurrence path behaviour.
     """
     all_ids = list(embeddings.keys())
     all_embs = torch.from_numpy(np.stack([embeddings[k] for k in all_ids]))  # (N, D)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    effective_lr = lr * encoder_lr_scale
+    if encoder_lr_scale < 1.0:
+        log.info(
+            "Phase 3: encoder_lr_scale=%.2f → effective lr=%.2e (base lr=%.2e)",
+            encoder_lr_scale, effective_lr, lr,
+        )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
     all_embs = all_embs.to(device)
@@ -672,7 +700,7 @@ def train_deck_phase(
         )
 
         if WANDB_ENABLED:
-            wandb.log(
+            _wandb_log(
                 {
                     "phase": 3,
                     "epoch": epoch + 1,
@@ -876,7 +904,7 @@ def train_synergy_positions_phase(
         )
 
         if WANDB_ENABLED:
-            wandb.log(
+            _wandb_log(
                 {
                     "phase": 4,
                     "epoch": epoch + 1,
@@ -1140,7 +1168,7 @@ def train_deck_constructor_phase(
         )
 
         if WANDB_ENABLED:
-            wandb.log(
+            _wandb_log(
                 {
                     "phase": 4,
                     "epoch": epoch + 1,
@@ -1676,11 +1704,14 @@ def main():
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
 
-        decks = (
-            load_decks_from_artifact(_artifact)
-            if _artifact
-            else path_mod.load_decks(embeddings)
-        )
+        # Compositional Phase 3 derives positives from oracle text at runtime
+        # (role-matching via DB), so it always calls path_mod.load_decks()
+        # even when an artifact is available.  The artifact is still used for
+        # embeddings above.  Co-occurrence path uses the pre-built decks field.
+        if _artifact and args.training_path != "compositional":
+            decks = load_decks_from_artifact(_artifact)
+        else:
+            decks = path_mod.load_decks(embeddings)
         if not decks:
             log.error("No decks found -- run import_decklists.py first.")
             return
@@ -1714,6 +1745,13 @@ def main():
             if archetype_weight:
                 log.info("Archetype weights: %s", archetype_weight)
 
+        # Co-occurrence Phase 3 has ~171 decks and was tuned without encoder LR
+        # scaling — preserve that behaviour.  Compositional Phase 3 generates
+        # thousands of role-matched "decks", so the encoder gets 10–50× more
+        # gradient updates per epoch and needs the same protection Phase 4 uses.
+        p3_encoder_lr_scale = (
+            args.encoder_lr_scale if args.training_path == "compositional" else 1.0
+        )
         train_deck_phase(
             model,
             dataset,
@@ -1723,6 +1761,7 @@ def main():
             args.batch_size,
             archetype_weight=archetype_weight,
             checkpoint_prefix=pfx,
+            encoder_lr_scale=p3_encoder_lr_scale,
         )
 
     elif args.phase == 4:

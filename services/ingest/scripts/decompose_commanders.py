@@ -742,6 +742,62 @@ def _coverage_report(entries: list[dict]) -> None:
     log.info("─" * 60)
 
 
+# ── DB write: card_abilities ──────────────────────────────────────────────────
+
+def _write_card_abilities(entries: list[dict]) -> None:
+    """Upsert card_abilities rows for each commander signal.
+
+    Uses ``trigger_event = pattern_key`` so that ``compute_synergy`` in
+    ``pipeline.py`` can cross-join these commanders against the producer SQL
+    in ``synergy/commander_mechanics.py:PATTERN_KEY_TO_PRODUCER_SQL``
+    without any additional pattern duplication.
+
+    Deduplicates by (card_id, pattern_key) — oracle_text signals take
+    precedence over xmage for the same key.  ``source = 'decompose'``
+    distinguishes these rows from ``tag_abilities`` ('pattern') and
+    ``tag_abilities_xmage`` ('xmage').
+    """
+    # Deduplicate: one row per (card_id, pattern_key); prefer oracle_text
+    rows: dict[tuple[str, str], dict] = {}
+    for entry in entries:
+        card_id = entry["id"]
+        for sig in entry.get("signals", []):
+            key = (card_id, sig["pattern_key"])
+            existing = rows.get(key)
+            if existing is None or sig["source"] == "oracle_text":
+                rows[key] = {
+                    "card_id":      card_id,
+                    "ability_name": sig["label"],
+                    "trigger_event": sig["pattern_key"],
+                    "raw_text":     sig.get("matched_phrase") or sig.get("ability_class") or "",
+                }
+
+    if not rows:
+        log.info("No signals to write to card_abilities.")
+        return
+
+    inserts = list(rows.values())
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor() as cur:
+            cur.executemany("""
+                INSERT INTO card_abilities
+                    (card_id, ability_type, ability_name, trigger_event, source, raw_text)
+                VALUES
+                    (%(card_id)s::uuid, 'triggered', %(ability_name)s,
+                     %(trigger_event)s, 'decompose', %(raw_text)s)
+                ON CONFLICT (card_id, ability_type, ability_name, effect_class)
+                DO UPDATE SET
+                    trigger_event = EXCLUDED.trigger_event,
+                    raw_text      = EXCLUDED.raw_text,
+                    source        = EXCLUDED.source
+            """, inserts)
+        conn.commit()
+        log.info("Upserted %d card_abilities rows (source='decompose')", len(inserts))
+    finally:
+        conn.close()
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -793,6 +849,9 @@ def main() -> None:
     with args.out.open("w", encoding="utf-8") as fh:
         json.dump(entries, fh, indent=2, ensure_ascii=False)
     log.info("Written: %s (%d entries)", args.out, len(entries))
+
+    # Upsert card_abilities rows so compute_synergy can build producer→commander edges
+    _write_card_abilities(entries)
 
     # Coverage report
     _coverage_report(entries)

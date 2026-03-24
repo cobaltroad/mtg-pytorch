@@ -34,6 +34,8 @@ DATASET_PATH      = Path(os.environ.get("DATASET_PATH",      "/data/mtg_dataset.
 DATASET_META_PATH = Path(os.environ.get("DATASET_META_PATH", "/data/mtg_dataset.json"))
 DATASET_COMP_PATH      = Path(os.environ.get("DATASET_COMP_PATH",      "/data/mtg_dataset_compositional.pt"))
 DATASET_COMP_META_PATH = Path(os.environ.get("DATASET_COMP_META_PATH", "/data/mtg_dataset_compositional.json"))
+DATASET_CMD_PATH       = Path(os.environ.get("DATASET_CMD_PATH",       "/data/mtg_commanders.pt"))
+DATASET_CMD_META_PATH  = Path(os.environ.get("DATASET_CMD_META_PATH",  "/data/mtg_commanders.json"))
 DECK_SAVE_DIR     = Path(os.environ.get("DECK_SAVE_DIR",     "/app/generated_decks"))
 
 app = FastAPI(
@@ -519,7 +521,7 @@ async def dataset_info():
     if not DATASET_META_PATH.exists():
         raise HTTPException(
             404,
-            "No training dataset available — run the export_dataset pipeline stage first",
+            "No training dataset available — run the export_dataset_99 pipeline stage first",
         )
     meta = json.loads(DATASET_META_PATH.read_text())
     size_bytes = DATASET_PATH.stat().st_size if DATASET_PATH.exists() else 0
@@ -537,7 +539,7 @@ async def dataset_download():
     if not DATASET_PATH.exists():
         raise HTTPException(
             404,
-            "No training dataset available — run the export_dataset pipeline stage first",
+            "No training dataset available — run the export_dataset_99 pipeline stage first",
         )
     return FileResponse(
         DATASET_PATH,
@@ -553,7 +555,7 @@ async def dataset_compositional_info():
         raise HTTPException(
             404,
             "No compositional dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional",
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_99_compositional",
         )
     meta = json.loads(DATASET_COMP_META_PATH.read_text())
     size_bytes = DATASET_COMP_PATH.stat().st_size if DATASET_COMP_PATH.exists() else 0
@@ -571,10 +573,44 @@ async def dataset_compositional_download():
         raise HTTPException(
             404,
             "No compositional dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional",
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_99_compositional",
         )
     return FileResponse(
         DATASET_COMP_PATH,
         media_type="application/octet-stream",
         filename="mtg_dataset_compositional.pt",
+    )
+
+
+@app.get("/dataset/commanders/info")
+async def dataset_commanders_info():
+    """Return metadata about the commander training artifact (no auth required)."""
+    if not DATASET_CMD_META_PATH.exists():
+        raise HTTPException(
+            404,
+            "No commander dataset available — run: "
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders",
+        )
+    meta = json.loads(DATASET_CMD_META_PATH.read_text())
+    size_bytes = DATASET_CMD_PATH.stat().st_size if DATASET_CMD_PATH.exists() else 0
+    return {**meta, "size_bytes": size_bytes}
+
+
+@app.get("/dataset/commanders/download")
+async def dataset_commanders_download():
+    """Stream the commander training artifact to the caller (no auth required).
+
+    Contains per-commander synthetic decks derived from pattern decomposition —
+    use this for Phase 3 BPR training without human decklists.
+    """
+    if not DATASET_CMD_PATH.exists():
+        raise HTTPException(
+            404,
+            "No commander dataset available — run: "
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders",
+        )
+    return FileResponse(
+        DATASET_CMD_PATH,
+        media_type="application/octet-stream",
+        filename="mtg_commanders.pt",
     )

@@ -15,7 +15,7 @@ Run process only:   python pipeline.py --stage process
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan], compute_synergy,
   compute_commander_value_synergy, compute_tribal_typeline_synergy,
-  export_dataset, export_dataset_compositional
+  export_dataset_99, export_dataset_99_compositional
 
 Data sources
 ------------
@@ -1100,16 +1100,26 @@ async def import_spellbook_stage() -> None:
     await import_spellbook.main()
 
 
-def export_dataset_stage() -> None:
-    """Serialize the full training artifact to /data/mtg_dataset.pt."""
-    import export_dataset
-    export_dataset.main()
+def export_dataset_99_stage() -> None:
+    """Serialize the 99-card training artifact to /data/mtg_dataset.pt."""
+    import export_dataset_99
+    export_dataset_99.main()
 
 
-def export_dataset_compositional_stage() -> None:
-    """Serialize the compositional training artifact to /data/mtg_dataset_compositional.pt."""
-    import export_dataset_compositional
-    export_dataset_compositional.main()
+def export_dataset_99_compositional_stage() -> None:
+    """Serialize the compositional 99-card artifact to /data/mtg_dataset_compositional.pt."""
+    import export_dataset_99_compositional
+    export_dataset_99_compositional.main()
+
+
+def export_dataset_commanders_stage() -> None:
+    """Build the commander-decomposition artifact /data/mtg_commanders.pt.
+
+    Requires ``/data/commander_decomposition.json`` to exist — run
+    ``scripts/decompose_commanders.py`` first.
+    """
+    import export_dataset_commanders
+    export_dataset_commanders.main()
 
 
 async def composition_profile_stage() -> None:
@@ -1144,7 +1154,7 @@ async def process():
     await compute_synergy()
     await compute_commander_value_synergy()
     await compute_tribal_typeline_synergy()
-    export_dataset_stage()
+    export_dataset_99_stage()
     await composition_profile_stage()
 
 
@@ -1165,7 +1175,8 @@ if __name__ == "__main__":
             "compute_synergy", "compute_synergy_xmage",
             "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
-            "export_dataset", "export_dataset_compositional", "composition_profile",
+            "export_dataset_99", "export_dataset_99_compositional",
+            "export_dataset_commanders", "composition_profile",
         ],
         default=None,
         help=(
@@ -1173,6 +1184,7 @@ if __name__ == "__main__":
             "process: embed + tag + synergy + export + composition_profile. "
             "tag_abilities_xmage: supplement card_abilities from XMage source tree "
             "(requires XMAGE_DIR env var or --xmage-dir; mount mage/ read-only). "
+            "export_dataset_commanders: build mtg_commanders.pt from synergy_edges. "
             "composition_profile: rebuild deck_composition_profile.json "
             "(run after importing new decklists). "
             "Omit to run both."
@@ -1209,10 +1221,12 @@ if __name__ == "__main__":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":
         asyncio.run(compute_tribal_typeline_synergy())
-    elif args.stage == "export_dataset":
-        export_dataset_stage()
-    elif args.stage == "export_dataset_compositional":
-        export_dataset_compositional_stage()
+    elif args.stage == "export_dataset_99":
+        export_dataset_99_stage()
+    elif args.stage == "export_dataset_99_compositional":
+        export_dataset_99_compositional_stage()
+    elif args.stage == "export_dataset_commanders":
+        export_dataset_commanders_stage()
     elif args.stage == "composition_profile":
         asyncio.run(composition_profile_stage())
     else:
