@@ -325,6 +325,44 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
          re.I,
      ),
      0.9),
+
+    # ── Stax / hatebear patterns ──────────────────────────────────────────────
+
+    # Opponent restriction — blanket "opponents can't" clause.
+    # Covers: Narset Parter of Veils ("opponents can't draw more than one card"),
+    # Dragonlord Dromoka ("your opponents can't cast spells during your turn"),
+    # Jin-Gitaxias ("opponents can't cast spells during your draw step"), etc.
+    ("opponent_restriction",
+     "Opponent restriction",
+     re.compile(r"opponents? can't", re.I),
+     0.8),
+
+    # Activated ability restriction — prevents opponents from using activated
+    # abilities.  Covers: Linvala Keeper of Silence, Karn the Great Creator,
+    # Koma Cosmos Serpent, Drana and Linvala.
+    ("activated_restriction",
+     "Activated ability restriction",
+     re.compile(r"activated abilit.{0,40}can't be activated", re.I),
+     0.8),
+
+    # Tax effect — opponents' spells cost more.
+    # Covers: Grand Arbiter Augustin IV, Hinata Dawn-Crowned, Edgewall Innkeeper
+    # analogues that tax opponents.  Broad enough to catch "spells cost {1} more".
+    ("tax_effect",
+     "Tax effect",
+     re.compile(r"spells?.{0,30}opponents?.{0,30}cost.{0,20}more", re.I),
+     0.8),
+
+    # Opponents' permanents / lands enter tapped.
+    # Covers: Thalia Heretic Cathar, Reidane God of the Worthy,
+    # Archon of Emeria, Loran of the Third Path (lands only variant).
+    ("enters_tapped_opponent",
+     "Opponents' permanents enter tapped",
+     re.compile(
+         r"(?:permanents?|lands?).{0,40}(?:opponents?|other players?).{0,30}enter.{0,15}tapped",
+         re.I,
+     ),
+     0.8),
 ]
 
 # ── Trigger clause extraction ─────────────────────────────────────────────────
