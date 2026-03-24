@@ -16,8 +16,11 @@ protection      — hexproof / indestructible / shroud / regenerate / recursion
 win_condition   — infect, alternate win cons, storm, combat finishers
 token           — creature/token generation
 aura_equipment  — the card is an Equipment or creature-targeting Aura
-combat_trick    — evasion / unblockable grants that help a creature connect
+combat_trick    — evasion / unblockable / haste grants that help a creature connect
 discard_trigger — payoffs that fire when a card is discarded (Bone Miser, Waste Not)
+etb_trigger     — payoffs that fire when creatures enter the battlefield (Impact Tremors)
+wide_payoff     — scales with number of creatures / tokens on board (Bravado, Coat of Arms)
+sac_outlet      — lets you sacrifice creatures for value (Goblin Bombardment, Altar)
 """
 
 from __future__ import annotations
@@ -95,6 +98,22 @@ _ROLE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("combat_trick", re.compile(
         r"(equipped|enchanted) creature has protection from",
         re.I), "protection_grant"),
+    ("combat_trick", re.compile(
+        r"(creatures you control|it|they) (have|has|get|gets|gain|gains) .{0,20}haste",
+        re.I), "haste_grant"),
+
+    # etb_trigger — fires when creatures enter the battlefield under your control
+    ("etb_trigger",  re.compile(r"whenever (a |one or more )?creature(s)? (enters|enter) the battlefield (under your control|you control)", re.I), "etb_payoff"),
+    ("etb_trigger",  re.compile(r"whenever (a |one or more )?creature(s)? you control enters", re.I), "etb_payoff"),
+
+    # wide_payoff — value scales with creature / token count
+    ("wide_payoff",  re.compile(r"for each creature (you control|on the battlefield)", re.I), "count_matters"),
+    ("wide_payoff",  re.compile(r"equal to (the number of|x, where x is).{0,30}creature", re.I), "count_matters"),
+    ("wide_payoff",  re.compile(r"gets? \+\d+/\+\d+ for each", re.I), "anthem_scale"),
+
+    # sac_outlet — lets you sacrifice creatures as a cost or activated ability
+    ("sac_outlet",   re.compile(r"sacrifice (a |an )?(creature|token|goblin|elf|zombie|human)\s*[,:]", re.I), "sac_cost"),
+    ("sac_outlet",   re.compile(r"\{[^}]*\},? sacrifice (a|an)? (creature|token)", re.I), "sac_cost"),
 
     # discard_trigger — payoffs that fire when you (or a player) discards
     ("discard_trigger", re.compile(r"whenever you discard", re.I), "discard_payoff"),
@@ -261,7 +280,7 @@ _ARCHETYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 # How each archetype shifts role demand weights (multiplier on base frequency)
 ARCHETYPE_ROLE_WEIGHTS: dict[str, dict[str, float]] = {
-    "go_wide":       {"win_condition": 1.5, "protection": 1.3},
+    "go_wide":       {"etb_trigger": 2.0, "wide_payoff": 1.8, "token": 1.5, "combat_trick": 1.3, "sac_outlet": 1.3},
     "aristocrats":   {"win_condition": 1.5, "removal": 0.7},
     "counters":      {"draw": 1.2, "protection": 1.3},
     "graveyard":     {"tutor": 1.3, "protection": 0.8},
@@ -281,9 +300,9 @@ ARCHETYPE_ROLE_WEIGHTS: dict[str, dict[str, float]] = {
     # even more critical, so combat_trick demand is highest of all archetypes.
     "extra_damage":  {"combat_trick": 2.2, "protection": 1.3},
 }
-# Tribal commanders implicitly value all tribal sub-roles equally
+# Tribal commanders implicitly want wide-board payoffs and token generators
 for _t in [k for k in _ARCHETYPE_PATTERNS if k[0].startswith("tribal_")]:
-    ARCHETYPE_ROLE_WEIGHTS[_t[0]] = {"win_condition": 1.2}
+    ARCHETYPE_ROLE_WEIGHTS[_t[0]] = {"win_condition": 1.2, "wide_payoff": 1.4, "token": 1.3}
 # Ninja commanders specifically need evasion to enable ninjutsu and connect
 ARCHETYPE_ROLE_WEIGHTS["tribal_ninjas"] = {"win_condition": 1.5, "draw": 1.3}
 
