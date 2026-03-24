@@ -9,11 +9,11 @@ param(
     [ValidateSet(1, 2, 3, 4)]
     [int]$Phase = 3,
 
-    # Path to a pre-built training artifact (.pt from export_dataset stage).
+    # Path to a pre-built training artifact (.pt from export_dataset_99 stage).
     # When set, no DATABASE_URL is required -- all data is loaded from the file.
     [string]$Dataset = '',
 
-    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset', 'backfill_roles', 'all')]
+    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset_99', 'export_dataset_99_compositional', 'export_dataset_commanders', 'backfill_roles', 'all')]
     [string]$Stage = 'compute_synergy',
 
     [Nullable[int]]$Epochs = $null,

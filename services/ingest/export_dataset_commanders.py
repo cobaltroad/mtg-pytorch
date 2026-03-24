@@ -195,11 +195,16 @@ def _load_commander_positives(
     """Return {commander_id: (pos_card_ids, trigger_events)} from synergy_edges.
 
     Sources:
-    - ability_trigger: card_a (producer) → card_b (commander)
-      Color filtering at edge-build time uses && (overlap), which is looser
-      than deck-legality (⊆).  We re-apply strict subset filtering here.
-    - commander_value: card_a (commander) → card_b (payoff card)
-      Color filtering was intentionally skipped at build time; applied here.
+    - ability_trigger WHERE card_b = commander
+        Producers of the commander's triggers (oracle text + decompose patterns).
+        Color filtering at edge-build time uses && (overlap); re-applied ⊆ here.
+    - commander_value WHERE card_a = commander
+        Payoff cards unlocked by having this commander in play (CMC-based).
+        Color filtering was skipped at build time; applied here.
+    - ability_trigger WHERE card_a = commander (tribal typeline)
+        Tribe members for tribal commanders: card_a = commander, card_b = member.
+        Written by compute_tribal_typeline_synergy with trigger_event='tribal_*'.
+        Color filtering already applied at build time via type-line membership.
     """
     cmd_list = list(commander_ids)
     # {commander_id: (set of positive card_ids, list of trigger_event labels)}
@@ -253,6 +258,28 @@ def _load_commander_positives(
                 if card_ci <= cmd_ci:
                     pos_ids, events = result[card_a]
                     pos_ids.add(card_b)
+
+            # ── tribal typeline: commander → tribe members ────────────────────
+            log.info("Loading tribal typeline edges for %d commanders…", len(cmd_list))
+            cur.execute("""
+                SELECT card_a::text, card_b::text,
+                       COALESCE(metadata->>'trigger_event', '') AS trigger_event
+                FROM synergy_edges
+                WHERE score_type = 'ability_trigger'
+                  AND card_a::text = ANY(%s)
+                  AND metadata->>'trigger_event' LIKE 'tribal\_%'
+            """, (cmd_list,))
+            tribal_rows = cur.fetchall()
+            log.info("  %d tribal typeline rows fetched", len(tribal_rows))
+
+            for card_a, card_b, trigger_event in tribal_rows:
+                if card_a not in result or card_b not in id_to_idx:
+                    continue
+                # Tribal edges already color-filtered at build time; accept as-is
+                pos_ids, events = result[card_a]
+                pos_ids.add(card_b)
+                if trigger_event:
+                    events.append(trigger_event)
 
     total_pos = sum(len(v[0]) for v in result.values())
     covered   = sum(1 for v in result.values() if v[0])

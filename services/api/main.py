@@ -521,7 +521,7 @@ async def dataset_info():
     if not DATASET_META_PATH.exists():
         raise HTTPException(
             404,
-            "No training dataset available — run the export_dataset pipeline stage first",
+            "No training dataset available — run the export_dataset_99 pipeline stage first",
         )
     meta = json.loads(DATASET_META_PATH.read_text())
     size_bytes = DATASET_PATH.stat().st_size if DATASET_PATH.exists() else 0
@@ -539,7 +539,7 @@ async def dataset_download():
     if not DATASET_PATH.exists():
         raise HTTPException(
             404,
-            "No training dataset available — run the export_dataset pipeline stage first",
+            "No training dataset available — run the export_dataset_99 pipeline stage first",
         )
     return FileResponse(
         DATASET_PATH,
@@ -555,7 +555,7 @@ async def dataset_compositional_info():
         raise HTTPException(
             404,
             "No compositional dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional",
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_99_compositional",
         )
     meta = json.loads(DATASET_COMP_META_PATH.read_text())
     size_bytes = DATASET_COMP_PATH.stat().st_size if DATASET_COMP_PATH.exists() else 0
@@ -573,7 +573,7 @@ async def dataset_compositional_download():
         raise HTTPException(
             404,
             "No compositional dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional",
+            "docker compose run --rm ingest python pipeline.py --stage export_dataset_99_compositional",
         )
     return FileResponse(
         DATASET_COMP_PATH,
@@ -589,7 +589,6 @@ async def dataset_commanders_info():
         raise HTTPException(
             404,
             "No commander dataset available — run: "
-            "docker compose run --rm ingest python scripts/decompose_commanders.py && "
             "docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders",
         )
     meta = json.loads(DATASET_CMD_META_PATH.read_text())
@@ -608,7 +607,6 @@ async def dataset_commanders_download():
         raise HTTPException(
             404,
             "No commander dataset available — run: "
-            "docker compose run --rm ingest python scripts/decompose_commanders.py && "
             "docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders",
         )
     return FileResponse(
