@@ -6,7 +6,7 @@ that detects these mechanics and writes ``card_abilities`` rows
 ``ability_trigger`` edges for commanders.
 
 ``synergy/__init__.py`` merges ``PATTERN_KEY_TO_PRODUCER_SQL`` into
-``PRODUCER_MAP``; existing sub-modules (``events.py``, ``deckbuilding.py``,
+``PRODUCER_MAP``; existing sub-modules (``events.py``, ``utility.py``,
 etc.) take precedence for any keys they already handle more precisely.
 
 ``decompose_commanders.py`` also reads this SQL vocabulary directly for gap
@@ -337,6 +337,11 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # ── Proliferate / poison counters ─────────────────────────────────────────
     "proliferate_matters": _or(
         "lower(oracle_text) LIKE '%proliferate%'",
+        "lower(oracle_text) LIKE '%infect%'",
+        "lower(oracle_text) LIKE '%toxic%'",
+        "lower(oracle_text) LIKE '%wither%'",
+        "lower(oracle_text) LIKE '%poison counter%'",
+        "lower(oracle_text) LIKE '%-1/-1 counter%'",
         "lower(type_line) LIKE '%planeswalker%'",
         "lower(oracle_text) LIKE '%loyalty counter%'",
     ),
@@ -344,9 +349,13 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # XMage alias (adapt/evolve get counter growth from proliferate / placement)
     "adapt_evolve": _or(
         "lower(oracle_text) LIKE '%put a +1/+1 counter%'",
+        "lower(oracle_text) LIKE '%put two +1/+1 counters%'",
+        "lower(oracle_text) LIKE '%put x +1/+1 counters%'",
+        "lower(oracle_text) LIKE '%+1/+1 counter on each%'",
         "lower(oracle_text) LIKE '%proliferate%'",
         "lower(oracle_text) LIKE '%double the number of counters%'",
         "lower(oracle_text) LIKE '%one additional +1/+1 counter%'",
+        "lower(oracle_text) LIKE '%an additional +1/+1 counter%'",
     ),
 
     # ── Lifegain trigger ──────────────────────────────────────────────────────

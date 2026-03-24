@@ -1,13 +1,28 @@
-"""Deckbuilding-theme synergy patterns and producer SQL fragments.
+"""Archetype engine synergy patterns and producer SQL fragments.
 
-Covers cross-archetype deck themes that are not tied to a single game event:
-equipment, legendary/historic, graveyard (reanimation + fill), +1/+1 counters,
-artifact synergies, modified (counter + aura + equipment super-type), aura/
-enchantress, and proliferate/infect/toxic.
+Covers commander-agnostic card engines that define a deck's archetype rather
+than filling a universal support role (removal, draw, tutors — those live in
+utility.py).  Each pattern identifies a mini-combo or self-contained synergy
+loop that works regardless of commander choice:
 
-Also includes the Skullclamp proxy pattern: the card itself has an
-equipment-toughness-drain ability, so the natural "producer" is any card that
-creates 1-toughness tokens (X/1 tokens die immediately when the -1 is applied).
+  skullclamp_target — X/1 token generators → Skullclamp (toughness-drain mini-combo)
+  graveyard_return  — reanimation payoffs; producers are reanimate spells + mill
+  graveyard_fill    — threshold / delirium / morbid payoffs; producers are mill / loot
+  artifact_matters  — artifact-payoff consumers; producers are any artifact + treasure/
+                      food/blood/clue token generators
+  modified          — "modified" super-type payoffs (counters + auras + equipment);
+                      producers are any of the three enabler types
+  aura_matters      — enchanted-creature payoffs + enchantress triggers; producers are
+                      aura enchantments + enchantress effects + aura tutors
+  enchantress        — draw-when-enchantment-cast payoffs (Sythis, Argothian Enchantress,
+                       Eidolon of Blossoms); producers are any enchantment
+  play_from_exile   — cast-from-exile / cascade / impulse-draw payoffs; producers are
+                      cards that exile and allow casting (cascade, discover, impulse draw,
+                      airbend)
+
+These edges are written with score_type='card_synergy' by compute_card_synergy()
+so they flow into the compositional dataset artifact (mtg_dataset.pt) rather than
+the commander artifact (mtg_commanders.pt).
 """
 
 from __future__ import annotations
@@ -17,29 +32,6 @@ from __future__ import annotations
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     # Skullclamp proxy: equipment that drains toughness to zero on a 1/1 → dies, draw 2
     (r"equipped creature gets \+\S+/-1", "Skullclamp toughness-drain", "skullclamp_target"),
-
-    # Equipment: payoffs, cost-reducers, and auto-attachers
-    (
-        r"equipped creature (gets?|gains?|has|deals?)"
-        r"|when(ever)?\s+(an )?equipment.{0,30}enters"
-        r"|creatures?.{0,30}equipped .{0,20}(get|have|gain)"
-        r"|equip (costs?|abilities).{0,20}(less|reduced|\{0\})"
-        r"|equip \{0\}"
-        r"|enters the battlefield attached to"
-        r"|attach .{0,20}to target creature",
-        "Equipment payoff",
-        "equipment_matters",
-    ),
-
-    # Legendary / historic matters — oracle text references AND type-line legends
-    (
-        r"when(ever)?\s+(you )?cast a (legendary|historic)"
-        r"|legendary (creatures?|permanents?|spells?).{0,40}(get|gain|have)"
-        r"|historic (spell|permanent|card)"
-        r"|you cast a historic",
-        "Legendary/historic matters",
-        "legendary_matters",
-    ),
 
     # Reanimator: cards with graveyard-activated abilities or that return creatures from graveyards
     (
@@ -57,16 +49,6 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         r"|when(ever)?\s+(a |any )?card.{0,30}(put into|enters?).{0,15}graveyard",
         "Graveyard fill trigger",
         "graveyard_fill",
-    ),
-
-    # +1/+1 counters: placement triggers, counter doublers, and replacement effects
-    (
-        r"when(ever)?\s+.{0,20}(gets?|receives?|is given|placed with|put) (a |one or more )?\+1/\+1 counter"
-        r"|if (one or more )?\+1/\+1 counter.{0,30}would be (placed|put)"
-        r"|(one |an )?additional \+1/\+1 counter"
-        r"|double.{0,30}(number of )?(counter|\+1)",
-        "Counter placed/doubled trigger",
-        "plus_one_counters",
     ),
 
     # Artifacts matter: casting artifacts, artifact payoffs, artifact token payoffs
@@ -101,14 +83,6 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         "aura_matters",
     ),
 
-    # Proliferate matters: focuses on infect/toxic/wither keywords and -1/-1 / poison counter producers
-    (
-        r"\b(infect|toxic|wither)\b|-1\/-1 counter|\bpoison\b"
-        r"|when(ever)?\s+.{0,30}planeswalker.{0,20}enters",
-        "Proliferate matters",
-        "proliferate_matters",
-    ),
-
     # Enchantress: draw a card whenever you cast an enchantment spell or an
     # enchantment enters the battlefield.  More focused than aura_matters
     # (which includes non-draw enchantment payoffs); produces edges directly
@@ -121,17 +95,6 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
         r".{0,100}draw (a card|cards?)",
         "Enchantress draw trigger",
         "enchantress",
-    ),
-
-    # Adapt / evolve / graft / bolster / modular / riot — counter-growth keywords.
-    # Cards with these keywords grow when +1/+1 counters are placed on them,
-    # making counter-placement engines strong enablers.
-    # Consumers: Zegana Utopian Speaker (evolve), Hydroid Krasis (adapt),
-    # Simic Basilisk (graft), Arcbound Ravager (modular).
-    (
-        r"\b(evolve|adapt|graft|bolster|modular|riot)\b",
-        "Counter growth keyword (adapt/evolve/graft/bolster/modular/riot)",
-        "adapt_evolve",
     ),
 
     # Play-from-exile / impulse-draw payoffs
@@ -156,9 +119,12 @@ TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     ),
 ]
 
-# ── Producer map ──────────────────────────────────────────────────────────────
+# ── Card synergy map ──────────────────────────────────────────────────────────
+# Keyed by trigger_event (matches card_abilities rows written by tag_abilities).
+# Written as score_type='card_synergy' by compute_card_synergy() so these edges
+# flow into the compositional dataset artifact, not the commander artifact.
 
-PRODUCER_MAP: dict[str, str] = {
+CARD_SYNERGY_MAP: dict[str, str] = {
     # 1-toughness token generators — natural Skullclamp targets (proxy/indirect synergy edge).
     # Only toughness matters: any X/1 token dies immediately when Skullclamp's -1 toughness is applied.
     "skullclamp_target": (
@@ -166,26 +132,6 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%creates%/1 %token%'"
         " OR lower(oracle_text) LIKE '%put a%/1 %token%'"
         " OR lower(oracle_text) LIKE '%put%/1%creature token%'"
-    ),
-
-    # Equipment: equipment cards + cost-reducers + auto-attachers
-    "equipment_matters": (
-        "lower(type_line) LIKE '%equipment%'"
-        # Equip cost reducers ("equip costs {X} less", "equip {0}")
-        " OR lower(oracle_text) LIKE '%equip costs%less%'"
-        " OR lower(oracle_text) LIKE '%equip {0}%'"
-        " OR lower(oracle_text) LIKE '%equip abilities%less%'"
-        # Auto-attachers (Stoneforge Mystic, Living Weapon, Puresteel Paladin style)
-        " OR lower(oracle_text) LIKE '%enters the battlefield attached%'"
-        " OR lower(oracle_text) LIKE '%attach target equipment%'"
-        " OR lower(oracle_text) LIKE '%attach it to target creature%'"
-    ),
-
-    # Legendary matters: any legendary permanent is a producer; also historic (legendary/artifact/saga)
-    "legendary_matters": (
-        "lower(type_line) LIKE '%legendary%'"
-        " OR lower(type_line) LIKE '%artifact%'"   # artifacts are historic
-        " OR (lower(type_line) LIKE '%enchantment%' AND lower(type_line) LIKE '%saga%')"  # sagas are historic
     ),
 
     # Reanimator: spells that return creatures from the graveyard
@@ -218,22 +164,6 @@ PRODUCER_MAP: dict[str, str] = {
         " OR lower(oracle_text) LIKE '%draw a card, then discard%'"
         " OR lower(oracle_text) LIKE '%discard a card%draw%'"
         " OR lower(oracle_text) LIKE '%each player discards%'"
-    ),
-
-    # +1/+1 counters: placement engines + counter doublers + replacement ("additional counter") effects
-    "plus_one_counters": (
-        "lower(oracle_text) LIKE '%put a +1/+1 counter%'"
-        " OR lower(oracle_text) LIKE '%put two +1/+1 counters%'"
-        " OR lower(oracle_text) LIKE '%put x +1/+1 counters%'"
-        " OR lower(oracle_text) LIKE '%+1/+1 counter on each%'"
-        " OR lower(oracle_text) LIKE '%proliferate%'"
-        # Counter doublers (Doubling Season, Hardened Scales, etc.)
-        " OR lower(oracle_text) LIKE '%double the number of counters%'"
-        " OR lower(oracle_text) LIKE '%twice the number of%counter%'"
-        " OR lower(oracle_text) LIKE '%if one or more +1/+1 counter%would be%'"
-        # Replacement effects: "one additional +1/+1 counter" (Corpsejack Menace, etc.)
-        " OR lower(oracle_text) LIKE '%one additional +1/+1 counter%'"
-        " OR lower(oracle_text) LIKE '%an additional +1/+1 counter%'"
     ),
 
     # Artifacts matter: artifact cards as producers for artifact-payoff consumers.
@@ -274,35 +204,10 @@ PRODUCER_MAP: dict[str, str] = {
         " OR (lower(type_line) LIKE '%enchantment%' AND lower(oracle_text) LIKE '%enters the battlefield attached%')"
     ),
 
-    # Proliferate matters: infect/toxic (poison counters), wither/-1/-1 counters, planeswalkers
-    # (loyalty counters). These are the things that have counters worth proliferating.
-    "proliferate_matters": (
-        "lower(oracle_text) LIKE '%proliferate%'"
-        " OR lower(oracle_text) LIKE '%infect%'"
-        " OR lower(oracle_text) LIKE '%toxic%'"
-        " OR lower(oracle_text) LIKE '%wither%'"
-        " OR lower(oracle_text) LIKE '%poison counter%'"
-        " OR lower(oracle_text) LIKE '%-1/-1 counter%'"
-        " OR lower(type_line) LIKE '%planeswalker%'"
-    ),
-
     # Enchantress draw payoffs are triggered by casting or playing enchantment
     # cards.  Any enchantment is a valid producer.
     "enchantress": (
         "lower(type_line) LIKE '%enchantment%'"
-    ),
-
-    # Counter-growth keywords (adapt, evolve, graft, bolster, modular, riot)
-    # are enabled by effects that place +1/+1 counters on creatures.
-    "adapt_evolve": (
-        "lower(oracle_text) LIKE '%put a +1/+1 counter%'"
-        " OR lower(oracle_text) LIKE '%put two +1/+1 counters%'"
-        " OR lower(oracle_text) LIKE '%put x +1/+1 counters%'"
-        " OR lower(oracle_text) LIKE '%+1/+1 counter on each%'"
-        " OR lower(oracle_text) LIKE '%proliferate%'"
-        " OR lower(oracle_text) LIKE '%double the number of counters%'"
-        " OR lower(oracle_text) LIKE '%one additional +1/+1 counter%'"
-        " OR lower(oracle_text) LIKE '%an additional +1/+1 counter%'"
     ),
 
     # Play-from-exile producers: cards that create windows to cast from exile.

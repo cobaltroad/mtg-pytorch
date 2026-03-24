@@ -9,10 +9,12 @@ Sub-modules, each covering one broad theme:
 * :mod:`lifegain`         — four lifegain consumer patterns (``lifegain``,
                             ``lifegain_threshold``, ``lifegain_replacement``,
                             ``lifegain_total``) and their producer SQL fragments.
-* :mod:`deckbuilding`     — cross-archetype deckbuilding themes (equipment,
-                            legendary, graveyard, +1/+1 counters, artifacts,
-                            modified, aura, proliferate, skullclamp,
-                            play_from_exile, enchantress, adapt_evolve).
+* :mod:`archetypes`       — commander-agnostic archetype engines (skullclamp
+                            mini-combo, graveyard reanimator/fill, artifact
+                            matters, modified, aura/enchantress, play_from_exile /
+                            cascade).  Written as ``score_type='card_synergy'``
+                            so they flow into the dataset artifact, not the
+                            commander artifact.
 * :mod:`tribal`           — dynamically generated tribal patterns for all tribes
                             in :data:`TRIBES`, including Zombie/Angel cross-synergy
                             overrides.
@@ -57,7 +59,7 @@ the pipeline are needed when a sub-module is extended.
 
 from __future__ import annotations
 
-from . import commander_value, commander_mechanics, deckbuilding, events, lifegain, roles, tribal, utility, xmage
+from . import archetypes, commander_value, commander_mechanics, events, lifegain, roles, tribal, utility, xmage
 
 # Exported surface consumed by pipeline.py
 TRIBES = tribal.TRIBES
@@ -66,7 +68,7 @@ ALL_TYPES_SQL = tribal.ALL_TYPES_SQL
 TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
     *events.TRIGGER_PATTERNS,
     *lifegain.TRIGGER_PATTERNS,
-    *deckbuilding.TRIGGER_PATTERNS,
+    *archetypes.TRIGGER_PATTERNS,
     *tribal.TRIGGER_PATTERNS,
     *utility.TRIGGER_PATTERNS,
     *commander_value.TRIGGER_PATTERNS,
@@ -82,7 +84,7 @@ PRODUCER_MAP: dict[str, str] = {
     # any pattern keys that overlap, e.g. equipment_matters, proliferate_matters).
     **events.PRODUCER_MAP,
     **lifegain.PRODUCER_MAP,
-    **deckbuilding.PRODUCER_MAP,
+    # archetypes uses CARD_SYNERGY_MAP / score_type='card_synergy' — not merged here.
     **tribal.PRODUCER_MAP,
     **utility.PRODUCER_MAP,
     # commander_value producers are NOT merged into PRODUCER_MAP — they use a
@@ -92,6 +94,8 @@ PRODUCER_MAP: dict[str, str] = {
     # uses.  The TRIGGER_PATTERNS above still tag consumer cards in
     # card_abilities so the dedicated stage can cross-join against them.
 }
+
+CARD_SYNERGY_MAP: dict[str, str] = archetypes.CARD_SYNERGY_MAP
 
 ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
 LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
@@ -126,4 +130,5 @@ __all__ = [
     "COMMANDER_VALUE_EDGE_SCORES",
     "XMAGE_PRODUCER_MAP",
     "SPELLCAST_TRIGGER_PRODUCER_MAP",
+    "CARD_SYNERGY_MAP",
 ]
