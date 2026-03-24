@@ -1,8 +1,8 @@
 """
-Export a self-contained training artifact from the database.
+Export a self-contained co-occurrence training artifact from the database.
 
-Produces /data/mtg_dataset.pt containing everything needed to run all four
-training phases on a GPU machine with no live database connection.
+Produces /data/mtg_cooccurrence_dataset.pt containing everything needed to
+run all four training phases on a GPU machine with no live database connection.
 
 Artifact contents
 -----------------
@@ -15,12 +15,12 @@ Artifact contents
   decks              – list[dict] for phase 3/4 (indices + legal pool)
   synergy_positions  – list[dict] for phase 4 (pre-computed positions)
 
-A companion JSON sidecar (mtg_dataset.json) is written alongside the .pt
-file so the API can serve metadata without loading the full artifact.
+A companion JSON sidecar (mtg_cooccurrence_dataset.json) is written alongside
+the .pt file so the API can serve metadata without loading the full artifact.
 
 Usage
 -----
-    python export_dataset.py
+    python export_cooccurrence_dataset.py
 
 Environment variables
 ---------------------
@@ -38,7 +38,7 @@ Environment variables
   DATASET_NEG_RATIO          Negatives per positive        (default 3)
   DATASET_HARD_NEG_FRAC      Fraction of negs that are hard (default 0.5)
   DATASET_SYN_LIMIT          Max synergy positions/cmd     (default 300)
-  DATASET_OUTPUT             Output path  (default /data/mtg_dataset.pt)
+  DATASET_OUTPUT             Output path  (default /data/mtg_cooccurrence_dataset.pt)
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 DATABASE_URL    = os.environ["DATABASE_URL"]
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
-OUTPUT_PATH     = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
+OUTPUT_PATH     = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_cooccurrence_dataset.pt"))
 SAMPLE_PER_EVENT = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
                         os.environ.get("DATASET_SAMPLE", "100000")))
 ROLE_SAMPLE      = int(os.environ.get("DATASET_ROLE_SAMPLE",  "100000"))
@@ -588,6 +588,7 @@ def main() -> None:
         "deck_count":       len(decks),
         "position_count":   len(syn_positions),
         "commander_count":  commander_count,
+        "training_path":    "cooccurrence",
         "created_at":       datetime.now(timezone.utc).isoformat(),
     }
 

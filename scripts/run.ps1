@@ -9,11 +9,11 @@ param(
     [ValidateSet(1, 2, 3, 4)]
     [int]$Phase = 3,
 
-    # Path to a pre-built training artifact (.pt from export_dataset_99 stage).
+    # Path to a pre-built training artifact (.pt from export_dataset or export_cooccurrence_dataset stage).
     # When set, no DATABASE_URL is required -- all data is loaded from the file.
     [string]$Dataset = '',
 
-    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset_99', 'export_dataset_99_compositional', 'export_dataset_commanders', 'backfill_roles', 'all')]
+    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset', 'export_cooccurrence_dataset', 'export_dataset_commanders', 'backfill_roles', 'all')]
     [string]$Stage = 'compute_synergy',
 
     [Nullable[int]]$Epochs = $null,
@@ -38,9 +38,9 @@ param(
     [bool]$SynergyOnly = $true,
     [int]$SynBatchSize = 256,
 
-    # Training path: cooccurrence (default) or compositional (see issue #71).
+    # Training path: compositional (default) or cooccurrence (see issue #71).
     [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'cooccurrence',
+    [string]$TrainingPath = 'compositional',
 
     # Phase 4 synergy-guided training weights
     [int]$SynPerEpoch = 1000,
@@ -62,15 +62,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
-# Artifact path depends on training path: compositional uses mtg_dataset_compositional.pt.
+# Artifact path depends on training path: cooccurrence uses mtg_cooccurrence_dataset.pt.
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
     if (-not $Dataset) {
         $artifactName = if ($TrainingPath -eq 'compositional') {
-            'mtg_dataset_compositional.pt'
-        } else {
             'mtg_dataset.pt'
+        } else {
+            'mtg_cooccurrence_dataset.pt'
         }
         $Dataset = Join-Path $PSScriptRoot "..\ingest_cache\$artifactName"
     }
