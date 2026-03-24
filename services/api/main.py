@@ -483,7 +483,34 @@ async def stop_training(container_id: str):
     return result
 
 
-# ── Checkpoint upload ─────────────────────────────────────────────────────────
+# ── Checkpoint management ─────────────────────────────────────────────────────
+
+def _checkpoint_training_path(name: str) -> str:
+    """Derive training path label from checkpoint filename prefix."""
+    if name.startswith("comp_"):
+        return "compositional"
+    if name.startswith("cmd_"):
+        return "commander"
+    return "co-occurrence"
+
+
+@app.get("/checkpoints")
+async def list_checkpoints():
+    """List available checkpoint files with their training path classification."""
+    from ops import inference
+    if not inference.CHECKPOINT_DIR.exists():
+        return []
+    files = sorted(inference.CHECKPOINT_DIR.glob("*.pt"), key=lambda f: f.stat().st_mtime, reverse=True)
+    return [
+        {
+            "name": f.stem,
+            "filename": f.name,
+            "training_path": _checkpoint_training_path(f.stem),
+            "size_bytes": f.stat().st_size,
+        }
+        for f in files
+    ]
+
 
 @app.post("/admin/checkpoint")
 async def upload_checkpoint(

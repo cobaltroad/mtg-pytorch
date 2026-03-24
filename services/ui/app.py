@@ -75,6 +75,17 @@ def list_generated_decks() -> list[dict]:
 
 
 @st.cache_data(ttl=60)
+def list_checkpoints() -> list[dict]:
+    """List available checkpoints from the API (cached 60 s)."""
+    try:
+        r = httpx.get(f"{API_URL}/checkpoints", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=60)
 def get_generated_deck(filename: str) -> dict | None:
     """Fetch a specific generated deck by filename (cached 60 s)."""
     try:
@@ -89,6 +100,25 @@ def get_generated_deck(filename: str) -> dict | None:
 
 _CONFIDENCE_ICONS = {"high": "✅", "medium": "⚠️", "low": "❓", "unknown": "❓"}
 _GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}
+
+_PATH_BADGES = {
+    "compositional": "🔬 Compositional",
+    "commander": "👑 Commander",
+    "co-occurrence": "📊 Co-occurrence",
+}
+
+_LATEST_CHECKPOINT = {
+    "Co-occurrence": "phase4_best",
+    "Compositional": "comp_phase4_best",
+}
+
+
+def _training_path_from_checkpoint(checkpoint: str) -> str:
+    if checkpoint.startswith("comp_"):
+        return "compositional"
+    if checkpoint.startswith("cmd_"):
+        return "commander"
+    return "co-occurrence"
 
 
 # ── Shared deck display ───────────────────────────────────────────────────────
@@ -333,8 +363,40 @@ with tab_deck:
 
     # ── Advanced options ───────────────────────────────────────────────────────
     _synergy_alpha = 0.4
+    _chosen_checkpoint = "phase4_best"
     if commander:
         with st.expander("Advanced options", expanded=False):
+            # Training path selector
+            _available = list_checkpoints()
+            _path_choice = st.radio(
+                "Training path",
+                ["Co-occurrence", "Compositional"],
+                horizontal=True,
+                help=(
+                    "Co-occurrence: trained on human deck data.  "
+                    "Compositional: trained on oracle-text role reasoning."
+                ),
+            )
+            # Resolve to a concrete checkpoint name
+            _default_ckpt = _LATEST_CHECKPOINT.get(_path_choice, "phase4_best")
+            # Filter to checkpoints matching the chosen path
+            _path_key = "co-occurrence" if _path_choice == "Co-occurrence" else "compositional"
+            _matching = [c for c in _available if c["training_path"] == _path_key]
+            if _matching:
+                _ckpt_options = [c["name"] for c in _matching]
+                _default_ckpt_idx = 0
+                if _default_ckpt in _ckpt_options:
+                    _default_ckpt_idx = _ckpt_options.index(_default_ckpt)
+                _chosen_checkpoint = st.selectbox(
+                    "Checkpoint",
+                    _ckpt_options,
+                    index=_default_ckpt_idx,
+                    help="Select a specific checkpoint for this training path.",
+                )
+            else:
+                _chosen_checkpoint = _default_ckpt
+                st.caption(f"Checkpoint: `{_chosen_checkpoint}` (not yet uploaded)")
+
             _synergy_alpha = st.slider(
                 "Synergy alpha (α)",
                 min_value=0.0,
@@ -353,7 +415,7 @@ with tab_deck:
     if commander and st.button("Generate deck", type="primary"):
         try:
             job_id = submit_deck_job(
-                str(commander["oracle_id"]), "latest", _boost_overrides, _synergy_alpha
+                str(commander["oracle_id"]), _chosen_checkpoint, _boost_overrides, _synergy_alpha
             )
             st.session_state["gen_job_id"] = job_id
             st.session_state.pop("last_deck_filename", None)
@@ -412,11 +474,12 @@ with tab_history:
     if not decks_list:
         st.info("No generated decks yet. Use the Deck Builder tab to generate one.")
     else:
-        # Build display labels
-        options_map = {
-            f"{d['commander']}  —  {d['filename']}  ({d['card_count']} cards)": d["filename"]
-            for d in decks_list
-        }
+        def _deck_label(d: dict) -> str:
+            path = _training_path_from_checkpoint(d.get("checkpoint", ""))
+            badge = _PATH_BADGES.get(path, path)
+            return f"{d['commander']}  [{badge}]  —  {d['filename']}  ({d['card_count']} cards)"
+
+        options_map = {_deck_label(d): d["filename"] for d in decks_list}
         labels = list(options_map.keys())
 
         # Auto-select the most recently generated deck if available
@@ -428,18 +491,49 @@ with tab_history:
                     default_idx = i
                     break
 
-        chosen_label = st.selectbox("Select a deck", labels, index=default_idx)
-        chosen_filename = options_map[chosen_label]
+        _hist_col1, _hist_col2 = st.columns([3, 1])
+        with _hist_col1:
+            chosen_label = st.selectbox("Select a deck", labels, index=default_idx)
+        with _hist_col2:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+            _compare_mode = st.checkbox("Compare two decks")
 
         if st.button("Refresh list"):
             list_generated_decks.clear()
             get_generated_deck.clear()
             st.rerun()
 
+        chosen_filename = options_map[chosen_label]
+
+        if _compare_mode:
+            _other_labels = [l for l in labels if l != chosen_label]
+            if not _other_labels:
+                st.warning("Need at least two decks to compare.")
+                _compare_mode = False
+            else:
+                chosen_label_b = st.selectbox("Compare with", _other_labels, key="compare_b")
+                chosen_filename_b = options_map[chosen_label_b]
+
         st.divider()
 
-        deck = get_generated_deck(chosen_filename)
-        if deck is None:
-            st.error("Could not load deck. The file may have been deleted.")
+        if _compare_mode:
+            deck_a = get_generated_deck(chosen_filename)
+            deck_b = get_generated_deck(chosen_filename_b)
+            if deck_a is None or deck_b is None:
+                st.error("Could not load one or both decks.")
+            else:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    path_a = _training_path_from_checkpoint(deck_a.get("checkpoint", ""))
+                    st.markdown(f"### {_PATH_BADGES.get(path_a, path_a)}")
+                    render_deck(deck_a)
+                with col_b:
+                    path_b = _training_path_from_checkpoint(deck_b.get("checkpoint", ""))
+                    st.markdown(f"### {_PATH_BADGES.get(path_b, path_b)}")
+                    render_deck(deck_b)
         else:
-            render_deck(deck)
+            deck = get_generated_deck(chosen_filename)
+            if deck is None:
+                st.error("Could not load deck. The file may have been deleted.")
+            else:
+                render_deck(deck)
