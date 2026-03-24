@@ -11,7 +11,8 @@ Artifact contents
   card_ids                – list[str], N card UUIDs in index order
   embeddings              – Tensor(N, D) float32
   functional_pairs        – dict with a_idx / b_idx int32 tensors (Phase 1)
-  synergy                 – a_idx / b_idx / labels (Phase 2)
+  synergy                 – a_idx / b_idx / labels (Phase 2; xmage_ability_trigger + role_demand + combo + negatives)
+  effect_peer             – a_idx / b_idx int32 tensors (Phase 2; direct peer pairs by trigger_event/effect_class)
   card_meta               – {card_id: {name, mana_cost, type_line, cmc, color_identity}} for offline eval
 
   Phases 3/4 (deck co-occurrence + generative) use the commanders artifact
@@ -68,6 +69,7 @@ import torch
 from export_db_helpers import (
     _load_embeddings,
     _load_card_meta,
+    _load_effect_peer_pairs,
     _load_synergy_pairs,
     get_conn,
 )
@@ -203,14 +205,22 @@ def main() -> None:
     # 2b. Card metadata (name/type for offline eval on GPU machine)
     card_meta = _load_card_meta(id_to_idx)
 
-    # 3. Synergy pairs (Phase 2) — XMage class-name edges only.
+    # 3. Synergy pairs (Phase 2) — XMage class-name edges + role_demand + combo.
+    #    effect_peer is stored separately (see step 3b) so the trainer can use
+    #    those pairs directly rather than routing them through producer-grouping.
     #    commander_value edges are excluded here; they belong in the commanders
     #    artifact produced by export_dataset_commanders.py.
     a_idx, b_idx, labels = _load_synergy_pairs(
         id_to_idx, normed,
         ability_score_type="xmage_ability_trigger",
-        include_effect_peer=True,
+        include_effect_peer=False,
     )
+
+    # 3b. Effect-peer pairs — cards sharing (trigger_event, effect_class).
+    #     Stored as a separate artifact key so load_synergy_pairs_from_artifact
+    #     can add them as direct positives (bypassing producer-grouping, which
+    #     silently discards symmetric peer edges).
+    ep_a, ep_b = _load_effect_peer_pairs(id_to_idx)
 
     # 4. Assemble and save
     #    Phases 3/4 are handled by the commanders artifact (mtg_commanders.pt).
@@ -220,6 +230,7 @@ def main() -> None:
         "card_count":             n,
         "functional_pair_count":  int(len(fp_a)),
         "synergy_count":          int(len(a_idx)),
+        "effect_peer_count":      int(len(ep_a)),
         "training_path":          "compositional",
         "created_at":             datetime.now(timezone.utc).isoformat(),
     }
@@ -237,6 +248,10 @@ def main() -> None:
             "b_idx":  torch.from_numpy(b_idx),
             "labels": torch.from_numpy(labels),
         },
+        "effect_peer": {
+            "a_idx": torch.from_numpy(ep_a),
+            "b_idx": torch.from_numpy(ep_b),
+        },
         "card_meta": card_meta,
     }
 
@@ -250,8 +265,8 @@ def main() -> None:
 
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
-        "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d synergy pairs",
-        size_mb, n, len(fp_a), len(a_idx),
+        "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d synergy pairs  |  %d effect_peer pairs",
+        size_mb, n, len(fp_a), len(a_idx), len(ep_a),
     )
 
 

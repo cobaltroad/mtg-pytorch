@@ -118,6 +118,53 @@ def _load_color_identities(id_to_idx: dict[str, int]) -> dict[str, frozenset]:
 
 # ── Synergy pairs (Phase 2) ───────────────────────────────────────────────────
 
+def _load_effect_peer_pairs(
+    id_to_idx: dict[str, int],
+    sample: int = EFFECT_PEER_SAMPLE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (a_idx, b_idx) int32 arrays for effect_peer synergy edges.
+
+    Stratified by (trigger_event/effect_class) bucket so large buckets
+    (e.g. creature_etb/draw) don't crowd out smaller ones.  No negatives
+    are included — callers use these as direct positive pairs.
+
+    Intended for the compositional artifact where effect_peer is stored as a
+    separate key so the trainer can use pairs directly rather than routing
+    them through the producer-grouping step (which silently discards them).
+    """
+    log.info("Loading effect_peer pairs (sample=%d)…", sample)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_a::text, card_b::text,
+                       (metadata->>'trigger_event') || '/' || (metadata->>'effect_class') AS bucket
+                FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                WHERE score_type = 'effect_peer'
+            """)
+            ep_by_bucket: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for card_a, card_b, bucket in cur.fetchall():
+                ep_by_bucket[bucket].append((card_a, card_b))
+
+    per_bucket = max(1, sample // max(len(ep_by_bucket), 1))
+    a_list: list[int] = []
+    b_list: list[int] = []
+    for bucket, bucket_rows in sorted(ep_by_bucket.items()):
+        random.shuffle(bucket_rows)
+        n_added = 0
+        for card_a, card_b in bucket_rows[:per_bucket]:
+            if card_a in id_to_idx and card_b in id_to_idx:
+                a_list.append(id_to_idx[card_a])
+                b_list.append(id_to_idx[card_b])
+                n_added += 1
+        log.info("    %-55s  %6d pairs  (pool %d)", bucket, n_added, len(bucket_rows))
+
+    log.info("  %d effect_peer pairs across %d buckets", len(a_list), len(ep_by_bucket))
+    return (
+        np.array(a_list, dtype=np.int32),
+        np.array(b_list, dtype=np.int32),
+    )
+
+
 def _mine_hard_negatives(
     positives: list[tuple[int, int, float]],
     normed: np.ndarray,
@@ -282,30 +329,15 @@ def _load_synergy_pairs(
             # effect_peer — cards sharing (trigger_event, effect_class).
             # Stratified per bucket so large buckets (creature_cast/draw) don't
             # crowd out small ones.  Only meaningful for the compositional path.
+            # NOTE: prefer _load_effect_peer_pairs() for the compositional artifact
+            # so effect_peer is stored as a separate key and used directly by the
+            # trainer (bypassing the producer-grouping step that wastes peer edges).
             if include_effect_peer and EFFECT_PEER_SAMPLE > 0:
-                cur.execute("""
-                    SELECT card_a::text, card_b::text,
-                           (metadata->>'trigger_event') || '/' || (metadata->>'effect_class') AS bucket
-                    FROM synergy_edges TABLESAMPLE SYSTEM(10)
-                    WHERE score_type = 'effect_peer'
-                """)
-                ep_by_bucket: dict[str, list[tuple[str, str]]] = defaultdict(list)
-                for card_a, card_b, bucket in cur.fetchall():
-                    ep_by_bucket[bucket].append((card_a, card_b))
-
-                ep_start = len(positives)
-                per_bucket = max(1, EFFECT_PEER_SAMPLE // max(len(ep_by_bucket), 1))
-                for bucket, bucket_rows in sorted(ep_by_bucket.items()):
-                    random.shuffle(bucket_rows)
-                    n_added = 0
-                    for card_a, card_b in bucket_rows[:per_bucket]:
-                        if card_a in id_to_idx and card_b in id_to_idx:
-                            positives.append((id_to_idx[card_a], id_to_idx[card_b], 1.0))
-                            n_added += 1
-                    log.info("    %-55s  %6d pairs  (pool %d)", bucket, n_added, len(bucket_rows))
-
-                total_ep = len(positives) - ep_start
-                log.info("  + %d effect_peer pairs across %d buckets", total_ep, len(ep_by_bucket))
+                ep_a, ep_b = _load_effect_peer_pairs(id_to_idx)
+                ep_pairs = list(zip(ep_a.tolist(), ep_b.tolist()))
+                for a_i, b_i in ep_pairs:
+                    positives.append((a_i, b_i, 1.0))
+                log.info("  + %d effect_peer pairs", len(ep_pairs))
 
     log.info("  %d total positive pairs", len(positives))
 

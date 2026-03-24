@@ -1286,23 +1286,36 @@ def load_synergy_pairs_from_artifact(
     data: dict,
     sample: int = 500_000,
     max_consumers_per_producer: int = 20,
+    max_producer_fanout: int = 100,
+    effect_peer_sample: int = 200_000,
 ) -> list[tuple]:
-    """Build (consumer_A, consumer_B, 1.0) peer pairs from artifact synergy data.
+    """Build positive pairs for Phase 2 NT-Xent from artifact synergy data.
 
-    Groups positive-synergy consumers by their shared producer, then creates
-    (consumer_A, consumer_B) pairs.  This reinforces Phase 1 functional-role
-    clustering rather than corrupting it:
+    Two sources are combined:
 
-      Sythis + Verduran Enchantress share the same enchantment-cast trigger
-      source → their embeddings are pulled together, not toward enchantments.
-      Impact Tremors + Purphoros share creature-ETB producers → same idea.
+    1. Consumer-peer pairs (from synergy["a_idx/b_idx/labels"]):
+       Groups positive-synergy consumers by their shared producer, then creates
+       (consumer_A, consumer_B) pairs.  Producers with raw fanout above
+       max_producer_fanout are skipped — high fanout indicates a generic trigger
+       (e.g. creature_etb, death_trigger) whose consumers span many unrelated
+       roles, corrupting NT-Xent training.  Narrow producers (enchantment_cast
+       payoffs, spell-cast subtypes) have fanout well below the threshold and
+       contribute clean same-role peer pairs.
 
-    Replacing the old (producer, consumer) NT-Xent pairs which pulled trigger
-    sources and their consumers together, overwriting Phase 1 role clusters.
+    2. Effect-peer pairs (from effect_peer["a_idx/b_idx"] if present):
+       Cards sharing (trigger_event, effect_class) from compute_effect_peer_synergy.
+       Used directly as positive pairs — no producer-grouping needed.  This
+       covers the ETB/death space that the fanout filter excludes from source 1:
+         etb/draw   → Cloudkin Seer, Mulldrifter, Wall of Blossoms
+         etb/recursion → Eternal Witness, Archaeomancer
+         death/damage  → Impact Tremors, Purphoros
 
-    max_consumers_per_producer: cap applied before C(n,2) pairing to avoid
-    O(n²) blow-up for high-fanout producers.
-    sample: final cap on returned pairs (shuffled before truncation).
+    max_producer_fanout: skip producers with more raw consumers than this.
+        Default 100 cuts creature_etb/death_trigger (fanout in the hundreds)
+        while keeping SpellCast subtypes and draw/lifegain triggers (fanout ~20–60).
+    max_consumers_per_producer: cap before C(n,2) for surviving producers.
+    sample: cap on consumer-peer pairs (shuffled before truncation).
+    effect_peer_sample: cap on effect-peer pairs (shuffled before truncation).
     """
     from collections import defaultdict
 
@@ -1312,7 +1325,8 @@ def load_synergy_pairs_from_artifact(
     b_list = syn["b_idx"].tolist()
     l_list = syn["labels"].tolist()
 
-    # Group consumers by producer (positive synergy only)
+    # Group consumers by producer (positive synergy only); record raw fanout
+    # before sampling so max_producer_fanout can filter generic triggers.
     producer_to_consumers: defaultdict[int, list[int]] = defaultdict(list)
     for a, b, l in zip(a_list, b_list, l_list):
         if l > 0.5:
@@ -1321,9 +1335,13 @@ def load_synergy_pairs_from_artifact(
     rng = random.Random(42)
     pairs: list[tuple] = []
     n_producers_used = 0
+    n_producers_skipped = 0
 
     for consumers in producer_to_consumers.values():
         if len(consumers) < 2:
+            continue
+        if len(consumers) > max_producer_fanout:
+            n_producers_skipped += 1
             continue
         n_producers_used += 1
         if len(consumers) > max_consumers_per_producer:
@@ -1338,12 +1356,24 @@ def load_synergy_pairs_from_artifact(
 
     log.info(
         "load_synergy_pairs_from_artifact: %d consumer-peer pairs "
-        "(%d of %d producers contributed, sample cap=%d)",
-        len(pairs),
-        n_producers_used,
-        len(producer_to_consumers),
-        sample,
+        "(%d producers used, %d skipped for fanout>%d, sample cap=%d)",
+        len(pairs), n_producers_used, n_producers_skipped, max_producer_fanout, sample,
     )
+
+    # Effect-peer pairs — direct positives, no producer-grouping needed.
+    ep = data.get("effect_peer")
+    if ep is not None:
+        ep_a = ep["a_idx"].tolist()
+        ep_b = ep["b_idx"].tolist()
+        ep_pairs = [(card_ids[a], card_ids[b], 1.0) for a, b in zip(ep_a, ep_b)]
+        rng.shuffle(ep_pairs)
+        if len(ep_pairs) > effect_peer_sample:
+            ep_pairs = ep_pairs[:effect_peer_sample]
+        log.info("load_synergy_pairs_from_artifact: + %d effect_peer pairs", len(ep_pairs))
+        pairs = pairs + ep_pairs
+    else:
+        log.info("load_synergy_pairs_from_artifact: no effect_peer key in artifact (re-export to include)")
+
     return pairs
 
 
