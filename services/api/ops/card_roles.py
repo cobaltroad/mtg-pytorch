@@ -14,6 +14,9 @@ removal         — spot removal, sweepers, bounce
 tutor           — library search
 protection      — hexproof / indestructible / shroud / regenerate / recursion
 win_condition   — infect, alternate win cons, storm, combat finishers
+token           — creature/token generation
+combat_trick    — evasion / unblockable grants that help a creature connect
+discard_trigger — payoffs that fire when a card is discarded (Bone Miser, Waste Not)
 """
 
 from __future__ import annotations
@@ -65,6 +68,31 @@ _ROLE_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("protection", re.compile(r"\bregenerate\b", re.I), "regenerate"),
     ("protection", re.compile(r"return .{0,40} from (your |a )graveyard to .{0,20}(hand|battlefield)", re.I), "recursion"),
     ("protection", re.compile(r"(prevents? all damage|prevent that damage)", re.I), "damage_prevention"),
+
+    # combat_trick — *grants* evasion to another creature; what you want when
+    # your commander needs to connect to trigger its ability.  Patterns require
+    # a granting context so cards that merely possess the keyword don't match.
+    ("combat_trick", re.compile(
+        r"(equipped|enchanted|target|another) creature .{0,60}"
+        r"(flying|menace|trample|intimidate|skulk|shadow|fear|double strike)",
+        re.I), "evasion_grant"),
+    ("combat_trick", re.compile(
+        r"(creatures you control|it) (have|has|get|gets|gain|gains) .{0,40}"
+        r"(flying|menace|trample|intimidate|skulk|shadow|fear|double strike)",
+        re.I), "evasion_grant"),
+    ("combat_trick", re.compile(
+        r"gains? (flying|menace|trample|intimidate|skulk|shadow|fear|double strike)",
+        re.I), "evasion_grant"),
+    ("combat_trick", re.compile(
+        r"(equipped|enchanted|target) creature .{0,30}can't be blocked",
+        re.I), "unblockable_grant"),
+    ("combat_trick", re.compile(
+        r"(equipped|enchanted) creature has protection from",
+        re.I), "protection_grant"),
+
+    # discard_trigger — payoffs that fire when you (or a player) discards
+    ("discard_trigger", re.compile(r"whenever you discard", re.I), "discard_payoff"),
+    ("discard_trigger", re.compile(r"whenever (a card is discarded|a player discards)", re.I), "discard_payoff"),
 
     # token — creature/token generation
     ("token", re.compile(r"create (a |an |\d+ |x ).{0,40}creature token", re.I), "token_gen"),
@@ -166,6 +194,7 @@ _ARCHETYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("tribal_merfolk",  re.compile(r"\bmerfolk\b", re.I)),
     ("tribal_slivers",  re.compile(r"\bsliver\b", re.I)),
     ("tribal_spirits",  re.compile(r"\bspirit\b", re.I)),
+    ("tribal_ninjas",   re.compile(r"\bninja\b|\bninjas\b", re.I)),
 
     # Go-wide / token strategy
     ("go_wide",         re.compile(r"create (a|an|x|\d+) .{0,20}(token|creature) token", re.I)),
@@ -196,6 +225,23 @@ _ARCHETYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
     # Lifegain payoff
     ("lifegain",        re.compile(r"whenever you (gain|gained) life", re.I)),
+
+    # Combat damage matters — commander rewards connecting with players
+    # Covers self-rewarding commanders (Locke Cole draws/loots on hit) and
+    # team-amplifying commanders (Lightning grants the effect to your whole board).
+    ("combat_damage",   re.compile(r"whenever .{0,60}deals combat damage to a player", re.I)),
+
+    # Discard outlet — commander gives *you* a way to discard, fueling
+    # madness, graveyard strategies, or payoffs like Bone Miser / Waste Not.
+    # Covers: loot effects ("draw a card, then discard"), optional discard
+    # ("you may discard"), and discard-as-cost activated abilities.
+    ("discard_outlet",  re.compile(r"then discard (a|\d+|x) cards?", re.I)),
+    ("discard_outlet",  re.compile(r"you may discard", re.I)),
+    ("discard_outlet",  re.compile(r"discard (a|\d+|x) cards?:", re.I)),
+
+    # Extra damage — commander multiplies or redirects combat damage dealt
+    # (e.g. Lightning, Army of One: "deals that much damage again").
+    ("extra_damage",    re.compile(r"deals? .{0,40}(that much|additional \d+|double (that|the)) damage", re.I)),
 ]
 
 # How each archetype shifts role demand weights (multiplier on base frequency)
@@ -208,19 +254,42 @@ ARCHETYPE_ROLE_WEIGHTS: dict[str, dict[str, float]] = {
     "voltron":       {"protection": 2.0, "win_condition": 1.5},
     "landfall":      {"ramp": 1.4},
     "lifegain":      {"win_condition": 1.3},
+    # Combat-damage commanders need the commander itself to connect — evasion
+    # and unblockable effects are the primary demand, draw rewards the hits,
+    # protection keeps the commander alive between attacks.
+    "combat_damage": {"combat_trick": 2.0, "draw": 1.3, "protection": 1.2},
+    # Discard-outlet commanders want payoffs that fire on discard (Bone Miser,
+    # Waste Not) and draw/loot to keep the engine churning.
+    "discard_outlet": {"discard_trigger": 2.0, "draw": 1.3},
+    # Extra-damage commanders multiply each hit — getting through blockers is
+    # even more critical, so combat_trick demand is highest of all archetypes.
+    "extra_damage":  {"combat_trick": 2.2, "protection": 1.3},
 }
 # Tribal commanders implicitly value all tribal sub-roles equally
 for _t in [k for k in _ARCHETYPE_PATTERNS if k[0].startswith("tribal_")]:
     ARCHETYPE_ROLE_WEIGHTS[_t[0]] = {"win_condition": 1.2}
+# Ninja commanders specifically need evasion to enable ninjutsu and connect
+ARCHETYPE_ROLE_WEIGHTS["tribal_ninjas"] = {"win_condition": 1.5, "draw": 1.3}
 
 
 def detect_archetypes(oracle_text: str, type_line: str = "") -> list[str]:
-    """Return list of archetype tags for a commander based on its oracle text."""
-    combined = f"{type_line}\n{oracle_text}".lower()
+    """Return list of archetype tags for a commander based on its oracle text.
+
+    Tribal patterns are intentionally matched against oracle_text only — a
+    commander's own type line tells us what *it* is, not what it cares about.
+    Non-tribal patterns use the combined text so keyword grants in the type
+    line (e.g. "Legendary Creature — Sliver") still surface if needed.
+    """
+    oracle_lower   = oracle_text.lower()
+    combined_lower = f"{type_line}\n{oracle_text}".lower()
+
     seen: set[str] = set()
     results: list[str] = []
     for archetype, pattern in _ARCHETYPE_PATTERNS:
-        if archetype not in seen and pattern.search(combined):
+        if archetype in seen:
+            continue
+        text = oracle_lower if archetype.startswith("tribal_") else combined_lower
+        if pattern.search(text):
             seen.add(archetype)
             results.append(archetype)
     return results
