@@ -363,6 +363,55 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
          re.I,
      ),
      0.8),
+
+    # ── Forced / incentivized combat patterns ─────────────────────────────────
+
+    # Monarch — political mechanic: you draw a card each turn while monarch;
+    # lose the crown when a creature deals combat damage to you.  Creates a
+    # natural incentive for opponents to attack and for you to defend (or
+    # take it back via combat).  Producers: Swords and shields, pillowfort,
+    # creatures that trigger off being attacked, token generators.
+    # Covers all phrasings: "become the monarch", "you're the monarch",
+    # "if you're the monarch", etc.  (~7 commanders)
+    ("monarch",
+     "Monarch mechanic",
+     re.compile(r"\bmonarch\b", re.I),
+     0.9),
+
+    # Initiative — Baldur's Gate mechanic: take the initiative to advance
+    # through the Undercity dungeon; retain it until an opponent attacks you
+    # with a creature that deals damage.  Similar political pressure to
+    # monarch.  Producers: efficient combat creatures, protection effects.
+    # (~4 commanders including Rilsa Rael, Safana, Rasaad yn Bashir)
+    ("initiative",
+     "Initiative mechanic",
+     re.compile(r"\binitiative\b", re.I),
+     0.9),
+
+    # Goad — forces target creature to attack each combat if able, and to
+    # attack a player other than the goading player.  Commander-level goad
+    # turns the table into a battleground and rewards you for keeping
+    # opponents fighting each other.  Producers: wide token swarms, flash
+    # creatures, instants that tap-or-destroy blockers.
+    # (~24 commanders: Karazikar, Marisi, Kitt Kanto, Kardur, Kaima, etc.)
+    ("goad",
+     "Goad",
+     re.compile(r"\bgoad\b", re.I),
+     0.9),
+
+    # Forced attack — creatures (often the commander itself, or all creatures)
+    # must attack each combat if able.  Distinct from goad: this is a blanket
+    # rule on the board rather than a targeted effect.  Commanders in this
+    # bucket want creatures that are good at attacking but can survive doing
+    # so every turn: haste enablers, equipment, protection, extra combats.
+    # Covers both self-forcing ("Zurgo attacks each combat if able") and
+    # global-forcing ("All creatures attack each combat if able" — Thantis,
+    # Kardur's ETB effect, etc.).
+    # (~23 commanders: Thantis, Zurgo, Toski, Ruric Thar, Haktos, Fumiko, etc.)
+    ("forced_attack",
+     "Forced attack each combat",
+     re.compile(r"attacks? each combat if able|all creatures attack each combat", re.I),
+     0.8),
 ]
 
 # ── Trigger clause extraction ─────────────────────────────────────────────────
