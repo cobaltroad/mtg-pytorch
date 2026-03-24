@@ -364,29 +364,25 @@ def load_synergy_positions(
 
     with _get_conn() as conn:
         with conn.cursor() as cur:
+            # commander_value and tribal_typeline edges have card_a = commander,
+            # card_b = payoff/tribal-member — the correct direction for Phase 4.
+            # xmage_ability_trigger edges have producers as card_a and are not
+            # commander-centric; they are not queried here.
             cur.execute("""
                 SELECT card_a::text, card_b::text, score_type
                 FROM synergy_edges
-                WHERE score_type IN ('xmage_ability_trigger', 'tribal_typeline')
+                WHERE score_type IN ('commander_value', 'tribal_typeline')
                   AND card_a::text = ANY(%s)
             """, (commander_ids,))
-            fwd = list(cur.fetchall())
-
-            cur.execute("""
-                SELECT card_b::text AS card_a, card_a::text AS card_b, score_type
-                FROM synergy_edges
-                WHERE score_type IN ('xmage_ability_trigger', 'tribal_typeline')
-                  AND card_b::text = ANY(%s)
-            """, (commander_ids,))
-            rev = list(cur.fetchall())
+            rows = list(cur.fetchall())
 
     syn_count = 0
-    for card_a, card_b, score_type in fwd + rev:
+    for card_a, card_b, score_type in rows:
         if card_a not in cmd_legal or card_b not in emb_set:
             continue
         if cmd_count[card_a] >= synergy_limit_per_commander:
             continue
-        weight = ability_weight if score_type == "xmage_ability_trigger" else tribal_weight
+        weight = ability_weight if score_type == "commander_value" else tribal_weight
         positions.append({
             "commander_id":      card_a,
             "context_card_ids":  [],
@@ -439,11 +435,15 @@ def load_synergy_positions_global(
 
     with _get_conn() as conn:
         with conn.cursor() as cur:
+            # commander_value and tribal_typeline edges have card_a = commander,
+            # card_b = payoff/tribal-member — the correct direction for Phase 4.
+            # xmage_ability_trigger edges are producer-centric (card_a = producer)
+            # and do not identify commanders; they are not queried here.
             cur.execute("""
                 SELECT se.card_a::text, se.card_b::text, se.score_type
                 FROM synergy_edges se
                 JOIN cards c ON c.id = se.card_a
-                WHERE se.score_type IN ('xmage_ability_trigger', 'tribal_typeline')
+                WHERE se.score_type IN ('commander_value', 'tribal_typeline')
                   AND se.card_b IS NOT NULL
                   AND c.legalities->>'commander' = 'legal'
                   AND (c.type_line ILIKE '%Legendary Creature%'
@@ -459,7 +459,7 @@ def load_synergy_positions_global(
         if cmd_count[card_a] >= synergy_limit_per_commander:
             continue
         cmd_ci = color_ids.get(card_a, frozenset())
-        weight = ability_weight if score_type == "xmage_ability_trigger" else tribal_weight
+        weight = ability_weight if score_type == "commander_value" else tribal_weight
         positions.append({
             "commander_id":      card_a,
             "context_card_ids":  [],
