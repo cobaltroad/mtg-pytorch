@@ -1,6 +1,6 @@
 """Dataset stage — compute synergy edges for training datasets.
 
-Writes two distinct score_type buckets:
+Writes three distinct score_type buckets:
 
   ability_trigger         — oracle-text pattern-based edges (PRODUCER_MAP).
                             Consumed by: co-occurrence training path,
@@ -9,7 +9,19 @@ Writes two distinct score_type buckets:
   xmage_ability_trigger   — XMage-class edges (XMAGE_PRODUCER_MAP).
                             Consumed by: compositional training path (export_dataset).
 
-Entrypoint:  python -m stages.dataset [--stage compute_synergy|compute_synergy_xmage]
+  effect_peer             — peer edges between cards sharing the same
+                            (trigger_event, effect_class) in card_abilities
+                            (source='xmage').  No producer concept — purely a
+                            functional-role similarity signal.  Fixes the Phase 2
+                            creature-cast super-cluster: Beast Whisperer, Guardian
+                            Project, and Lifecrafter's Bestiary share
+                            (creature_cast, draw) edges; Impact Tremors, Purphoros,
+                            and Warstorm Surge share (creature_cast, damage) edges.
+                            Consumed by: compositional training path (export_dataset).
+                            Requires tag_abilities_xmage to have been run first.
+
+Entrypoint:  python -m stages.dataset
+             [--stage compute_synergy|compute_synergy_xmage|compute_effect_peer_synergy]
 """
 from __future__ import annotations
 
@@ -17,9 +29,14 @@ import logging
 
 from sqlalchemy import text
 
+import os
+
 from stages.db import Session, SYNERGY_CHUNK, SYNERGY_LIMIT
 
 log = logging.getLogger(__name__)
+
+EFFECT_PEER_LIMIT = int(os.environ.get("EFFECT_PEER_LIMIT", "500_000"))
+"""Maximum effect_peer edges total (across all (trigger_event, effect_class) groups)."""
 
 from synergy import (  # noqa: E402
     PRODUCER_MAP,
@@ -271,6 +288,103 @@ async def compute_synergy_xmage() -> None:
                 log.info("  %s → no producers found, skipping", ability_class)
 
 
+async def compute_effect_peer_synergy() -> None:
+    """Build peer synergy edges between cards sharing the same (trigger_event, effect_class).
+
+    Reads ``card_abilities`` rows where ``source='xmage'`` and groups cards by
+    ``(trigger_event, effect_class)``.  Every card in a group gets a direct
+    ``effect_peer`` edge to every other card in that group.
+
+    This is a pure functional-role similarity signal — no producer/consumer
+    concept.  Examples:
+
+    * ``(creature_cast, draw)`` → Beast Whisperer ↔ Guardian Project ↔
+      Lifecrafter's Bestiary ↔ The Great Henge ↔ …
+    * ``(creature_cast, damage)`` → Impact Tremors ↔ Purphoros ↔
+      Warstorm Surge ↔ Terror of the Peaks ↔ …
+
+    Without these edges Phase 2 training collapses all creature-cast trigger
+    consumers into one super-cluster because they share the same ~6,000 creature
+    producers.  These peer edges directly counteract that collapse.
+
+    Requires ``tag_abilities_xmage`` to have been run first.  Groups with only
+    one card are skipped (no peer to pair with).  Processing stops once
+    EFFECT_PEER_LIMIT total edges have been inserted across all groups.
+
+    Edges are written with ``score_type='effect_peer'`` so they are kept
+    separate from producer→consumer edges and can be sampled independently
+    during export.
+    """
+    log.info("Computing effect-peer synergy edges…")
+
+    # Fetch all (trigger_event, effect_class) groups that have >1 distinct card.
+    async with Session() as db:
+        group_rows = (await db.execute(text("""
+            SELECT trigger_event, effect_class,
+                   array_agg(DISTINCT card_id::text ORDER BY card_id::text) AS card_ids
+            FROM card_abilities
+            WHERE source        = 'xmage'
+              AND trigger_event IS NOT NULL
+              AND effect_class  IS NOT NULL
+            GROUP BY trigger_event, effect_class
+            HAVING count(DISTINCT card_id) > 1
+            ORDER BY trigger_event, effect_class
+        """))).fetchall()
+
+    if not group_rows:
+        log.warning(
+            "No (trigger_event, effect_class) groups found in card_abilities "
+            "(source='xmage') — run tag_abilities_xmage first."
+        )
+        return
+
+    total_inserted = 0
+    for trigger_event, effect_class, card_ids in group_rows:
+        if total_inserted >= EFFECT_PEER_LIMIT:
+            log.info("EFFECT_PEER_LIMIT=%d reached, stopping", EFFECT_PEER_LIMIT)
+            break
+
+        n = len(card_ids)
+        peer_list = "'" + "','".join(card_ids) + "'"
+        # Escape for jsonb literal — values from DB should be alphanumeric/underscore
+        meta = (
+            f'{{"trigger_event": "{trigger_event}", "effect_class": "{effect_class}"}}'
+        )
+
+        group_inserted = 0
+        n_chunks = (n + SYNERGY_CHUNK - 1) // SYNERGY_CHUNK
+        log.info(
+            "  effect_peer/%s/%s: %d cards, %d potential edges, %d chunks…",
+            trigger_event, effect_class, n, n * (n - 1), n_chunks,
+        )
+
+        for chunk_start in range(0, n, SYNERGY_CHUNK):
+            chunk = card_ids[chunk_start : chunk_start + SYNERGY_CHUNK]
+            id_list = "'" + "','".join(chunk) + "'"
+
+            async with Session() as db:
+                result = await db.execute(text(f"""
+                    INSERT INTO synergy_edges (card_a, card_b, score_type, score, metadata)
+                    SELECT
+                        a.id::uuid,
+                        b.id::uuid,
+                        'effect_peer',
+                        1.0,
+                        '{meta}'::jsonb
+                    FROM (SELECT unnest(ARRAY[{id_list}]::uuid[]) AS id) a
+                    CROSS JOIN (SELECT unnest(ARRAY[{peer_list}]::uuid[]) AS id) b
+                    WHERE a.id != b.id
+                    ON CONFLICT (card_a, card_b, score_type) DO NOTHING
+                """))
+                await db.commit()
+            group_inserted += result.rowcount
+
+        total_inserted += group_inserted
+        log.info("    → %d new edges", group_inserted)
+
+    log.info("Effect-peer synergy complete: %d total edges", total_inserted)
+
+
 if __name__ == "__main__":
     import argparse
     import asyncio
@@ -281,9 +395,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute synergy edges for training datasets")
     parser.add_argument(
         "--stage",
-        choices=["compute_synergy", "compute_synergy_xmage"],
+        choices=["compute_synergy", "compute_synergy_xmage", "compute_effect_peer_synergy"],
         default=None,
-        help="Run a single synergy stage (default: run both)",
+        help="Run a single synergy stage (default: run all three)",
     )
     args = parser.parse_args()
 
@@ -291,8 +405,11 @@ if __name__ == "__main__":
         asyncio.run(compute_synergy())
     elif args.stage == "compute_synergy_xmage":
         asyncio.run(compute_synergy_xmage())
+    elif args.stage == "compute_effect_peer_synergy":
+        asyncio.run(compute_effect_peer_synergy())
     else:
-        async def _run_both():
+        async def _run_all():
             await compute_synergy()
             await compute_synergy_xmage()
-        asyncio.run(_run_both())
+            await compute_effect_peer_synergy()
+        asyncio.run(_run_all())

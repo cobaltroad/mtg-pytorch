@@ -26,14 +26,15 @@ log = logging.getLogger(__name__)
 DATABASE_URL    = os.environ["DATABASE_URL"]
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
-SAMPLE_PER_EVENT = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
-                        os.environ.get("DATASET_SAMPLE", "100000")))
-ROLE_SAMPLE     = int(os.environ.get("DATASET_ROLE_SAMPLE",  "100000"))
-COMBO_SAMPLE    = int(os.environ.get("DATASET_COMBO_SAMPLE", "200000"))
-CV_SAMPLE       = int(os.environ.get("DATASET_CV_SAMPLE",    "200000"))
-NEG_RATIO       = int(os.environ.get("DATASET_NEG_RATIO",    "3"))
-HARD_NEG_FRAC   = float(os.environ.get("DATASET_HARD_NEG_FRAC", "0.5"))
-SYN_LIMIT       = int(os.environ.get("DATASET_SYN_LIMIT",    "300"))
+SAMPLE_PER_EVENT  = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
+                         os.environ.get("DATASET_SAMPLE", "100000")))
+ROLE_SAMPLE       = int(os.environ.get("DATASET_ROLE_SAMPLE",       "100000"))
+COMBO_SAMPLE      = int(os.environ.get("DATASET_COMBO_SAMPLE",      "200000"))
+CV_SAMPLE         = int(os.environ.get("DATASET_CV_SAMPLE",         "200000"))
+EFFECT_PEER_SAMPLE = int(os.environ.get("DATASET_EFFECT_PEER_SAMPLE", "200000"))
+NEG_RATIO         = int(os.environ.get("DATASET_NEG_RATIO",    "3"))
+HARD_NEG_FRAC     = float(os.environ.get("DATASET_HARD_NEG_FRAC", "0.5"))
+SYN_LIMIT         = int(os.environ.get("DATASET_SYN_LIMIT",    "300"))
 
 
 # ── Connection ────────────────────────────────────────────────────────────────
@@ -151,12 +152,13 @@ def _load_synergy_pairs(
     normed: np.ndarray,
     ability_score_type: str = "ability_trigger",
     include_commander_value: bool = False,
+    include_effect_peer: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (a_idx, b_idx, labels) int32/float32 arrays.
 
     Covers ability edges (score_type controlled by *ability_score_type*),
-    role_demand, combo, and optionally commander_value, plus pre-mined hard
-    negatives and random negatives.
+    role_demand, combo, and optionally commander_value or effect_peer, plus
+    pre-mined hard negatives and random negatives.
 
     Args:
         ability_score_type: ``'ability_trigger'`` for the co-occurrence path
@@ -166,11 +168,16 @@ def _load_synergy_pairs(
             edges.  Defaults to ``False`` — those edges are covered by
             ``export_dataset_commanders.py``.  Pass ``True`` for the
             co-occurrence path which does not use that artifact.
+        include_effect_peer: Whether to include ``effect_peer`` synergy edges
+            (cards sharing the same (trigger_event, effect_class) bucket).
+            Defaults to ``False``.  Pass ``True`` for the compositional path
+            to separate Beast Whisperer from Impact Tremors in Phase 2.
     """
     log.info(
-        "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d%s)…",
+        "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d%s%s)…",
         ability_score_type, SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE,
         f", cv={CV_SAMPLE}" if include_commander_value else "",
+        f", ep={EFFECT_PEER_SAMPLE}" if include_effect_peer else "",
     )
     positives: list[tuple[int, int, float]] = []
 
@@ -268,6 +275,34 @@ def _load_synergy_pairs(
                 ]
                 positives += cv_pairs
                 log.info("  + %d commander_value pairs", len(cv_pairs))
+
+            # effect_peer — cards sharing (trigger_event, effect_class).
+            # Stratified per bucket so large buckets (creature_cast/draw) don't
+            # crowd out small ones.  Only meaningful for the compositional path.
+            if include_effect_peer and EFFECT_PEER_SAMPLE > 0:
+                cur.execute("""
+                    SELECT card_a::text, card_b::text,
+                           metadata->>'trigger_event' || '/' || metadata->>'effect_class' AS bucket
+                    FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                    WHERE score_type = 'effect_peer'
+                """)
+                ep_by_bucket: dict[str, list[tuple[str, str]]] = defaultdict(list)
+                for card_a, card_b, bucket in cur.fetchall():
+                    ep_by_bucket[bucket].append((card_a, card_b))
+
+                ep_start = len(positives)
+                per_bucket = max(1, EFFECT_PEER_SAMPLE // max(len(ep_by_bucket), 1))
+                for bucket, bucket_rows in sorted(ep_by_bucket.items()):
+                    random.shuffle(bucket_rows)
+                    n_added = 0
+                    for card_a, card_b in bucket_rows[:per_bucket]:
+                        if card_a in id_to_idx and card_b in id_to_idx:
+                            positives.append((id_to_idx[card_a], id_to_idx[card_b], 1.0))
+                            n_added += 1
+                    log.info("    %-55s  %6d pairs  (pool %d)", bucket, n_added, len(bucket_rows))
+
+                total_ep = len(positives) - ep_start
+                log.info("  + %d effect_peer pairs across %d buckets", total_ep, len(ep_by_bucket))
 
     log.info("  %d total positive pairs", len(positives))
 
