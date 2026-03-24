@@ -1,15 +1,14 @@
-"""Producer SQL fragments for commander decomposition pattern keys.
+"""Producer SQL fragments for commander mechanic pattern keys.
 
-Maps each pattern_key emitted by ``decompose_commanders.py`` to a SQL WHERE
-fragment that selects cards which are good producers / enablers for a deck
-built around a commander matching that pattern.
+Maps each pattern_key to a SQL WHERE fragment that selects cards which are
+good producers / enablers for a deck built around a commander matching that
+pattern.  These fragments feed ``compute_synergy`` (via ``PRODUCER_MAP``) and
+``tag_abilities`` (via ``TRIGGER_PATTERNS``) to build the ``synergy_edges``
+rows that ``export_dataset_commanders.py`` reads.
 
-Usage
------
-``PATTERN_KEY_TO_PRODUCER_SQL`` is consumed by
-``export_dataset_commanders.py``, which pre-builds one result set per key
-(without color-identity filtering), then applies color filtering in Python
-per commander.
+``decompose_commanders.py`` uses the same pattern vocabulary for gap analysis
+— identifying which commanders lack coverage and where ``tag_abilities``
+patterns should be extended.
 
 Two families of keys are covered:
 

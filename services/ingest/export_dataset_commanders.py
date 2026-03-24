@@ -1,8 +1,8 @@
 """
-Export a commander-centric training artifact from pattern decomposition.
+Export a commander-centric training artifact from synergy edges.
 
 Produces /data/mtg_commanders.pt — a self-contained artifact for Phase 3
-training that does NOT require human decklists.
+BPR training that does NOT require human decklists.
 
 Background
 ----------
@@ -10,31 +10,37 @@ Human decklists introduce representation collapse in BPR training because
 every commander needs the same generic roles (draw, ramp, removal), driving
 all commander embeddings toward an indistinct high-similarity cluster.
 
-This artifact takes a different approach: for each commander we select
-*producer* cards — cards specifically enabled by that commander's pattern
-signals (ETB triggers want ETB creatures; enchantment cast triggers want
-enchantment spells, etc.).  The result is a per-commander positive set that
-is genuinely distinct from other commanders' positive sets, giving BPR a
-meaningful gradient to train on.
+This artifact builds per-commander positive sets from synergy_edges, which
+encode distinct mechanic-specific card relationships:
+
+  ability_trigger edges  card_a (producer) → card_b (commander/consumer)
+                         "card_a belongs in a deck with this commander
+                         because the commander's ability fires when card_a
+                         is in play or cast"
+
+  commander_value edges  card_a (commander) → card_b (payoff card)
+                         "card_b is better when this commander is in play"
+
+Because producers are selected by what each commander's abilities *react to*
+(ETB creatures for an ETB commander, enchantments for Sythis, etc.) the
+positive sets are genuinely distinct across commanders, giving BPR a
+meaningful gradient.
 
 Data flow
 ---------
 1. Load embeddings + card metadata from the database.
-2. Load ``commander_decomposition.json`` — the output of
-   ``scripts/decompose_commanders.py``, containing per-commander signals.
-3. Pre-build producer cache: one SQL query per pattern key from
-   ``synergy/commander_patterns.py:PATTERN_KEY_TO_PRODUCER_SQL``.
-   Result: ``{pattern_key: set[card_id]}``.
+2. Load all embedded legal commanders.
+3. Two bulk queries against synergy_edges:
+   a. ability_trigger WHERE card_b IN commanders  → producers per commander
+   b. commander_value WHERE card_a IN commanders  → payoffs per commander
 4. Per commander:
-   a. Collect positive card IDs = union of producer sets for each detected
-      signal's pattern_key, filtered to cards legal in the commander's
-      color identity.
-   b. Skip commanders with < MIN_POSITIVES producers.
+   a. Union ability_trigger producers + commander_value payoffs,
+      re-filtered to strict color-identity legality (⊆ commander CI).
+   b. Skip commanders with < MIN_POSITIVES cards.
    c. Cap positives at MAX_POSITIVES (shuffle + truncate).
-   d. Build ``legal_neg_indices``: all color-legal embedded cards NOT in the
-      positive set.
-   e. Emit a deck dict compatible with ``train.py``'s ``DeckDataset``.
-5. Save artifact as ``mtg_commanders.pt``.
+   d. Build legal_neg_indices: color-legal embedded cards NOT in positive set.
+   e. Archetype derived from distinct trigger_event values on the edges.
+5. Save artifact as mtg_commanders.pt.
 
 Artifact keys
 -------------
@@ -48,25 +54,17 @@ Artifact keys
                          card_idxs         list[int]   (positive producers)
                          color_identity    list[str]
                          legal_neg_indices Tensor[int64]
-                         archetype         str          (joined pattern keys)
+                         archetype         str  (distinct trigger_event values)
 
 Usage
 -----
     docker compose run --rm ingest python export_dataset_commanders.py
 
-    # Custom decomposition file or output path:
-    COMMANDERS_INPUT=/data/commander_decomposition.json \\
-    COMMANDERS_OUTPUT=/data/mtg_commanders.pt \\
-        docker compose run --rm ingest python export_dataset_commanders.py
-
 Environment variables
 ---------------------
-  COMMANDERS_INPUT   Path to commander_decomposition.json
-                     (default: /data/commander_decomposition.json)
-  COMMANDERS_OUTPUT  Output .pt path
-                     (default: /data/mtg_commanders.pt)
-  COMMANDERS_MIN_POS Minimum producers required to include a commander (default 10)
-  COMMANDERS_MAX_POS Maximum producers per commander — capped for balance (default 300)
+  COMMANDERS_OUTPUT  Output .pt path       (default: /data/mtg_commanders.pt)
+  COMMANDERS_MIN_POS Min producers to include a commander   (default: 10)
+  COMMANDERS_MAX_POS Cap per-commander positives            (default: 300)
 """
 
 from __future__ import annotations
@@ -75,6 +73,7 @@ import json
 import logging
 import os
 import random
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -83,14 +82,11 @@ import psycopg2
 import psycopg2.extras
 import torch
 
-from synergy.commander_patterns import PATTERN_KEY_TO_PRODUCER_SQL
-
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 DATABASE_URL    = os.environ["DATABASE_URL"]
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
-INPUT_PATH      = Path(os.environ.get("COMMANDERS_INPUT",  "/data/commander_decomposition.json"))
 OUTPUT_PATH     = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
 MIN_POSITIVES   = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
 MAX_POSITIVES   = int(os.environ.get("COMMANDERS_MAX_POS", "300"))
@@ -168,59 +164,112 @@ def _load_color_identities(id_to_idx: dict[str, int]) -> dict[str, frozenset]:
     return result
 
 
-# ── Step 4: Producer cache ────────────────────────────────────────────────────
+# ── Step 4: Legal commanders ──────────────────────────────────────────────────
 
-def _build_producer_cache(
+def _load_commander_ids(id_to_idx: dict[str, int]) -> set[str]:
+    """Return all embedded cards that are legal commanders."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id::text FROM cards
+                WHERE legalities->>'commander' = 'legal'
+                  AND (
+                      type_line ILIKE '%Legendary Creature%'
+                      OR type_line ILIKE '%Legendary Planeswalker%'
+                      OR oracle_text ILIKE '%can be your commander%'
+                  )
+            """)
+            all_ids = {row[0] for row in cur.fetchall()}
+    embedded = all_ids & id_to_idx.keys()
+    log.info("Legal commanders: %d total, %d embedded", len(all_ids), len(embedded))
+    return embedded
+
+
+# ── Step 5: Synergy edges ─────────────────────────────────────────────────────
+
+def _load_commander_positives(
+    commander_ids: set[str],
     id_to_idx: dict[str, int],
-    pattern_keys: set[str],
-) -> dict[str, set[str]]:
-    """Pre-build {pattern_key: set[card_id]} with one query per key.
+    color_ids: dict[str, frozenset],
+) -> dict[str, tuple[set[str], list[str]]]:
+    """Return {commander_id: (pos_card_ids, trigger_events)} from synergy_edges.
 
-    Only queries keys that are actually present in the decomposition data,
-    avoiding unnecessary round-trips for unused patterns.
+    Sources:
+    - ability_trigger: card_a (producer) → card_b (commander)
+      Color filtering at edge-build time uses && (overlap), which is looser
+      than deck-legality (⊆).  We re-apply strict subset filtering here.
+    - commander_value: card_a (commander) → card_b (payoff card)
+      Color filtering was intentionally skipped at build time; applied here.
     """
-    log.info("Building producer cache for %d pattern keys…", len(pattern_keys))
-    cache: dict[str, set[str]] = {}
+    cmd_list = list(commander_ids)
+    # {commander_id: (set of positive card_ids, list of trigger_event labels)}
+    result: dict[str, tuple[set[str], list[str]]] = {
+        cid: (set(), []) for cid in commander_ids
+    }
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for key in sorted(pattern_keys):
-                sql_where = PATTERN_KEY_TO_PRODUCER_SQL.get(key)
-                if sql_where is None:
-                    log.warning("  No producer SQL for pattern key %r — skipping", key)
-                    cache[key] = set()
+
+            # ── ability_trigger: producers → commander ────────────────────────
+            log.info("Loading ability_trigger edges for %d commanders…", len(cmd_list))
+            cur.execute("""
+                SELECT card_a::text, card_b::text,
+                       COALESCE(metadata->>'trigger_event', '') AS trigger_event
+                FROM synergy_edges
+                WHERE score_type = 'ability_trigger'
+                  AND card_b::text = ANY(%s)
+            """, (cmd_list,))
+            ability_rows = cur.fetchall()
+            log.info("  %d ability_trigger rows fetched", len(ability_rows))
+
+            for card_a, card_b, trigger_event in ability_rows:
+                if card_a not in id_to_idx or card_b not in result:
                     continue
+                cmd_ci  = color_ids.get(card_b, frozenset())
+                card_ci = color_ids.get(card_a, frozenset())
+                # Strict subset: producer must fit entirely within commander CI
+                if card_ci <= cmd_ci:
+                    pos_ids, events = result[card_b]
+                    pos_ids.add(card_a)
+                    if trigger_event:
+                        events.append(trigger_event)
 
-                cur.execute(
-                    f"SELECT id::text FROM cards WHERE {sql_where}",
-                )
-                ids = {row[0] for row in cur.fetchall() if row[0] in id_to_idx}
-                cache[key] = ids
-                log.info("  %-35s  %6d producer cards", key, len(ids))
+            # ── commander_value: commander → payoff card ──────────────────────
+            log.info("Loading commander_value edges for %d commanders…", len(cmd_list))
+            cur.execute("""
+                SELECT card_a::text, card_b::text
+                FROM synergy_edges
+                WHERE score_type = 'commander_value'
+                  AND card_a::text = ANY(%s)
+            """, (cmd_list,))
+            cv_rows = cur.fetchall()
+            log.info("  %d commander_value rows fetched", len(cv_rows))
 
-    total = sum(len(v) for v in cache.values())
-    log.info("Producer cache complete: %d keys, %d total entries", len(cache), total)
-    return cache
+            for card_a, card_b in cv_rows:
+                if card_a not in result or card_b not in id_to_idx:
+                    continue
+                cmd_ci  = color_ids.get(card_a, frozenset())
+                card_ci = color_ids.get(card_b, frozenset())
+                if card_ci <= cmd_ci:
+                    pos_ids, events = result[card_a]
+                    pos_ids.add(card_b)
+
+    total_pos = sum(len(v[0]) for v in result.values())
+    covered   = sum(1 for v in result.values() if v[0])
+    log.info("Positives loaded: %d commanders with ≥1 positive, %d total cards",
+             covered, total_pos)
+    return result
 
 
-# ── Step 5: Build synthetic decks ─────────────────────────────────────────────
+# ── Step 6: Build synthetic decks ─────────────────────────────────────────────
 
 def _build_commander_decks(
-    decomposition: list[dict],
+    commander_ids: set[str],
     id_to_idx: dict[str, int],
     card_ids: list[str],
     color_ids: dict[str, frozenset],
-    producer_cache: dict[str, set[str]],
+    positives: dict[str, tuple[set[str], list[str]]],
 ) -> list[dict]:
-    """Build one synthetic deck record per commander.
-
-    For each commander:
-    - positives  = union of producer sets for all detected signal pattern keys,
-                   filtered to cards that fit the commander's color identity.
-    - negatives  = all color-legal embedded cards NOT in the positive set.
-    """
-    log.info("Building synthetic decks for %d commanders…", len(decomposition))
-
     n = len(card_ids)
     _legal_cache: dict[frozenset, np.ndarray] = {}
 
@@ -235,56 +284,27 @@ def _build_commander_decks(
         return _legal_cache[cmd_ci]
 
     decks: list[dict] = []
-    skipped_no_id   = 0
-    skipped_no_sig  = 0
-    skipped_few_pos = 0
+    skipped_few = 0
 
-    for entry in decomposition:
-        signals = entry.get("signals", [])
-        if not signals:
-            skipped_no_sig += 1
-            continue
-
-        # Decomposition entries have an "id" field — the card UUID from the DB.
-        commander_id: str | None = entry.get("id")
-        if commander_id is None or commander_id not in id_to_idx:
-            skipped_no_id += 1
-            continue
-
-        cmd_idx = id_to_idx[commander_id]
-        cmd_ci  = color_ids.get(commander_id, frozenset())
-
-        # Collect positives: union of producers for each signal, color-filtered
-        pos_ids: set[str] = set()
-        pattern_keys_used: list[str] = []
-        for sig in signals:
-            key = sig.get("pattern_key", "")
-            producers = producer_cache.get(key, set())
-            # Color-identity filter
-            color_legal = {pid for pid in producers
-                           if color_ids.get(pid, frozenset()) <= cmd_ci}
-            if color_legal:
-                pos_ids.update(color_legal)
-                pattern_keys_used.append(key)
-
-        # Remove the commander itself from positives
+    for commander_id in sorted(commander_ids):
+        pos_ids, trigger_events = positives.get(commander_id, (set(), []))
         pos_ids.discard(commander_id)
 
         if len(pos_ids) < MIN_POSITIVES:
-            skipped_few_pos += 1
+            skipped_few += 1
             continue
 
-        # Cap positives
         pos_list = list(pos_ids)
         if len(pos_list) > MAX_POSITIVES:
             random.shuffle(pos_list)
             pos_list = pos_list[:MAX_POSITIVES]
 
-        pos_idxs = [id_to_idx[pid] for pid in pos_list if pid in id_to_idx]
-
-        # Legal negatives: color-legal cards not in positive set
-        legal = _legal_indices(cmd_ci)
+        pos_idxs   = [id_to_idx[pid] for pid in pos_list if pid in id_to_idx]
+        cmd_ci     = color_ids.get(commander_id, frozenset())
+        legal      = _legal_indices(cmd_ci)
         pos_idx_set = set(pos_idxs)
+        cmd_idx    = id_to_idx[commander_id]
+
         neg_legal = np.array(
             [i for i in legal if i not in pos_idx_set and i != cmd_idx],
             dtype=np.int64,
@@ -292,7 +312,13 @@ def _build_commander_decks(
         if len(neg_legal) == 0:
             neg_legal = legal
 
-        archetype = ", ".join(dict.fromkeys(pattern_keys_used))  # deduplicated, ordered
+        # Archetype: deduplicated trigger_event labels, most frequent first
+        event_counts: dict[str, int] = defaultdict(int)
+        for e in trigger_events:
+            event_counts[e] += 1
+        archetype = ", ".join(k for k, _ in sorted(
+            event_counts.items(), key=lambda x: -x[1]
+        )[:5])
 
         decks.append({
             "commander_idx":     cmd_idx,
@@ -303,9 +329,8 @@ def _build_commander_decks(
         })
 
     log.info(
-        "Built %d synthetic decks  "
-        "(skipped: %d no_id, %d no_signals, %d too_few_producers)",
-        len(decks), skipped_no_id, skipped_no_sig, skipped_few_pos,
+        "Built %d synthetic decks  (skipped %d with < %d positives)",
+        len(decks), skipped_few, MIN_POSITIVES,
     )
     return decks
 
@@ -313,63 +338,44 @@ def _build_commander_decks(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    if not INPUT_PATH.exists():
-        raise FileNotFoundError(
-            f"Commander decomposition not found: {INPUT_PATH}\n"
-            "Run: docker compose run --rm ingest python scripts/decompose_commanders.py"
-        )
-
-    log.info("Loading commander decomposition from %s…", INPUT_PATH)
-    with INPUT_PATH.open(encoding="utf-8") as fh:
-        decomposition: list[dict] = json.load(fh)
-    log.info("Loaded %d commander entries", len(decomposition))
-
     # 1. Embeddings
     card_ids, emb_matrix = _load_embeddings()
     id_to_idx = {cid: i for i, cid in enumerate(card_ids)}
 
-    # 2. Card metadata
-    card_meta = _load_card_meta(id_to_idx)
+    # 2. Card metadata + color identities
+    card_meta  = _load_card_meta(id_to_idx)
+    color_ids  = _load_color_identities(id_to_idx)
 
-    # 3. Color identities
-    color_ids = _load_color_identities(id_to_idx)
+    # 3. Legal commanders (embedded subset)
+    commander_ids = _load_commander_ids(id_to_idx)
 
-    # 4. Producer cache (only for keys actually present in the decomposition)
-    all_pattern_keys: set[str] = set()
-    for entry in decomposition:
-        for sig in entry.get("signals", []):
-            k = sig.get("pattern_key")
-            if k:
-                all_pattern_keys.add(k)
-    producer_cache = _build_producer_cache(id_to_idx, all_pattern_keys)
+    # 4. Positives from synergy_edges (two bulk queries)
+    positives = _load_commander_positives(commander_ids, id_to_idx, color_ids)
 
     # 5. Build synthetic decks
     decks = _build_commander_decks(
-        decomposition, id_to_idx, card_ids, color_ids, producer_cache,
+        commander_ids, id_to_idx, card_ids, color_ids, positives,
     )
 
     if not decks:
         raise RuntimeError(
             "No synthetic decks were built. "
-            "Check that the decomposition JSON has 'card_id' fields "
-            "and that the embeddings are populated."
+            "Ensure compute_synergy and compute_commander_value_synergy have been run."
         )
 
     # 6. Assemble and save
-    n                 = len(card_ids)
-    commander_count   = len(decks)
-    avg_pos           = sum(len(d["card_idxs"]) for d in decks) / max(commander_count, 1)
+    commander_count = len(decks)
+    avg_pos = sum(len(d["card_idxs"]) for d in decks) / max(commander_count, 1)
     meta = {
-        "model":           EMBEDDING_MODEL,
-        "dim":             int(emb_matrix.shape[1]),
-        "card_count":      n,
-        "deck_count":      commander_count,
-        "avg_positives":   round(avg_pos, 1),
-        "min_positives":   MIN_POSITIVES,
-        "max_positives":   MAX_POSITIVES,
-        "source":          "commander_decomposition",
-        "decomposition":   str(INPUT_PATH),
-        "created_at":      datetime.now(timezone.utc).isoformat(),
+        "model":          EMBEDDING_MODEL,
+        "dim":            int(emb_matrix.shape[1]),
+        "card_count":     len(card_ids),
+        "deck_count":     commander_count,
+        "avg_positives":  round(avg_pos, 1),
+        "min_positives":  MIN_POSITIVES,
+        "max_positives":  MAX_POSITIVES,
+        "source":         "synergy_edges",
+        "created_at":     datetime.now(timezone.utc).isoformat(),
     }
 
     artifact = {
@@ -392,7 +398,7 @@ def main() -> None:
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
         "Done. %.1f MB  |  %d cards  |  %d commanders  |  avg %.0f producers/commander",
-        size_mb, n, commander_count, avg_pos,
+        size_mb, len(card_ids), commander_count, avg_pos,
     )
 
 

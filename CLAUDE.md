@@ -366,28 +366,23 @@ avoiding the representation-collapse failure mode where all commanders converge
 toward an indistinct high-similarity cluster because they all need the same
 generic roles (draw, ramp, removal).
 
-**How it works:** for each commander, `export_dataset_commanders.py` reads the
-`commander_decomposition.json` produced by `scripts/decompose_commanders.py` and
-uses the commander's detected pattern signals (e.g. `etb_trigger`, `death_trigger`,
-`enchantment_cast`) to select *producer* cards — cards that specifically enable or
-reward that commander's mechanic.  Producers are color-identity filtered in Python.
-The result is a per-commander positive set that is genuinely distinct from other
-commanders', giving BPR a meaningful gradient.
+**How it works:** `export_dataset_commanders.py` reads directly from `synergy_edges`
+— no JSON intermediate required.  For each legal commander two edge types contribute
+positives: `ability_trigger` edges (producers of the commander's trigger → commander)
+and `commander_value` edges (commander → payoff cards).  Color-identity legality is
+re-applied strictly (⊆) in Python.  The result is a per-commander positive set that
+is genuinely distinct from other commanders', giving BPR a meaningful gradient.
 
 ```bash
-# Step 1: decompose commanders (read-only; outputs JSON)
-docker compose run --rm ingest python scripts/decompose_commanders.py
-
-# Step 2: export commander artifact
+# Requires compute_synergy and compute_commander_value_synergy to have been run.
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
-# Or call the script directly:
+# Or call directly:
 docker compose run --rm ingest python export_dataset_commanders.py
 ```
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `COMMANDERS_INPUT` | `/data/commander_decomposition.json` | Decomposition source |
 | `COMMANDERS_OUTPUT` | `/data/mtg_commanders.pt` | Output artifact path |
 | `COMMANDERS_MIN_POS` | `10` | Skip commanders with fewer producer cards |
 | `COMMANDERS_MAX_POS` | `300` | Cap per-commander positives (shuffle + truncate) |
@@ -395,11 +390,8 @@ docker compose run --rm ingest python export_dataset_commanders.py
 The artifact schema is identical to `mtg_dataset.pt` for the `decks` key
 (`commander_idx`, `card_idxs`, `color_identity`, `legal_neg_indices`, `archetype`)
 so the existing `DeckDataset` and `train_deck_phase` in `train.py` work unchanged.
-The `archetype` field contains the joined pattern keys (e.g. `"death_trigger, dies, sacrifice_payoff"`).
-
-Key file: `services/ingest/synergy/commander_patterns.py` —
-`PATTERN_KEY_TO_PRODUCER_SQL` maps every pattern key to a SQL WHERE fragment
-selecting the relevant producer cards.
+The `archetype` field contains the top-5 most frequent `trigger_event` values from
+the commander's edges (e.g. `"creature_etb, death_trigger, tribal_zombie_typeline"`).
 
 ---
 
