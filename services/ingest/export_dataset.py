@@ -11,10 +11,11 @@ Artifact contents
   card_ids                – list[str], N card UUIDs in index order
   embeddings              – Tensor(N, D) float32
   functional_pairs        – dict with a_idx / b_idx int32 tensors (Phase 1)
-  synergy                 – a_idx / b_idx / labels (Phase 2, same as co-occ artifact)
-  decks                   – list[dict] (Phase 3/4, same schema as co-occ artifact)
-  synergy_positions       – list[dict] (Phase 4, same schema as co-occ artifact)
-  color_identities        – {card_id: [colors]} for legal-neg reconstruction
+  synergy                 – a_idx / b_idx / labels (Phase 2)
+  card_meta               – {card_id: {name, mana_cost, type_line}} for offline eval
+
+  Phases 3/4 (deck co-occurrence + generative) use the commanders artifact
+  produced by export_dataset_commanders.py (mtg_commanders.pt), not this one.
 
 Functional equivalence classes (Phase 1)
 -----------------------------------------
@@ -68,9 +69,6 @@ from export_cooccurrence_dataset import (
     _load_embeddings,
     _load_card_meta,
     _load_synergy_pairs,
-    _load_color_identities,
-    _load_decks,
-    _build_synergy_positions,
     get_conn,
 )
 
@@ -188,22 +186,14 @@ def main() -> None:
         ability_score_type="xmage_ability_trigger",
     )
 
-    # 4. Decks + positions (Phases 3/4) — same as co-occurrence artifact
-    color_ids  = _load_color_identities(id_to_idx)
-    decks      = _load_decks(card_ids, id_to_idx, color_ids)
-    positions  = _build_synergy_positions(decks, card_ids, id_to_idx, color_ids)
-
-    # 5. Assemble and save
-    commander_count = len({p["commander_idx"] for p in positions})
+    # 4. Assemble and save
+    #    Phases 3/4 are handled by the commanders artifact (mtg_commanders.pt).
     meta = {
         "model":                  os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"),
         "dim":                    int(emb_matrix.shape[1]),
         "card_count":             n,
         "functional_pair_count":  int(len(fp_a)),
         "synergy_count":          int(len(a_idx)),
-        "deck_count":             len(decks),
-        "position_count":         len(positions),
-        "commander_count":        commander_count,
         "training_path":          "compositional",
         "created_at":             datetime.now(timezone.utc).isoformat(),
     }
@@ -221,10 +211,7 @@ def main() -> None:
             "b_idx":  torch.from_numpy(b_idx),
             "labels": torch.from_numpy(labels),
         },
-        "decks":             decks,
-        "synergy_positions": positions,
-        "color_identities":  {cid: sorted(ci) for cid, ci in color_ids.items()},
-        "card_meta":         card_meta,
+        "card_meta": card_meta,
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -237,9 +224,8 @@ def main() -> None:
 
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
-        "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d synergy pairs  "
-        "|  %d decks  |  %d positions",
-        size_mb, n, len(fp_a), len(a_idx), len(decks), len(positions),
+        "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d synergy pairs",
+        size_mb, n, len(fp_a), len(a_idx),
     )
 
 
