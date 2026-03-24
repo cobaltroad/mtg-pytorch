@@ -154,6 +154,32 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      re.compile(r"when(?:ever)?\s+you cast (?:a |an )?historic", re.I),
      0.9),
 
+    # Group hug — commander actively gives resources (card draw, mana, tokens,
+    # lands) to all players, creating a political board state where everyone
+    # benefits.  Producers: Howling Mine variants, Dictate of Kruphix, land
+    # ramp for all, token generators for all.
+    #
+    # Three signal forms:
+    #   "each player draws/may draw/may put" — direct resource grant
+    #   "each player's draw step...draws"    — structured draw step trigger
+    #                                          (Kami, Nekusar); excludes
+    #                                          Maralen / Mornsong Aria which
+    #                                          also use "draw step" but prevent
+    #                                          drawing rather than grant it
+    #   "parley"                             — Selvala, Phabine mechanic
+    #
+    # (~11 commanders: Kami, Kwain, Kynaios and Tiro, Selvala, The Second
+    # Doctor, Winter, Nekusar, Grothama, Phabine, Círdan, Jace Beleren)
+    ("group_hug",
+     "Group hug",
+     re.compile(
+         r"each player (?:draws?|may draw|may put)"
+         r"|each player's draw step.{0,50}draws?"
+         r"|\bparley\b",
+         re.I,
+     ),
+     0.8),
+
     # Poison / infect / toxic — commander interacts with the poison-counter
     # win condition.  All three keywords describe the same underlying mechanic:
     #   infect: damage → -1/-1 counters on creatures, poison counters on players
