@@ -154,6 +154,20 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      re.compile(r"when(?:ever)?\s+you cast (?:a |an )?historic", re.I),
      0.9),
 
+    # Poison / infect / toxic — commander interacts with the poison-counter
+    # win condition.  All three keywords describe the same underlying mechanic:
+    #   infect: damage → -1/-1 counters on creatures, poison counters on players
+    #   toxic N: combat damage to a player also gives N poison counters
+    #   poison counter: direct reference (Fynn, Ixhel Corrupted clause, etc.)
+    # Covers: Skithiryx (infect), Fynn (deathtouch → poison), Ixhel/Vishgraz/
+    # Karumonix/Skrelv/Venser/Ria Ivor/Kinzu (toxic), Vraska (poison ultimate),
+    # both Meliras (hate/interaction with the mechanic).
+    # (~12 commanders)
+    ("poison_infect",
+     "Poison / infect / toxic",
+     re.compile(r"\binfect\b|\bpoison counter|\btoxic\b", re.I),
+     0.9),
+
     # Equipment matters — commander cares about Equipment being attached,
     # entering, or equipped creatures attacking.  Covers:
     #   "equipped creature" — attack triggers (Akiri, Syr Gwyn, Nahiri, Cloud)
