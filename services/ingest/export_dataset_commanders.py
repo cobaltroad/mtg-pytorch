@@ -85,83 +85,17 @@ import torch
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-DATABASE_URL    = os.environ["DATABASE_URL"]
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
-OUTPUT_PATH     = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
-MIN_POSITIVES   = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
-MAX_POSITIVES   = int(os.environ.get("COMMANDERS_MAX_POS", "300"))
+from export_db_helpers import (
+    EMBEDDING_MODEL,
+    _load_embeddings,
+    _load_card_meta,
+    _load_color_identities,
+    get_conn,
+)
 
-
-def _sync_dsn(url: str) -> str:
-    return url.replace("postgresql+asyncpg://", "postgresql://")
-
-
-def get_conn():
-    return psycopg2.connect(_sync_dsn(DATABASE_URL))
-
-
-# ── Step 1: Embeddings ────────────────────────────────────────────────────────
-
-def _load_embeddings() -> tuple[list[str], np.ndarray]:
-    log.info("Loading embeddings (model=%s)…", EMBEDDING_MODEL)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT card_id::text, embedding FROM card_embeddings WHERE model = %s",
-                (EMBEDDING_MODEL,),
-            )
-            rows = cur.fetchall()
-
-    card_ids: list[str] = []
-    vecs: list[np.ndarray] = []
-    for card_id, vec in rows:
-        if isinstance(vec, str):
-            vec = np.fromstring(vec.strip("[]"), sep=",", dtype=np.float32)
-        else:
-            vec = np.array(vec, dtype=np.float32)
-        card_ids.append(card_id)
-        vecs.append(vec)
-
-    log.info("Loaded %d embeddings (dim=%d)", len(card_ids), vecs[0].shape[0] if vecs else 0)
-    return card_ids, np.stack(vecs).astype(np.float32)
-
-
-# ── Step 2: Card metadata ─────────────────────────────────────────────────────
-
-def _load_card_meta(id_to_idx: dict[str, int]) -> dict[str, dict]:
-    ids = list(id_to_idx.keys())
-    result: dict[str, dict] = {}
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(
-                "SELECT id::text, name, mana_cost, type_line FROM cards WHERE id::text = ANY(%s)",
-                (ids,),
-            )
-            for row in cur.fetchall():
-                result[row["id"]] = {
-                    "name":      row["name"],
-                    "mana_cost": row["mana_cost"] or "",
-                    "type_line": row["type_line"] or "",
-                }
-    return result
-
-
-# ── Step 3: Color identities ──────────────────────────────────────────────────
-
-def _load_color_identities(id_to_idx: dict[str, int]) -> dict[str, frozenset]:
-    ids = list(id_to_idx.keys())
-    result: dict[str, frozenset] = {}
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(
-                "SELECT id::text, color_identity FROM cards WHERE id::text = ANY(%s)",
-                (ids,),
-            )
-            for row in cur.fetchall():
-                result[row["id"]] = frozenset(row["color_identity"] or [])
-    for card_id in ids:
-        result.setdefault(card_id, frozenset())
-    return result
+OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
+MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
+MAX_POSITIVES = int(os.environ.get("COMMANDERS_MAX_POS", "300"))
 
 
 # ── Step 4: Legal commanders ──────────────────────────────────────────────────

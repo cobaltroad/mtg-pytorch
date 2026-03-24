@@ -64,8 +64,8 @@ import psycopg2
 import psycopg2.extras
 import torch
 
-# Re-use the co-occurrence export helpers to avoid duplication.
-from export_cooccurrence_dataset import (
+# Re-use the shared DB helpers to avoid duplication.
+from export_db_helpers import (
     _load_embeddings,
     _load_card_meta,
     _load_synergy_pairs,
