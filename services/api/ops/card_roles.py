@@ -226,6 +226,11 @@ _ARCHETYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # Lifegain payoff
     ("lifegain",        re.compile(r"whenever you (gain|gained) life", re.I)),
 
+    # Elfball / mana-ability matters — commander rewards mana dorks producing mana.
+    # "mana ability" is the MTG rules term for any activated ability that produces
+    # mana without going on the stack (Rule 605), so this matches precisely.
+    ("elfball",         re.compile(r"\bmana ability\b", re.I)),
+
     # Combat damage matters — commander rewards connecting with players
     # Covers self-rewarding commanders (Locke Cole draws/loots on hit) and
     # team-amplifying commanders (Lightning grants the effect to your whole board).
@@ -257,6 +262,7 @@ ARCHETYPE_ROLE_WEIGHTS: dict[str, dict[str, float]] = {
     # Combat-damage commanders need the commander itself to connect — evasion
     # and unblockable effects are the primary demand, draw rewards the hits,
     # protection keeps the commander alive between attacks.
+    "elfball":       {"ramp": 2.0, "draw": 1.3},
     "combat_damage": {"combat_trick": 2.0, "draw": 1.3, "protection": 1.2},
     # Discard-outlet commanders want payoffs that fire on discard (Bone Miser,
     # Waste Not) and draw/loot to keep the engine churning.

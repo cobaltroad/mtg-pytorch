@@ -223,8 +223,10 @@ RULES_TERM_SIGNALS: dict[str, _RulesTerm] = {
         "keyword", "equip — voltron / Equipment strategy",
         "high", "voltron",
     ),
-    # Deathtouch payoff (e.g. Fynn)
-    "deathtouch": _RulesTerm(
+    # Deathtouch payoff (e.g. Fynn the Fangbearer)
+    # Key is "with deathtouch" not bare "deathtouch" — prevents false positives
+    # on commanders that *grant* deathtouch (e.g. Tyvar: "they gain deathtouch").
+    "with deathtouch": _RulesTerm(
         "keyword", "deathtouch — wants other deathtouch creatures",
         "high", "deathtouch",
     ),
