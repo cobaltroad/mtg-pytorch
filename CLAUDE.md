@@ -337,7 +337,7 @@ Two parallel training paths run side by side (see #71):
 The compositional artifact is produced by a separate export stage:
 
 ```bash
-docker compose run --rm ingest python pipeline.py --stage export_dataset_compositional
+docker compose run --rm ingest python pipeline.py --stage export_dataset
 ```
 
 On the GPU machine, download it alongside the standard artifact and train with

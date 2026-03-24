@@ -1,7 +1,7 @@
 """
 Export the compositional training artifact from the database.
 
-Produces /data/mtg_dataset_compositional.pt — a self-contained artifact for
+Produces /data/mtg_dataset.pt — a self-contained artifact for
 the compositional training path (issue #71).  The GPU machine (Windows, no
 Docker, no DB) downloads this file and trains all four phases from it.
 
@@ -30,11 +30,11 @@ pairs, capped to prevent high-frequency roles (e.g. 'ramp') from dominating.
 
 Usage
 -----
-    python export_dataset_compositional.py
+    python export_dataset.py
 
 Environment variables
 ---------------------
-  DATASET_OUTPUT_COMP    Output path  (default /data/mtg_dataset_compositional.pt)
+  DATASET_OUTPUT         Output path  (default /data/mtg_dataset.pt)
   COMP_MAX_PER_CLASS     Hard cap on pairs per equivalence class (default 500).
                          Actual pairs per class = min(cap, n*log2(n)) where n
                          is the number of class members.
@@ -65,7 +65,7 @@ import psycopg2.extras
 import torch
 
 # Re-use the co-occurrence export helpers to avoid duplication.
-from export_dataset import (
+from export_cooccurrence_dataset import (
     _load_embeddings,
     _load_card_meta,
     _load_synergy_pairs,
@@ -78,7 +78,7 @@ from export_dataset import (
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-OUTPUT_PATH   = Path(os.environ.get("DATASET_OUTPUT_COMP", "/data/mtg_dataset_compositional.pt"))
+OUTPUT_PATH   = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
 MAX_PER_CLASS = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
 
 

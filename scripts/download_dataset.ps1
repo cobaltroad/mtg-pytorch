@@ -3,20 +3,20 @@
     Download a training artifact from the Docker host to the local GPU machine.
 
 .DESCRIPTION
-    Fetches either mtg_dataset.pt (co-occurrence path, default) or
-    mtg_dataset_compositional.pt (compositional path) from the API and saves
+    Fetches either mtg_dataset.pt (compositional path, default) or
+    mtg_cooccurrence_dataset.pt (co-occurrence path) from the API and saves
     it to ingest_cache/.
 
     The trainer uses it with:
         .\scripts\run.ps1 -Train 1
-        .\scripts\run.ps1 -Train 1 -TrainingPath compositional
+        .\scripts\run.ps1 -Train 1 -TrainingPath cooccurrence
 
 .PARAMETER TrainingPath
-    Which artifact to download: 'cooccurrence' (default) or 'compositional'.
+    Which artifact to download: 'compositional' (default) or 'cooccurrence'.
 
 .PARAMETER DatasetUrl
-    Override the download URL.  Defaults to https://<API_HOST>/dataset/download
-    (or /dataset/compositional/download) read from .env.
+    Override the download URL.  Defaults to https://<API_HOST>/dataset/compositional/download
+    (or /dataset/cooccurrence/download) read from .env.
 
 .PARAMETER OutputDir
     Local directory to save the file (default: .\ingest_cache).
@@ -25,12 +25,12 @@
     .\scripts\download_dataset.ps1
 
 .EXAMPLE
-    .\scripts\download_dataset.ps1 -TrainingPath compositional
+    .\scripts\download_dataset.ps1 -TrainingPath cooccurrence
 #>
 
 param(
     [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'cooccurrence',
+    [string]$TrainingPath = 'compositional',
     [string]$DatasetUrl   = "",
     [string]$OutputDir    = ""
 )
@@ -67,14 +67,14 @@ if (-not $DatasetUrl) {
     if ($TrainingPath -eq 'compositional') {
         $DatasetUrl = "https://$apiHost/dataset/compositional/download"
     } else {
-        $DatasetUrl = "https://$apiHost/dataset/download"
+        $DatasetUrl = "https://$apiHost/dataset/cooccurrence/download"
     }
 }
 
 $artifactName = if ($TrainingPath -eq 'compositional') {
-    'mtg_dataset_compositional.pt'
-} else {
     'mtg_dataset.pt'
+} else {
+    'mtg_cooccurrence_dataset.pt'
 }
 $OutputPath = Join-Path $OutputDir $artifactName
 
@@ -128,7 +128,14 @@ try {
 # -- Usage hint ---------------------------------------------------------------
 
 Write-Host "Train with:" -ForegroundColor Yellow
-Write-Host "  .\scripts\run.ps1 -Train 1 -TrainingPath $TrainingPath" -ForegroundColor Yellow
-Write-Host "  .\scripts\run.ps1 -Train 2 -TrainingPath $TrainingPath" -ForegroundColor Yellow
-Write-Host "  .\scripts\run.ps1 -Train 3 -TrainingPath $TrainingPath" -ForegroundColor Yellow
-Write-Host "  .\scripts\run.ps1 -Train 4 -TrainingPath $TrainingPath" -ForegroundColor Yellow
+if ($TrainingPath -eq 'compositional') {
+    Write-Host "  .\scripts\run.ps1 -Train 1" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 3" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 4" -ForegroundColor Yellow
+} else {
+    Write-Host "  .\scripts\run.ps1 -Train 1 -TrainingPath cooccurrence" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 2 -TrainingPath cooccurrence" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 3 -TrainingPath cooccurrence" -ForegroundColor Yellow
+    Write-Host "  .\scripts\run.ps1 -Train 4 -TrainingPath cooccurrence" -ForegroundColor Yellow
+}

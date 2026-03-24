@@ -15,7 +15,7 @@ Run process only:   python pipeline.py --stage process
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan], compute_synergy,
   compute_commander_value_synergy, compute_tribal_typeline_synergy,
-  export_dataset_99, export_dataset_99_compositional
+  export_cooccurrence_dataset, export_dataset
 
 Data sources
 ------------
@@ -1100,16 +1100,16 @@ async def import_spellbook_stage() -> None:
     await import_spellbook.main()
 
 
-def export_dataset_99_stage() -> None:
-    """Serialize the 99-card training artifact to /data/mtg_dataset.pt."""
-    import export_dataset_99
-    export_dataset_99.main()
+def export_cooccurrence_dataset_stage() -> None:
+    """Serialize the co-occurrence training artifact to /data/mtg_cooccurrence_dataset.pt."""
+    import export_cooccurrence_dataset
+    export_cooccurrence_dataset.main()
 
 
-def export_dataset_99_compositional_stage() -> None:
-    """Serialize the compositional 99-card artifact to /data/mtg_dataset_compositional.pt."""
-    import export_dataset_99_compositional
-    export_dataset_99_compositional.main()
+def export_dataset_stage() -> None:
+    """Serialize the compositional training artifact to /data/mtg_dataset.pt."""
+    import export_dataset
+    export_dataset.main()
 
 
 def export_dataset_commanders_stage() -> None:
@@ -1154,7 +1154,7 @@ async def process():
     await compute_synergy()
     await compute_commander_value_synergy()
     await compute_tribal_typeline_synergy()
-    export_dataset_99_stage()
+    export_dataset_stage()
     await composition_profile_stage()
 
 
@@ -1175,7 +1175,7 @@ if __name__ == "__main__":
             "compute_synergy", "compute_synergy_xmage",
             "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
-            "export_dataset_99", "export_dataset_99_compositional",
+            "export_cooccurrence_dataset", "export_dataset",
             "export_dataset_commanders", "composition_profile",
         ],
         default=None,
@@ -1221,10 +1221,10 @@ if __name__ == "__main__":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":
         asyncio.run(compute_tribal_typeline_synergy())
-    elif args.stage == "export_dataset_99":
-        export_dataset_99_stage()
-    elif args.stage == "export_dataset_99_compositional":
-        export_dataset_99_compositional_stage()
+    elif args.stage == "export_cooccurrence_dataset":
+        export_cooccurrence_dataset_stage()
+    elif args.stage == "export_dataset":
+        export_dataset_stage()
     elif args.stage == "export_dataset_commanders":
         export_dataset_commanders_stage()
     elif args.stage == "composition_profile":
