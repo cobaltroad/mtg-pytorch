@@ -156,8 +156,8 @@ These two must always agree or deck generation will silently fail:
 ```powershell
 .\scripts\run.ps1 -Mode train -Phase 1 -Dataset .\ingest_cache\mtg_dataset.pt
 .\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt
-.\scripts\run.ps1 -Mode train -Phase 3 -Dataset .\ingest_cache\mtg_dataset.pt
-.\scripts\run.ps1 -Mode train -Phase 4 -Dataset .\ingest_cache\mtg_dataset.pt
+.\scripts\run.ps1 -Mode train -Phase 3 -Dataset .\ingest_cache\mtg_commanders.pt
+.\scripts\run.ps1 -Mode train -Phase 4 -Dataset .\ingest_cache\mtg_commanders.pt
 ```
 
 5. Upload the resulting checkpoint to the Docker host via the UI, or:
@@ -344,11 +344,12 @@ On the GPU machine, download it alongside the standard artifact and train with
 `-TrainingPath compositional`:
 
 ```powershell
-.\scripts\download_dataset.ps1          # downloads mtg_dataset.pt
-# (download mtg_dataset_compositional.pt manually or extend the script)
+.\scripts\download_dataset.ps1          # downloads mtg_dataset.pt + mtg_commanders.pt
 
+# Phases 1-2: functional equivalence + XMage synergy
 .\scripts\run.ps1 -TrainingPath compositional -Train 1
 .\scripts\run.ps1 -TrainingPath compositional -Train 2
+# Phases 3-4: synthetic decks from synergy_edges (uses mtg_commanders.pt automatically)
 .\scripts\run.ps1 -TrainingPath compositional -Train 3
 .\scripts\run.ps1 -TrainingPath compositional -Train 4
 ```

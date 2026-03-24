@@ -62,13 +62,16 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
-# Artifact path depends on training path: cooccurrence uses mtg_cooccurrence_dataset.pt.
+# Compositional path splits by phase:
+#   Phase 1-2 → mtg_dataset.pt          (functional pairs + XMage synergy)
+#   Phase 3-4 → mtg_commanders.pt       (synthetic decks from synergy_edges)
+# Co-occurrence path always uses mtg_cooccurrence_dataset.pt.
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
     if (-not $Dataset) {
         $artifactName = if ($TrainingPath -eq 'compositional') {
-            'mtg_dataset.pt'
+            if ($Phase -le 2) { 'mtg_dataset.pt' } else { 'mtg_commanders.pt' }
         } else {
             'mtg_cooccurrence_dataset.pt'
         }
@@ -218,10 +221,11 @@ Assert-Prerequisites -mode $Mode -phase $Phase -resume $Resume -checkpointsDir $
 $env:PYTHONUNBUFFERED = '1'
 
 if ($Mode -eq 'train') {
-    # DATABASE_URL is only required when not using a pre-built dataset artifact,
-    # EXCEPT for compositional Phase 3: role-matching is always DB-derived
-    # (oracle text → roles → card lookup), so it needs the DB even with an artifact.
-    $needsDb = (-not $Dataset) -or ($TrainingPath -eq 'compositional' -and $Phase -eq 3)
+    # DATABASE_URL is only required when no artifact is provided, OR for
+    # compositional Phase 4 synergy-only mode: the commanders artifact has no
+    # synergy_positions key, so train.py falls back to computing them from the
+    # DB at runtime.  All other artifact-based phases are fully self-contained.
+    $needsDb = (-not $Dataset) -or ($TrainingPath -eq 'compositional' -and $Phase -eq 4 -and $SynergyOnly)
     if ($needsDb) {
         $env:DATABASE_URL = Ensure-SyncDbUrl
     }

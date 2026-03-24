@@ -1704,11 +1704,11 @@ def main():
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
 
-        # Compositional Phase 3 derives positives from oracle text at runtime
-        # (role-matching via DB), so it always calls path_mod.load_decks()
-        # even when an artifact is available.  The artifact is still used for
-        # embeddings above.  Co-occurrence path uses the pre-built decks field.
-        if _artifact and args.training_path != "compositional":
+        # Use pre-built decks from the artifact when available (the commanders
+        # artifact, mtg_commanders.pt, stores synergy-derived synthetic decks
+        # in the same schema).  Fall through to path_mod.load_decks() only
+        # when no artifact was provided or the artifact has no 'decks' key.
+        if _artifact and "decks" in _artifact:
             decks = load_decks_from_artifact(_artifact)
         else:
             decks = path_mod.load_decks(embeddings)
@@ -1794,6 +1794,13 @@ def main():
                     "Synergy-only mode: %d positions from artifact", len(syn_positions)
                 )
             else:
+                syn_positions = []
+            if not syn_positions:
+                # commanders artifact has no synergy_positions — build from DB.
+                log.info(
+                    "Synergy-only: no positions in artifact — loading from DB "
+                    "(requires DATABASE_URL)"
+                )
                 syn_positions = path_mod.load_synergy_positions_global(
                     embeddings,
                     ability_weight=args.ability_weight,
