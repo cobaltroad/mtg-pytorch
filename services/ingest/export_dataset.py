@@ -41,7 +41,6 @@ Environment variables
   DATASET_SAMPLE         Max ability_trigger positives     (default 500 000)
   DATASET_ROLE_SAMPLE    Max role_demand positives         (default 100 000)
   DATASET_COMBO_SAMPLE   Max combo pair positives          (default 200 000)
-  DATASET_CV_SAMPLE      Max commander_value positives     (default 200 000)
   DATASET_NEG_RATIO      Negatives per positive            (default 3)
   DATASET_HARD_NEG_FRAC  Fraction of negs that are hard   (default 0.5)
   DATASET_SYN_LIMIT      Max synergy positions/commander   (default 300)
@@ -181,9 +180,12 @@ def main() -> None:
     # 2b. Card metadata (name/type for offline eval on GPU machine)
     card_meta = _load_card_meta(id_to_idx)
 
-    # 3. Synergy pairs (Phase 2) — XMage class-name edges only
+    # 3. Synergy pairs (Phase 2) — XMage class-name edges only.
+    #    commander_value edges are excluded here; they belong in the commanders
+    #    artifact produced by export_dataset_commanders.py.
     a_idx, b_idx, labels = _load_synergy_pairs(
-        id_to_idx, normed, ability_score_type="xmage_ability_trigger"
+        id_to_idx, normed,
+        ability_score_type="xmage_ability_trigger",
     )
 
     # 4. Decks + positions (Phases 3/4) — same as co-occurrence artifact

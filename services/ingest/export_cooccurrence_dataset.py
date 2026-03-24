@@ -146,17 +146,22 @@ def _load_synergy_pairs(
     id_to_idx: dict[str, int],
     normed: np.ndarray,
     ability_score_type: str = "ability_trigger",
+    include_commander_value: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (a_idx, b_idx, labels) int32/float32 arrays.
 
     Covers ability edges (score_type controlled by *ability_score_type*),
-    role_demand, combo, and commander_value, plus pre-mined hard negatives and
-    random negatives.
+    role_demand, combo, and optionally commander_value, plus pre-mined hard
+    negatives and random negatives.
 
     Args:
         ability_score_type: ``'ability_trigger'`` for the co-occurrence path
             (oracle-text pattern edges); ``'xmage_ability_trigger'`` for the
             compositional path (raw XMage class-name edges, no translation).
+        include_commander_value: Whether to include ``commander_value`` synergy
+            edges.  Defaults to ``False`` — those edges are covered by
+            ``export_dataset_commanders.py``.  Pass ``True`` for the
+            co-occurrence path which does not use that artifact.
     """
     log.info(
         "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d, cv=%d)…",
@@ -246,8 +251,9 @@ def _load_synergy_pairs(
                 positives += combo_pairs
                 log.info("  + %d combo pairs", len(combo_pairs))
 
-            # commander_value (sampled)
-            if CV_SAMPLE > 0:
+            # commander_value (sampled) — skipped for the compositional path
+            # because export_dataset_commanders.py already covers those edges.
+            if include_commander_value and CV_SAMPLE > 0:
                 cur.execute("""
                     SELECT card_a::text, card_b::text, score
                     FROM synergy_edges TABLESAMPLE SYSTEM(10)
@@ -566,7 +572,7 @@ def main() -> None:
     normed   = (emb_matrix / np.maximum(norms, 1e-8)).astype(np.float32)
 
     # 2. Synergy pairs (phase 2)
-    a_idx, b_idx, labels = _load_synergy_pairs(id_to_idx, normed)
+    a_idx, b_idx, labels = _load_synergy_pairs(id_to_idx, normed, include_commander_value=True)
 
     # 2b. Card metadata (name/type for offline eval on GPU machine)
     card_meta = _load_card_meta(id_to_idx)
