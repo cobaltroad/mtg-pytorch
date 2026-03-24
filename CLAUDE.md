@@ -69,6 +69,13 @@ docker compose run --rm ingest python pipeline.py --stage compute_commander_valu
 docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
 docker compose run --rm ingest python pipeline.py --stage export_dataset
 
+# Research: decompose all ~3000 commanders into synergy signals (read-only, outputs JSON)
+docker compose run --rm ingest python scripts/decompose_commanders.py
+# Spot-check the decomposition output:
+docker compose run --rm ingest python scripts/eval_commander.py "Anje Falkenrath"
+docker compose run --rm ingest python scripts/eval_commander.py --stats
+docker compose run --rm ingest python scripts/eval_commander.py --no-signals
+
 # 5. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
 docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python import_moxfield.py
