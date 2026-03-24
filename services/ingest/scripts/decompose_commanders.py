@@ -216,6 +216,35 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      ),
      0.8),
 
+    # Artifact count matters — commander scales with number of artifacts you
+    # control (static bonus, damage, cost reduction, etc.).  Distinct from
+    # cast_trigger_artifact (which fires on cast) and equipment_matters (which
+    # cares about attached/equipped).  Producers: cheap artifacts, mana rocks,
+    # artifact tokens, Vehicles.
+    # Covers:
+    #   "for each artifact you control"     — Akiri, Saheeli ultimate
+    #   "for each tapped artifact you control" — Alibou (also fires artifact_creatures)
+    #   "artifacts you control"             — Muzzio (greatest mana value among)
+    # NOT matched:
+    #   "tap an untapped artifact you control" — Urza mana tap (singular, no "for each")
+    #   "artifact creatures you control"    — covered by artifact_creatures pattern
+    # (~10+ commanders: Akiri Line-Slinger, Saheeli the Gifted, Muzzio,
+    #  Kurkesh, Daretti, etc.)
+    ("artifact_count",
+     "Artifact count matters",
+     re.compile(r"for each (?:tapped )?artifact you control|artifacts you control", re.I),
+     0.9),
+
+    # Artifact creatures matters — commander buffs, enables, or triggers off
+    # artifact creatures specifically.  Distinct from artifact_count (generic
+    # artifact scaling) and cast_trigger_artifact (cast trigger).
+    # Producers: artifact creature tokens, Myr, Constructs, Servos, Thopters.
+    # (~10+ commanders: Alibou, Brudiclad, Padeem, Teshar, Sydri, Memnarch, etc.)
+    ("artifact_creatures",
+     "Artifact creatures matter",
+     re.compile(r"artifact creatures? you control", re.I),
+     0.9),
+
     # Death / dies trigger
     ("death_trigger",
      "Death trigger",
@@ -333,6 +362,25 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      re.compile(r"power (?:of )?(?:1|2|one|two) or less|"
                 r"creatures? with power (?:1|2|one|two) or less", re.I),
      0.8),
+
+    # Unearth / encore / Feldon-style — commanders that grant or reference
+    # temporary graveyard-recursion effects.  All three share the same
+    # mechanical signature: returned/copied creature has haste and is
+    # exiled or sacrificed at the beginning of the next end step.
+    # Producers: creatures with unearth or encore printed on them; haste
+    # enablers; ETB payoffs that re-trigger on the returned creature.
+    # Arm 1 — keyword grants: Sedris ("each creature card in your graveyard
+    #   has unearth"), Burakos (encore), etc.
+    # Arm 2 — inline phrasing: Feldon of the Third Path ("sacrifice it at
+    #   the beginning of the next end step") — same effect, no keyword.
+    ("unearth_encore",
+     "Unearth / encore / temporary reanimation",
+     re.compile(
+         r"\bunearth\b|\bencore\b"
+         r"|(?:exile|sacrifice) (?:it|them) at the beginning of the next end step",
+         re.I,
+     ),
+     0.9),
 
     # Graveyard payoff — casting from or returning from graveyard
     ("graveyard_payoff",
@@ -484,6 +532,18 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      "Forced attack each combat",
      re.compile(r"attacks? each combat if able|all creatures attack each combat", re.I),
      0.8),
+
+    # Cascade / discover — commanders that grant cascade to spells you cast, or
+    # that care about cascading / discovering.  Producers: other spells with
+    # cascade, discover payoffs, and ways to cheat on mana cost.
+    # Covers the keyword directly ("cascade", "discover") and commander text
+    # that grants it ("spells you cast have cascade", "spells you cast this
+    # turn have cascade").
+    # (~6 commanders: Yidris, Abaddon, Averna, Maelstrom Wanderer, etc.)
+    ("cascade",
+     "Cascade / discover",
+     re.compile(r"\bcascade\b|\bdiscover\b", re.I),
+     0.9),
 ]
 
 # ── Trigger clause extraction ─────────────────────────────────────────────────

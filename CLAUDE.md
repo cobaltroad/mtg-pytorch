@@ -612,6 +612,7 @@ Entries also include `unmatched_triggers[]` — oracle trigger clauses (sentence
 | `death_trigger` | Creature death trigger | Syr Konrad, Teysa |
 | `graveyard_from_play` | Permanent to graveyard | Meren |
 | `graveyard_payoff` | Cast/return from graveyard | Karador, Muldrotha |
+| `unearth_encore` | Unearth / encore / temporary reanimation (haste, exile/sacrifice at end step) | Sedris, Burakos, Feldon |
 | `combat_damage_to_player` | Combat damage to player | Voltron payoffs |
 | `sacrifice_payoff` | Sacrifice outlet/payoff | Prossh, Korvold |
 | `discard_outlet` | Discard outlet | Anje, Waste Not |
@@ -631,6 +632,8 @@ Entries also include `unmatched_triggers[]` — oracle trigger clauses (sentence
 | `weenie_matters` | Low-power creature payoff | Edric |
 | `extra_combat` | Extra combat phase | Aurelia, Moraug, Raiyuu |
 | `equipment_matters` | Equipment ETB/attack/static | Kemba, Sram, Wyleth, Akiri |
+| `artifact_count` | Artifact count matters (scales with # of artifacts) | Akiri Line-Slinger, Saheeli, Muzzio, Alibou |
+| `artifact_creatures` | Artifact creatures matter (buffs/triggers off artifact creatures) | Alibou, Brudiclad, Padeem, Teshar, Sydri |
 | `opponent_restriction` | Opponents can't (stax) | Narset, Dragonlord Dromoka |
 | `activated_restriction` | Activated abilities locked (stax) | Linvala, Karn |
 | `tax_effect` | Opponents' spells cost more | Grand Arbiter |
@@ -640,6 +643,7 @@ Entries also include `unmatched_triggers[]` — oracle trigger clauses (sentence
 | `goad` | Goad | Karazikar, Marisi, Kitt Kanto |
 | `forced_attack` | Attacks each combat if able | Thantis, Zurgo, Toski |
 | `poison_infect` | Infect / toxic / poison counter | Skithiryx, Fynn, Ixhel |
+| `cascade` | Cascade / discover | Yidris, Abaddon, Maelstrom Wanderer, Averna |
 | `group_hug` | Draw/resource grants to all players | Kami, Kwain, Kynaios and Tiro |
 
 ### Spot-check with `eval_commander.py`
