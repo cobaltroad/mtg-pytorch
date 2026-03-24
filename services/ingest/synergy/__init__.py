@@ -53,8 +53,9 @@ Sub-modules, each covering one broad theme:
 
 ``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`,
 :data:`TRIBES`, :data:`ROLE_PATTERNS`, :data:`LAND_ROLE_PATTERNS`, and
-:data:`COMMANDER_VALUE_EDGE_SCORES` from this package — no other changes to
-the pipeline are needed when a sub-module is extended.
+:data:`CARD_SYNERGY_MAP` from this package — no other changes to the pipeline
+are needed when a sub-module is extended.  Commander-specific maps
+(``commander_value``) are imported directly by ``stages/commander.py``.
 """
 
 from __future__ import annotations
@@ -101,12 +102,6 @@ ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
 LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
 is_land_card = roles.is_land_card
 
-# Per-trigger-event scores for commander_value edges (used by the dedicated
-# compute_commander_value_synergy() pipeline stage).
-COMMANDER_VALUE_TRIGGER_PATTERNS: list[tuple[str, str, str]] = commander_value.TRIGGER_PATTERNS
-COMMANDER_VALUE_PRODUCER_MAP: dict[str, str] = commander_value.PRODUCER_MAP
-COMMANDER_VALUE_EDGE_SCORES: dict[str, float] = commander_value.EDGE_SCORES
-
 # Compositional training path: XMage class name → producer SQL.
 # Used by compute_synergy_xmage() to build score_type='xmage_ability_trigger'
 # edges without the lossy trigger_event translation layer.
@@ -125,9 +120,6 @@ __all__ = [
     "ROLE_PATTERNS",
     "LAND_ROLE_PATTERNS",
     "is_land_card",
-    "COMMANDER_VALUE_TRIGGER_PATTERNS",
-    "COMMANDER_VALUE_PRODUCER_MAP",
-    "COMMANDER_VALUE_EDGE_SCORES",
     "XMAGE_PRODUCER_MAP",
     "SPELLCAST_TRIGGER_PRODUCER_MAP",
     "CARD_SYNERGY_MAP",
