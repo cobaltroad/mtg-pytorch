@@ -586,6 +586,7 @@ def score_cards(
     color_identities: dict[str, frozenset] | None = None,
     batch_size: int = 512,
     partner_ids: list[str] | None = None,
+    progress_fn=None,  # optional callable(fraction: float, message: str)
 ) -> list[tuple[str, float]]:
     """Score color-legal cards given commander + context, return sorted (card_id, score).
 
@@ -635,7 +636,10 @@ def score_cards(
 
     # Pre-project all candidates in batches
     scores: list[tuple[str, float]] = []
-    for start in range(0, len(candidate_ids), batch_size):
+    total_batches = max(1, (len(candidate_ids) + batch_size - 1) // batch_size)
+    for batch_num, start in enumerate(range(0, len(candidate_ids), batch_size)):
+        if progress_fn is not None:
+            progress_fn(batch_num, total_batches, len(candidate_ids))
         batch_ids = candidate_ids[start: start + batch_size]
         cand_raw = torch.stack([
             torch.from_numpy(embeddings[cid]) for cid in batch_ids

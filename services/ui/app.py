@@ -418,6 +418,7 @@ with tab_deck:
                 str(commander["oracle_id"]), _chosen_checkpoint, _boost_overrides, _synergy_alpha
             )
             st.session_state["gen_job_id"] = job_id
+            st.session_state["gen_start_time"] = time.time()
             st.session_state.pop("last_deck_filename", None)
             st.rerun()
         except httpx.HTTPError as e:
@@ -444,7 +445,13 @@ with tab_deck:
         if job:
             status = job.get("status", "unknown")
             if status in ("queued", "running"):
-                st.progress(job.get("progress", 0.0), text=job.get("message", "Working…"))
+                elapsed = int(time.time() - st.session_state.get("gen_start_time", time.time()))
+                msg = job.get("message", "Working…")
+                pct = int(job.get("progress", 0.0) * 100)
+                st.progress(
+                    job.get("progress", 0.0),
+                    text=f"{msg}  ({pct}%  —  {elapsed}s elapsed)",
+                )
                 time.sleep(1)
                 st.rerun()
             elif status == "error":

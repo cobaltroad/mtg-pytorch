@@ -29,6 +29,45 @@ log = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+_SYNERGY_EDGE_SQL = text("""
+    SELECT card_b::text AS partner FROM synergy_edges
+    WHERE card_a = :cid AND score_type = 'ability_trigger'
+    UNION ALL
+    SELECT card_a::text AS partner FROM synergy_edges
+    WHERE card_b = :cid AND score_type = 'ability_trigger'
+""")
+
+_SYNERGY_BATCH_SQL = text("""
+    SELECT card_b::text AS partner FROM synergy_edges
+    WHERE card_a = ANY(:cids) AND score_type = 'ability_trigger'
+    UNION ALL
+    SELECT card_a::text AS partner FROM synergy_edges
+    WHERE card_b = ANY(:cids) AND score_type = 'ability_trigger'
+""")
+
+
+async def _load_synergy_partners(db: AsyncSession, card_id: str) -> list[str]:
+    """Return all synergy partners of a single card (both edge directions)."""
+    r = await db.execute(_SYNERGY_EDGE_SQL, {"cid": card_id})
+    return [row[0] for row in r.fetchall()]
+
+
+async def _init_synergy_counts(
+    db: AsyncSession,
+    deck_seed: list[str],
+) -> dict[str, int]:
+    """Build initial synergy edge-count dict for a list of seed cards.
+
+    Returns {card_id: number_of_seed_deck_cards_it_synergises_with}.
+    """
+    counts: dict[str, int] = {}
+    if not deck_seed:
+        return counts
+    r = await db.execute(_SYNERGY_BATCH_SQL, {"cids": deck_seed})
+    for (partner,) in r.fetchall():
+        counts[partner] = counts.get(partner, 0) + 1
+    return counts
+
 # ── Deck structure constants ──────────────────────────────────────────────────
 
 LAND_TARGET      = 36
@@ -222,17 +261,24 @@ async def generate(
                 )
 
                 _progress(0.12, "Scoring card pool…")
+
+                def _score_progress(batch_num, total_batches, total_cards):
+                    frac = 0.12 + (batch_num / total_batches) * 0.10
+                    _progress(frac, f"Scoring card pool… (batch {batch_num + 1}/{total_batches}, {total_cards} candidates)")
+
                 scored = await loop.run_in_executor(
                     None,
                     lambda: inference.score_cards(
                         commander_id, context_ids, embeddings, model, all_ids,
                         color_identities=color_identities,
                         partner_ids=[partner_id] if partner_id else None,
+                        progress_fn=_score_progress,
                     ),
                 )
 
                 if scored:
                     # ── Fetch oracle texts (once, for all scorers) ────────────
+                    _progress(0.22, f"Fetching oracle texts for {len(scored)} candidates…")
                     scored_ids = [cid for cid, _ in scored]
                     ot_result = await db.execute(
                         text("SELECT id::text, oracle_text FROM cards WHERE id::text = ANY(:ids)"),
@@ -243,7 +289,8 @@ async def generate(
                     }
 
                     # ── Lookup tables ─────────────────────────────────────────
-                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp), land_staples, synergy_adj = \
+                    _progress(0.23, "Loading lookup tables…")
+                    (type_lines, cmc_map), (ramp_ids, guaranteed_ramp), land_staples = \
                         await asyncio.gather(
                             asyncio.gather(
                                 loop.run_in_executor(None, inference.get_type_lines, db_url),
@@ -251,7 +298,6 @@ async def generate(
                             ),
                             loop.run_in_executor(None, inference.get_ramp_info, db_url),
                             loop.run_in_executor(None, inference.get_land_staple_ids, db_url),
-                            loop.run_in_executor(None, inference.get_synergy_adjacency, db_url),
                         )
 
                     def _is_land(cid: str) -> bool:
@@ -281,6 +327,7 @@ async def generate(
                     # Applied to all candidates before the land/spell split.
                     # Each scorer is card-type-agnostic — it boosts whatever
                     # serves the described deckbuilding function.
+                    _progress(0.24, "Applying score boosts…")
                     score_tags: dict[str, list[str]] = {}
 
                     scored = score_mana_producers(scored, oracle_texts, signals, score_tags)
@@ -354,7 +401,7 @@ async def generate(
                     nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 
                     # ── Ramp selection ────────────────────────────────────────
-                    _progress(0.22, "Selecting ramp…")
+                    _progress(0.26, "Selecting ramp…")
                     selected_ramp, selected_ramp_ids = select_ramp(
                         spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
                     )
@@ -416,7 +463,7 @@ async def generate(
 
                         # ── Pre-encode candidates once (two-phase scoring) ────
                         # z_cand_t is reused every step; only z_ctx changes.
-                        _progress(0.25, "Pre-encoding candidates…")
+                        _progress(0.25, f"Pre-encoding {len(cand_ids)} candidates…")
                         if cand_ids:
                             z_cmd_t, z_cand_t = await loop.run_in_executor(
                                 None,
@@ -426,6 +473,10 @@ async def generate(
                             )
                         else:
                             z_cmd_t = z_cand_t = None
+
+                        _progress(0.28, f"Encoded {len(cand_ids)} candidates — loading synergy…")
+                        syn_counts: dict[str, int] = await _init_synergy_counts(db, deck_so_far)
+                        _progress(0.29, f"Encoded {len(cand_ids)} candidates — selecting spells…")
 
                         # ── Iterative role boosts (issue #61) ────────────────
                         # Pre-classify all candidates by structural role (once).
@@ -491,8 +542,10 @@ async def generate(
                                 f"Selecting spell {_step + 1} of {remaining_slots}…",
                             )
 
-                            syn_scores = inference.mean_synergy_to_deck(
-                                cand_ids, deck_so_far, synergy_adj
+                            n_deck = max(len(deck_so_far), 1)
+                            syn_scores = np.array(
+                                [syn_counts.get(cid, 0) / n_deck for cid in cand_ids],
+                                dtype=np.float32,
                             )
                             # Normalise synergy scores to [0, 1].
                             syn_min, syn_max = syn_scores.min(), syn_scores.max()
@@ -545,6 +598,10 @@ async def generate(
 
                             selected_non_ramp_iter.append((best_cid, best_score))
                             deck_so_far.append(best_cid)
+
+                            # Update incremental synergy counts for next step.
+                            for _partner in await _load_synergy_partners(db, best_cid):
+                                syn_counts[_partner] = syn_counts.get(_partner, 0) + 1
 
                             # Update role counts and score_tags for selected card.
                             best_orig = idx_map[best_cid]
