@@ -218,8 +218,11 @@ Assert-Prerequisites -mode $Mode -phase $Phase -resume $Resume -checkpointsDir $
 $env:PYTHONUNBUFFERED = '1'
 
 if ($Mode -eq 'train') {
-    # DATABASE_URL is only required when not using a pre-built dataset artifact.
-    if (-not $Dataset) {
+    # DATABASE_URL is only required when not using a pre-built dataset artifact,
+    # EXCEPT for compositional Phase 3: role-matching is always DB-derived
+    # (oracle text → roles → card lookup), so it needs the DB even with an artifact.
+    $needsDb = (-not $Dataset) -or ($TrainingPath -eq 'compositional' -and $Phase -eq 3)
+    if ($needsDb) {
         $env:DATABASE_URL = Ensure-SyncDbUrl
     }
     $env:CHECKPOINT_DIR = $checkpointsDir
@@ -268,6 +271,13 @@ if ($Mode -eq 'train') {
         $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
         $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
         $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
+    }
+
+    # Compositional Phase 3: pass encoder_lr_scale so the larger role-matched
+    # dataset doesn't collapse the encoder.  Co-occurrence Phase 3 always uses
+    # scale=1.0 (handled in train.py); no flag needed for that path.
+    if ($Phase -eq 3 -and $TrainingPath -eq 'compositional') {
+        $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
     }
 
     if ($Phase -eq 4) {
