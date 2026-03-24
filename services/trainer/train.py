@@ -1254,16 +1254,69 @@ def load_embeddings_from_artifact(data: dict) -> dict[str, np.ndarray]:
     return {cid: emb_matrix[i] for i, cid in enumerate(card_ids)}
 
 
-def load_synergy_pairs_from_artifact(data: dict) -> list[tuple[str, str, float]]:
-    """Reconstruct [(card_a_id, card_b_id, label)] from artifact."""
+def load_synergy_pairs_from_artifact(
+    data: dict,
+    sample: int = 500_000,
+    max_consumers_per_producer: int = 20,
+) -> list[tuple]:
+    """Build (consumer_A, consumer_B, 1.0) peer pairs from artifact synergy data.
+
+    Groups positive-synergy consumers by their shared producer, then creates
+    (consumer_A, consumer_B) pairs.  This reinforces Phase 1 functional-role
+    clustering rather than corrupting it:
+
+      Sythis + Verduran Enchantress share the same enchantment-cast trigger
+      source → their embeddings are pulled together, not toward enchantments.
+      Impact Tremors + Purphoros share creature-ETB producers → same idea.
+
+    Replacing the old (producer, consumer) NT-Xent pairs which pulled trigger
+    sources and their consumers together, overwriting Phase 1 role clusters.
+
+    max_consumers_per_producer: cap applied before C(n,2) pairing to avoid
+    O(n²) blow-up for high-fanout producers.
+    sample: final cap on returned pairs (shuffled before truncation).
+    """
+    from collections import defaultdict
+
     card_ids = data["card_ids"]
     syn = data["synergy"]
     a_list = syn["a_idx"].tolist()
     b_list = syn["b_idx"].tolist()
     l_list = syn["labels"].tolist()
-    return [
-        (card_ids[a], card_ids[b], float(l)) for a, b, l in zip(a_list, b_list, l_list)
-    ]
+
+    # Group consumers by producer (positive synergy only)
+    producer_to_consumers: defaultdict[int, list[int]] = defaultdict(list)
+    for a, b, l in zip(a_list, b_list, l_list):
+        if l > 0.5:
+            producer_to_consumers[a].append(b)
+
+    rng = random.Random(42)
+    pairs: list[tuple] = []
+    n_producers_used = 0
+
+    for consumers in producer_to_consumers.values():
+        if len(consumers) < 2:
+            continue
+        n_producers_used += 1
+        if len(consumers) > max_consumers_per_producer:
+            consumers = rng.sample(consumers, max_consumers_per_producer)
+        for i in range(len(consumers)):
+            for j in range(i + 1, len(consumers)):
+                pairs.append((card_ids[consumers[i]], card_ids[consumers[j]], 1.0))
+
+    rng.shuffle(pairs)
+    if len(pairs) > sample:
+        pairs = pairs[:sample]
+
+    log.info(
+        "load_synergy_pairs_from_artifact: %d consumer-peer pairs "
+        "(%d of %d producers contributed, sample cap=%d)",
+        len(pairs),
+        n_producers_used,
+        len(producer_to_consumers),
+        sample,
+    )
+    return pairs
 
 
 def load_decks_from_artifact(data: dict) -> list[dict]:
@@ -1574,7 +1627,7 @@ def main():
             return
 
         if _artifact:
-            pairs = load_synergy_pairs_from_artifact(_artifact)
+            pairs = load_synergy_pairs_from_artifact(_artifact, sample=args.sample)
         else:
             pairs = path_mod.load_synergy_pairs(
                 embeddings,
