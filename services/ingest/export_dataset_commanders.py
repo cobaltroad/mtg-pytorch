@@ -213,10 +213,10 @@ def _load_commander_positives(
     }
 
     with get_conn() as conn:
-        with conn.cursor() as cur:
 
-            # ── ability_trigger: producers → commander ────────────────────────
-            log.info("Loading ability_trigger edges for %d commanders…", len(cmd_list))
+        # ── ability_trigger: producers → commander ────────────────────────────
+        log.info("Loading ability_trigger edges for %d commanders…", len(cmd_list))
+        with conn.cursor() as cur:
             cur.execute("""
                 SELECT card_a::text, card_b::text,
                        COALESCE(metadata->>'trigger_event', '') AS trigger_event
@@ -225,22 +225,27 @@ def _load_commander_positives(
                   AND card_b::text = ANY(%s)
             """, (cmd_list,))
             ability_rows = cur.fetchall()
-            log.info("  %d ability_trigger rows fetched", len(ability_rows))
+        log.info("  %d ability_trigger rows fetched", len(ability_rows))
 
-            for card_a, card_b, trigger_event in ability_rows:
-                if card_a not in id_to_idx or card_b not in result:
-                    continue
-                cmd_ci  = color_ids.get(card_b, frozenset())
-                card_ci = color_ids.get(card_a, frozenset())
-                # Strict subset: producer must fit entirely within commander CI
-                if card_ci <= cmd_ci:
-                    pos_ids, events = result[card_b]
-                    pos_ids.add(card_a)
-                    if trigger_event:
-                        events.append(trigger_event)
+        for row in ability_rows:
+            if len(row) != 3:
+                log.warning("Unexpected ability_trigger row shape: %s", row)
+                continue
+            card_a, card_b, trigger_event = row[0], row[1], row[2]
+            if card_a not in id_to_idx or card_b not in result:
+                continue
+            cmd_ci  = color_ids.get(card_b, frozenset())
+            card_ci = color_ids.get(card_a, frozenset())
+            # Strict subset: producer must fit entirely within commander CI
+            if card_ci <= cmd_ci:
+                pos_ids, events = result[card_b]
+                pos_ids.add(card_a)
+                if trigger_event:
+                    events.append(trigger_event)
 
-            # ── commander_value: commander → payoff card ──────────────────────
-            log.info("Loading commander_value edges for %d commanders…", len(cmd_list))
+        # ── commander_value: commander → payoff card ──────────────────────────
+        log.info("Loading commander_value edges for %d commanders…", len(cmd_list))
+        with conn.cursor() as cur:
             cur.execute("""
                 SELECT card_a::text, card_b::text
                 FROM synergy_edges
@@ -248,19 +253,24 @@ def _load_commander_positives(
                   AND card_a::text = ANY(%s)
             """, (cmd_list,))
             cv_rows = cur.fetchall()
-            log.info("  %d commander_value rows fetched", len(cv_rows))
+        log.info("  %d commander_value rows fetched", len(cv_rows))
 
-            for card_a, card_b in cv_rows:
-                if card_a not in result or card_b not in id_to_idx:
-                    continue
-                cmd_ci  = color_ids.get(card_a, frozenset())
-                card_ci = color_ids.get(card_b, frozenset())
-                if card_ci <= cmd_ci:
-                    pos_ids, events = result[card_a]
-                    pos_ids.add(card_b)
+        for row in cv_rows:
+            if len(row) != 2:
+                log.warning("Unexpected commander_value row shape: %s", row)
+                continue
+            card_a, card_b = row[0], row[1]
+            if card_a not in result or card_b not in id_to_idx:
+                continue
+            cmd_ci  = color_ids.get(card_a, frozenset())
+            card_ci = color_ids.get(card_b, frozenset())
+            if card_ci <= cmd_ci:
+                pos_ids, events = result[card_a]
+                pos_ids.add(card_b)
 
-            # ── tribal typeline: commander → tribe members ────────────────────
-            log.info("Loading tribal typeline edges for %d commanders…", len(cmd_list))
+        # ── tribal typeline: commander → tribe members ────────────────────────
+        log.info("Loading tribal typeline edges for %d commanders…", len(cmd_list))
+        with conn.cursor() as cur:
             cur.execute("""
                 SELECT card_a::text, card_b::text,
                        COALESCE(metadata->>'trigger_event', '') AS trigger_event
@@ -270,16 +280,20 @@ def _load_commander_positives(
                   AND metadata->>'trigger_event' LIKE 'tribal\_%'
             """, (cmd_list,))
             tribal_rows = cur.fetchall()
-            log.info("  %d tribal typeline rows fetched", len(tribal_rows))
+        log.info("  %d tribal typeline rows fetched", len(tribal_rows))
 
-            for card_a, card_b, trigger_event in tribal_rows:
-                if card_a not in result or card_b not in id_to_idx:
-                    continue
-                # Tribal edges already color-filtered at build time; accept as-is
-                pos_ids, events = result[card_a]
-                pos_ids.add(card_b)
-                if trigger_event:
-                    events.append(trigger_event)
+        for row in tribal_rows:
+            if len(row) != 3:
+                log.warning("Unexpected tribal_typeline row shape: %s", row)
+                continue
+            card_a, card_b, trigger_event = row[0], row[1], row[2]
+            if card_a not in result or card_b not in id_to_idx:
+                continue
+            # Tribal edges already color-filtered at build time; accept as-is
+            pos_ids, events = result[card_a]
+            pos_ids.add(card_b)
+            if trigger_event:
+                events.append(trigger_event)
 
     total_pos = sum(len(v[0]) for v in result.values())
     covered   = sum(1 for v in result.values() if v[0])
