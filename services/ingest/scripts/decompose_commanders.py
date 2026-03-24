@@ -846,7 +846,7 @@ def _write_card_abilities(entries: list[dict]) -> None:
                 VALUES
                     (%(card_id)s::uuid, 'triggered', %(ability_name)s,
                      %(trigger_event)s, 'decompose', %(raw_text)s)
-                ON CONFLICT ON CONSTRAINT uq_card_abilities_key
+                ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, ''))
                 DO UPDATE SET
                     trigger_event = EXCLUDED.trigger_event,
                     raw_text      = EXCLUDED.raw_text,
