@@ -164,8 +164,9 @@ def _load_synergy_pairs(
             co-occurrence path which does not use that artifact.
     """
     log.info(
-        "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d, cv=%d)…",
-        ability_score_type, SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE, CV_SAMPLE,
+        "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d%s)…",
+        ability_score_type, SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE,
+        f", cv={CV_SAMPLE}" if include_commander_value else "",
     )
     positives: list[tuple[int, int, float]] = []
 
