@@ -211,7 +211,7 @@ def _load_commander_positives(
                 FROM synergy_edges
                 WHERE score_type = 'ability_trigger'
                   AND card_a::text = ANY(%s)
-                  AND metadata->>'trigger_event' LIKE 'tribal\_%'
+                  AND metadata->>'trigger_event' ~ '^tribal_'
             """, (cmd_list,))
             tribal_rows = cur.fetchall()
         log.info("  %d tribal typeline rows fetched", len(tribal_rows))
