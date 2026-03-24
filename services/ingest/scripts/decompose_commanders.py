@@ -289,6 +289,42 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern, float]] = [
      re.compile(r"(?:double|twice) the (?:number of )?(?:counters?|\+1/\+1)|"
                 r"one additional (?:\+1/\+1 )?counter", re.I),
      0.9),
+
+    # Extra combat phases — commander grants additional attack steps.
+    # Covers both the clause form ("there is an additional combat phase after
+    # this phase") and the direct grant form ("you may have a second combat
+    # phase"), as well as the rare "you may attack again" wording.
+    # Examples: Raiyuu (if it's the first combat phase…), Aggravated Assault,
+    # Savage Beating, Moraug, Fury of Akoum, Isshin (two attacks → two extra
+    # combat triggers, though the extra-combat clause itself is on other cards).
+    ("extra_combat",
+     "Extra combat phase",
+     re.compile(
+         r"additional combat phase"
+         r"|second combat phase"
+         r"|you may attack again this turn"
+         r"|there is an additional combat",
+         re.I,
+     ),
+     0.9),
+
+    # Color-based cast triggers — commander rewards casting spells of a
+    # specific color (or multicolored / colorless).  Distinct from type-based
+    # cast triggers; requires a color word immediately before "spell".
+    # Examples: Chandra ("whenever you cast a red spell"),
+    # Zada Hedron Grinder ("whenever you cast an instant or sorcery spell that
+    # targets only Zada") — note Zada uses type, not color, so won't match here.
+    # Pia Nalaar, Shortsighted ("whenever you cast a red or artifact spell").
+    ("cast_trigger_colored",
+     "Color-based cast trigger",
+     re.compile(
+         r"when(?:ever)?\s+you cast (?:a |an )?"
+         r"(?:red|blue|green|white|black|colorless|multicolored|monocolored)"
+         r"(?:\s+or\s+(?:red|blue|green|white|black|colorless|multicolored|artifact|creature))?"
+         r"\s+spell",
+         re.I,
+     ),
+     0.9),
 ]
 
 # ── Trigger clause extraction ─────────────────────────────────────────────────
