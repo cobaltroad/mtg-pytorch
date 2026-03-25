@@ -6,6 +6,7 @@ Sub-stages:
   embed_cards   — compute sentence-transformer embeddings → card_embeddings
   tag_abilities — oracle-text pattern matching → card_abilities
                   Pass 1:  apply TRIGGER_PATTERNS to new cards
+                           (triggered abilities, activated abilities, combat patterns)
                   Pass 1b: gap detection (backfill new trigger_events to all cards)
 """
 from __future__ import annotations
@@ -25,9 +26,10 @@ from land_tags import annotate_land_oracle  # noqa: E402
 
 from synergy.triggered_ability import TRIGGERED_ABILITY_PATTERNS as _trigger_patterns  # noqa: E402
 from synergy.activated_ability import ACTIVATED_ABILITY_PATTERNS as _activated_patterns  # noqa: E402
+from synergy.combat import COMBAT_PATTERNS as _combat_patterns  # noqa: E402
 from synergy.tribal import TRIBAL_PATTERNS  # noqa: E402
 
-TRIGGER_PATTERNS = [*_trigger_patterns, *_activated_patterns]
+TRIGGER_PATTERNS = [*_trigger_patterns, *_activated_patterns, *_combat_patterns]
 
 
 def _card_text(row) -> str:
