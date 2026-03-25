@@ -83,11 +83,15 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(r"when(?:ever)?\s+you cast (?:a |an )?(?:aura|equipment)")),
 
     # Spell cast — color-based
-    # Per-color cast triggers — one key per color so commander_mechanics can
-    # map each to the correct producer SQL (e.g. cast_trigger_white → white spells).
+    # Per-color cast triggers — three phrasings covered per color:
+    #   1. triggered: "whenever you cast a {color} spell" (standard trigger)
+    #   2. static/post: "{color} spells you cast cost/have …" (Grand Arbiter, Zhulodok)
+    #   3. static/pre: "cast {color} spells as though …" (Liberator, Urza's Battlethopter)
     *[
         (f"cast_trigger_{color}", f"{color.title()} spell cast trigger",
-         p(rf"when(?:ever)?\s+you cast (?:a |an )?{color}\s+spell"))
+         p(rf"when(?:ever)?\s+you cast (?:a |an )?{color}\s+spell"
+           rf"|{color} spells you cast"
+           rf"|cast {color} spells"))
         for color in ("white", "blue", "black", "red", "green", "colorless")
     ],
 
