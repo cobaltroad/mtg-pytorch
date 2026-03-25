@@ -339,43 +339,24 @@ docker compose run --rm ingest python pipeline.py --stage export_dataset
 
 Changing land embeddings invalidates all checkpoints — retrain from Phase 1.
 
-### Training path
+### Training artifacts
 
-Two parallel training paths run side by side (see #71):
-
-| Path | Artifact | Checkpoint prefix |
-|------|----------|-------------------|
-| Co-occurrence | `mtg_dataset.pt` | `phase*` |
-| Compositional | `mtg_dataset_compositional.pt` | `comp_phase*` |
-| Commander | `mtg_commanders.pt` | `cmd_phase*` |
-
-The compositional artifact is produced by a separate export stage:
-
-```bash
-docker compose run --rm ingest python pipeline.py --stage export_dataset
-```
-
-On the GPU machine, download it alongside the standard artifact and train with
-`-TrainingPath compositional`:
+| Phases | Artifact | Checkpoint prefix |
+|--------|----------|--------------------|
+| 1–2 | `mtg_dataset.pt` | `phase*` |
+| 3–4 | `mtg_commanders.pt` | `phase*` |
 
 ```powershell
-.\scripts\download_dataset.ps1          # downloads mtg_dataset.pt + mtg_commanders.pt
+.\scripts\download_dataset.ps1      # downloads mtg_dataset.pt (Phases 1-2)
+.\scripts\download_commanders.ps1   # downloads mtg_commanders.pt (Phases 3-4)
 
-# Phases 1-2: functional equivalence + XMage synergy
-.\scripts\run.ps1 -TrainingPath compositional -Train 1
-.\scripts\run.ps1 -TrainingPath compositional -Train 2
-# Phases 3-4: synthetic decks from synergy_edges (uses mtg_commanders.pt automatically)
-.\scripts\run.ps1 -TrainingPath compositional -Train 3
-.\scripts\run.ps1 -TrainingPath compositional -Train 4
+.\scripts\run.ps1 -Train 1
+.\scripts\run.ps1 -Train 2
+.\scripts\run.ps1 -Train 3
+.\scripts\run.ps1 -Train 4
 ```
 
-Phase 1 of the compositional path uses **functional equivalence pairs** from
-`card_abilities` instead of noise-augmented single-card views.  Two cards are
-paired when they share the same ability role (e.g. `ramp`, `removal`), color
-identity bucket, and CMC bracket — so Llanowar Elves and Elvish Mystic are
-positive pairs, not just reprints of the same oracle text.
-
-### Commander training path (`mtg_commanders.pt`)
+### Commander artifact (`mtg_commanders.pt`)
 
 The commander artifact enables Phase 3 BPR training **without human decklists**,
 avoiding the representation-collapse failure mode where all commanders converge
@@ -506,18 +487,16 @@ together after training.
 ```powershell
 .\scripts\eval_neighbors.ps1 "Swords to Plowshares"
 .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Top 30
-.\scripts\eval_neighbors.ps1 "Swords to Plowshares" -TrainingPath cooccurrence
 ```
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `-Card` | (required) | Card name — partial/case-insensitive match |
-| `-TrainingPath` | `compositional` | Selects checkpoint prefix and artifact |
 | `-Top` | `20` | Number of neighbours to display |
-| `-Checkpoint` | `<prefix>1_best` | Override checkpoint name |
-| `-Dataset` | `ingest_cache\mtg_dataset[_compositional].pt` | Override artifact path |
+| `-Checkpoint` | `phase1_best` | Override checkpoint name |
+| `-Dataset` | `ingest_cache\mtg_dataset.pt` | Override artifact path |
 
-**Expected results (Phase 1 compositional success criteria):**
+**Expected results (Phase 1 success criteria):**
 - Swords to Plowshares → Path to Exile, Generous Gift (removal cluster)
 - Llanowar Elves → Birds of Paradise, Elvish Mystic, Fyndhorn Elves (ramp cluster)
 

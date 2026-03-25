@@ -32,10 +32,6 @@ DATABASE_URL      = os.environ.get("DATABASE_URL", "")
 ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
 DATASET_PATH      = Path(os.environ.get("DATASET_PATH",      "/data/mtg_dataset.pt"))
 DATASET_META_PATH = Path(os.environ.get("DATASET_META_PATH", "/data/mtg_dataset.json"))
-DATASET_COMP_PATH      = Path(os.environ.get("DATASET_COMP_PATH",      "/data/mtg_dataset.pt"))
-DATASET_COMP_META_PATH = Path(os.environ.get("DATASET_COMP_META_PATH", "/data/mtg_dataset.json"))
-DATASET_COOC_PATH      = Path(os.environ.get("DATASET_COOC_PATH",      "/data/mtg_cooccurrence_dataset.pt"))
-DATASET_COOC_META_PATH = Path(os.environ.get("DATASET_COOC_META_PATH", "/data/mtg_cooccurrence_dataset.json"))
 DATASET_CMD_PATH       = Path(os.environ.get("DATASET_CMD_PATH",       "/data/mtg_commanders.pt"))
 DATASET_CMD_META_PATH  = Path(os.environ.get("DATASET_CMD_META_PATH",  "/data/mtg_commanders.json"))
 DECK_SAVE_DIR     = Path(os.environ.get("DECK_SAVE_DIR",     "/app/generated_decks"))
@@ -485,18 +481,9 @@ async def stop_training(container_id: str):
 
 # ── Checkpoint management ─────────────────────────────────────────────────────
 
-def _checkpoint_training_path(name: str) -> str:
-    """Derive training path label from checkpoint filename prefix."""
-    if name.startswith("comp_"):
-        return "compositional"
-    if name.startswith("cmd_"):
-        return "commander"
-    return "co-occurrence"
-
-
 @app.get("/checkpoints")
 async def list_checkpoints():
-    """List available checkpoint files with their training path classification."""
+    """List available checkpoint files."""
     from ops import inference
     if not inference.CHECKPOINT_DIR.exists():
         return []
@@ -505,7 +492,6 @@ async def list_checkpoints():
         {
             "name": f.stem,
             "filename": f.name,
-            "training_path": _checkpoint_training_path(f.stem),
             "size_bytes": f.stat().st_size,
         }
         for f in files
@@ -574,74 +560,6 @@ async def dataset_download():
         DATASET_PATH,
         media_type="application/octet-stream",
         filename="mtg_dataset.pt",
-    )
-
-
-@app.get("/dataset/compositional/info")
-async def dataset_compositional_info():
-    """Return metadata about the compositional training artifact (no auth required)."""
-    if not DATASET_COMP_META_PATH.exists():
-        raise HTTPException(
-            404,
-            "No compositional dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_dataset",
-        )
-    meta = json.loads(DATASET_COMP_META_PATH.read_text())
-    size_bytes = DATASET_COMP_PATH.stat().st_size if DATASET_COMP_PATH.exists() else 0
-    return {**meta, "size_bytes": size_bytes}
-
-
-@app.get("/dataset/compositional/download")
-async def dataset_compositional_download():
-    """Stream the compositional training artifact to the caller (no auth required).
-
-    Contains functional equivalence pairs (Phase 1) in addition to the
-    standard synergy pairs, decks, and Phase 4 positions.
-    """
-    if not DATASET_COMP_PATH.exists():
-        raise HTTPException(
-            404,
-            "No compositional dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_dataset",
-        )
-    return FileResponse(
-        DATASET_COMP_PATH,
-        media_type="application/octet-stream",
-        filename="mtg_dataset.pt",
-    )
-
-
-@app.get("/dataset/cooccurrence/info")
-async def dataset_cooccurrence_info():
-    """Return metadata about the co-occurrence training artifact (no auth required)."""
-    if not DATASET_COOC_META_PATH.exists():
-        raise HTTPException(
-            404,
-            "No co-occurrence dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_cooccurrence_dataset",
-        )
-    meta = json.loads(DATASET_COOC_META_PATH.read_text())
-    size_bytes = DATASET_COOC_PATH.stat().st_size if DATASET_COOC_PATH.exists() else 0
-    return {**meta, "size_bytes": size_bytes}
-
-
-@app.get("/dataset/cooccurrence/download")
-async def dataset_cooccurrence_download():
-    """Stream the co-occurrence training artifact (.pt) to the caller (no auth required).
-
-    Contains oracle-text pattern synergy pairs, decks, and pre-computed Phase 4
-    positions.  Download with: .\\scripts\\download_dataset.ps1 -TrainingPath cooccurrence
-    """
-    if not DATASET_COOC_PATH.exists():
-        raise HTTPException(
-            404,
-            "No co-occurrence dataset available — run: "
-            "docker compose run --rm ingest python pipeline.py --stage export_cooccurrence_dataset",
-        )
-    return FileResponse(
-        DATASET_COOC_PATH,
-        media_type="application/octet-stream",
-        filename="mtg_cooccurrence_dataset.pt",
     )
 
 

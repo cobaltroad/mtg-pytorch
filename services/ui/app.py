@@ -101,24 +101,11 @@ def get_generated_deck(filename: str) -> dict | None:
 _CONFIDENCE_ICONS = {"high": "✅", "medium": "⚠️", "low": "❓", "unknown": "❓"}
 _GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}
 
-_PATH_BADGES = {
-    "compositional": "🔬 Compositional",
-    "commander": "👑 Commander",
-    "co-occurrence": "📊 Co-occurrence",
-}
-
-_LATEST_CHECKPOINT = {
-    "Co-occurrence": "phase4_best",
-    "Compositional": "comp_phase4_best",
-}
-
-
-def _training_path_from_checkpoint(checkpoint: str) -> str:
-    if checkpoint.startswith("comp_"):
-        return "compositional"
+def _checkpoint_label(checkpoint: str) -> str:
+    """Human-readable label for a checkpoint name."""
     if checkpoint.startswith("cmd_"):
-        return "commander"
-    return "co-occurrence"
+        return "👑 Commander"
+    return "🎯 Phase"
 
 
 # ── Shared deck display ───────────────────────────────────────────────────────
@@ -366,32 +353,20 @@ with tab_deck:
     _chosen_checkpoint = "phase4_best"
     if commander:
         with st.expander("Advanced options", expanded=False):
-            # Training path selector
             _available = list_checkpoints()
-            _path_choice = st.radio(
-                "Training path",
-                ["Co-occurrence", "Compositional"],
-                horizontal=True,
-                help=(
-                    "Co-occurrence: trained on human deck data.  "
-                    "Compositional: trained on oracle-text role reasoning."
-                ),
-            )
-            # Resolve to a concrete checkpoint name
-            _default_ckpt = _LATEST_CHECKPOINT.get(_path_choice, "phase4_best")
-            # Filter to checkpoints matching the chosen path
-            _path_key = "co-occurrence" if _path_choice == "Co-occurrence" else "compositional"
-            _matching = [c for c in _available if c["training_path"] == _path_key]
-            if _matching:
-                _ckpt_options = [c["name"] for c in _matching]
-                _default_ckpt_idx = 0
-                if _default_ckpt in _ckpt_options:
-                    _default_ckpt_idx = _ckpt_options.index(_default_ckpt)
+            _default_ckpt = "phase4_best"
+            if _available:
+                _ckpt_options = [c["name"] for c in _available]
+                _default_ckpt_idx = (
+                    _ckpt_options.index(_default_ckpt)
+                    if _default_ckpt in _ckpt_options
+                    else 0
+                )
                 _chosen_checkpoint = st.selectbox(
                     "Checkpoint",
                     _ckpt_options,
                     index=_default_ckpt_idx,
-                    help="Select a specific checkpoint for this training path.",
+                    help="Select a checkpoint to use for deck generation.",
                 )
             else:
                 _chosen_checkpoint = _default_ckpt
@@ -482,8 +457,7 @@ with tab_history:
         st.info("No generated decks yet. Use the Deck Builder tab to generate one.")
     else:
         def _deck_label(d: dict) -> str:
-            path = _training_path_from_checkpoint(d.get("checkpoint", ""))
-            badge = _PATH_BADGES.get(path, path)
+            badge = _checkpoint_label(d.get("checkpoint", ""))
             return f"{d['commander']}  [{badge}]  —  {d['filename']}  ({d['card_count']} cards)"
 
         options_map = {_deck_label(d): d["filename"] for d in decks_list}
@@ -531,12 +505,10 @@ with tab_history:
             else:
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    path_a = _training_path_from_checkpoint(deck_a.get("checkpoint", ""))
-                    st.markdown(f"### {_PATH_BADGES.get(path_a, path_a)}")
+                    st.markdown(f"### {_checkpoint_label(deck_a.get('checkpoint', ''))}")
                     render_deck(deck_a)
                 with col_b:
-                    path_b = _training_path_from_checkpoint(deck_b.get("checkpoint", ""))
-                    st.markdown(f"### {_PATH_BADGES.get(path_b, path_b)}")
+                    st.markdown(f"### {_checkpoint_label(deck_b.get('checkpoint', ''))}")
                     render_deck(deck_b)
         else:
             deck = get_generated_deck(chosen_filename)

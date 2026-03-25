@@ -9,11 +9,11 @@ param(
     [ValidateSet(1, 2, 3, 4)]
     [int]$Phase = 3,
 
-    # Path to a pre-built training artifact (.pt from export_dataset or export_cooccurrence_dataset stage).
+    # Path to a pre-built training artifact (.pt from export_dataset stage).
     # When set, no DATABASE_URL is required -- all data is loaded from the file.
     [string]$Dataset = '',
 
-    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset', 'export_cooccurrence_dataset', 'export_dataset_commanders', 'backfill_roles', 'all')]
+    [ValidateSet('download', 'process', 'embed_cards', 'tag_abilities', 'compute_synergy', 'compute_commander_value_synergy', 'compute_tribal_typeline_synergy', 'export_dataset', 'export_dataset_commanders', 'backfill_roles', 'all')]
     [string]$Stage = 'compute_synergy',
 
     [Nullable[int]]$Epochs = $null,
@@ -38,10 +38,6 @@ param(
     [bool]$SynergyOnly = $true,
     [int]$SynBatchSize = 256,
 
-    # Training path: compositional (default) or cooccurrence (see issue #71).
-    [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'compositional',
-
     # Phase 4 synergy-guided training weights
     [int]$SynPerEpoch = 1000,
     [double]$ComboWeight = 3.0,
@@ -62,19 +58,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
-# Compositional path splits by phase:
-#   Phase 1-2 → mtg_dataset.pt          (functional pairs + XMage synergy)
-#   Phase 3-4 → mtg_commanders.pt       (synthetic decks from synergy_edges)
-# Co-occurrence path always uses mtg_cooccurrence_dataset.pt.
+#   Phase 1-2 → mtg_dataset.pt       (text equivalence + ability-trigger synergy)
+#   Phase 3-4 → mtg_commanders.pt    (commander BPR from synergy_edges)
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
     if (-not $Dataset) {
-        $artifactName = if ($TrainingPath -eq 'compositional') {
-            if ($Phase -le 2) { 'mtg_dataset.pt' } else { 'mtg_commanders.pt' }
-        } else {
-            'mtg_cooccurrence_dataset.pt'
-        }
+        $artifactName = if ($Phase -le 2) { 'mtg_dataset.pt' } else { 'mtg_commanders.pt' }
         $Dataset = Join-Path $PSScriptRoot "..\ingest_cache\$artifactName"
     }
 }
@@ -194,8 +184,7 @@ function Assert-Prerequisites {
         # Mirror the default-resume logic from the train block
         $resolvedResume = if ($null -ne $resume) { [bool]$resume } else { $true }
         if ($resolvedResume) {
-            $pfx = if ($TrainingPath -eq 'compositional') { 'comp_phase' } else { 'phase' }
-            $ckptMap = @{ 3 = "${pfx}2_best.pt"; 4 = "${pfx}3_best.pt" }
+            $ckptMap = @{ 3 = "phase2_best.pt"; 4 = "phase3_best.pt" }
             $needed  = $ckptMap[$phase]
             if ($needed) {
                 Write-Host -NoNewline "  Checkpoint $needed"
@@ -222,10 +211,10 @@ $env:PYTHONUNBUFFERED = '1'
 
 if ($Mode -eq 'train') {
     # DATABASE_URL is only required when no artifact is provided, OR for
-    # compositional Phase 4 synergy-only mode: the commanders artifact has no
-    # synergy_positions key, so train.py falls back to computing them from the
-    # DB at runtime.  All other artifact-based phases are fully self-contained.
-    $needsDb = (-not $Dataset) -or ($TrainingPath -eq 'compositional' -and $Phase -eq 4 -and $SynergyOnly)
+    # Phase 4 synergy-only mode: the commanders artifact has no synergy_positions
+    # key, so train.py falls back to computing them from the DB at runtime.
+    # All other artifact-based phases are fully self-contained.
+    $needsDb = (-not $Dataset) -or ($Phase -eq 4 -and $SynergyOnly)
     if ($needsDb) {
         $env:DATABASE_URL = Ensure-SyncDbUrl
     }
@@ -266,8 +255,6 @@ if ($Mode -eq 'train') {
         $cmd += '--resume'
     }
 
-    $cmd += @('--training-path', $TrainingPath)
-
     if ($Dataset) {
         $cmd += @('--dataset', $Dataset)
     }
@@ -278,10 +265,10 @@ if ($Mode -eq 'train') {
         $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
     }
 
-    # Compositional Phase 3: pass encoder_lr_scale so the larger role-matched
-    # dataset doesn't collapse the encoder.  Co-occurrence Phase 3 always uses
-    # scale=1.0 (handled in train.py); no flag needed for that path.
-    if ($Phase -eq 3 -and $TrainingPath -eq 'compositional') {
+    # Phase 3: pass encoder_lr_scale to protect Phase 2 geometry — the
+    # commanders artifact generates thousands of synthetic decks, so the encoder
+    # gets far more gradient updates per epoch than with human decklists.
+    if ($Phase -eq 3) {
         $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
     }
 

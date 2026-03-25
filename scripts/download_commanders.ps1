@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Fetches mtg_commanders.pt from the API and saves it to ingest_cache/.
-    This artifact is used for Phases 3 and 4 of the compositional training
-    path — positives are derived from synergy_edges (no human decklists needed).
+    This artifact is used for Phases 3 and 4 — positives are derived from
+    synergy_edges (no human decklists needed).
 
     Prerequisites (run on the Docker host before downloading):
         docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
@@ -115,4 +115,5 @@ try {
 # -- Usage hint ---------------------------------------------------------------
 
 Write-Host "Train with:" -ForegroundColor Yellow
-Write-Host "  .\scripts\run.ps1 -Mode train -Phase 3 -TrainingPath commander -Dataset .\ingest_cache\mtg_commanders.pt" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 3" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 4" -ForegroundColor Yellow

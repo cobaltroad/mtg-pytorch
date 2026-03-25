@@ -12,11 +12,7 @@
 
 .PARAMETER Name
     Name to save the checkpoint as on the server (without .pt extension).
-    Defaults to phase4_best (cooccurrence) or comp_phase4_best (compositional).
-
-.PARAMETER TrainingPath
-    Training path: cooccurrence (default) or compositional.
-    Determines the default checkpoint name and file path.
+    Defaults to phase4_best.
 
 .PARAMETER ApiHost
     API hostname (without scheme).  Defaults to API_HOST from .env or edh-api.cardtrak.app.
@@ -30,17 +26,13 @@
 .EXAMPLE
     .\scripts\upload_checkpoint.ps1 -File .\checkpoints\phase3_best.pt -Name phase3_best
 
-.EXAMPLE
-    .\scripts\upload_checkpoint.ps1 -TrainingPath compositional
 #>
 
 param(
-    [string]$File  = '',
-    [string]$Name  = '',
-    [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'cooccurrence',
+    [string]$File    = '',
+    [string]$Name    = '',
     [string]$ApiHost = '',
-    [string]$Token = ''
+    [string]$Token   = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,20 +54,14 @@ if (Test-Path $envFile) {
 
 # -- Resolve parameters --------------------------------------------------------
 
-$defaultName = if ($TrainingPath -eq 'compositional') { 'comp_phase4_best' } else { 'phase4_best' }
-if (-not $Name) { $Name = $defaultName }
+if (-not $Name) { $Name = 'phase4_best' }
 
 if (-not $File) {
     $File = Join-Path $RepoRoot "checkpoints\${Name}.pt"
 }
 
 if (-not (Test-Path $File)) {
-    $trainHint = if ($TrainingPath -eq 'compositional') {
-        ".\scripts\run.ps1 -TrainingPath compositional -Train 4"
-    } else {
-        ".\scripts\run.ps1 -Train 4"
-    }
-    throw "Checkpoint not found: $File`nTrain first with: $trainHint"
+    throw "Checkpoint not found: $File`nTrain first with: .\scripts\run.ps1 -Train 4"
 }
 
 if (-not $ApiHost) {
