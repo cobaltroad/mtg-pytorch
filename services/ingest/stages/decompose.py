@@ -171,7 +171,7 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     # Counter placement — commander puts +1/+1 counters on things.
     # Producer key: deck wants counter_trigger amplifiers (Hardened Scales, etc.)
     ("counter_placement", "Counter placement",
-     p(r"put (?:a |one or more |an? )?\+1/\+1 counter")),
+     p(r"put (?:a |one or more |an? )?\+1/\+1 counter|\+1/\+1 counters?.{0,30}equal to.{0,30}mana")),
 
     # Lifegain producer — commander outputs life gain (e.g. Sythis, Oloro)
     # Matches "you gain N life" as a primary effect, not as a trigger condition.
@@ -318,9 +318,6 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
         for _tribe, _oracle_regex in _tribes
     ],
 
-    # Counter trigger (Tyvar-style: puts counters equal to mana produced)
-    ("counter_trigger", "Counter trigger (mana-based)",
-     p(r"\+1/\+1 counters?.{0,30}equal to.{0,30}mana")),
 ]
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
