@@ -171,7 +171,7 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     # Counter placement — commander puts +1/+1 counters on things.
     # Producer key: deck wants counter_trigger amplifiers (Hardened Scales, etc.)
     ("counter_placement", "Counter placement",
-     p(r"put (?:a |one or more |an? )?\+1/\+1 counter|\+1/\+1 counters?.{0,30}equal to.{0,30}mana")),
+     p(r"put (?:a |one or more |an? )?\+1/\+1 counter|\+1/\+1 counters on it equal to the")),
 
     # Lifegain producer — commander outputs life gain (e.g. Sythis, Oloro)
     # Matches "you gain N life" as a primary effect, not as a trigger condition.
@@ -192,6 +192,14 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(
          r"when(?:ever)?\s+you draw (?:a card|cards|your (?:first|second|third) card)",
      )),
+
+    # Token generator — commander creates tokens as a primary output.
+    # creature_token_generator is the narrower sub-case (Krenko, Mob Boss:
+    # "create X 1/1 red Goblin creature tokens").
+    ("creature_token_generator", "Creature token generator",
+     p(r"create (?:x |a number of |one or more |that many |(?:\d+ ))?(?:[\w/]+ )*creature tokens?")),
+    ("token_generator", "Token generator",
+     p(r"create (?:x |a number of |one or more |that many |(?:\d+ ))?(?:[\w/]+ )*tokens?")),
 
     # Token trigger
     ("token_trigger", "Token creation trigger",

@@ -40,6 +40,16 @@ TRIBES: list[tuple[str, str]] = [
     ("cat",       "cat|cats"),
     ("sliver",    "sliver|slivers"),
     ("wolf",      "wolf|wolves"),
+    ("demon",     "demon|demons"),
+    ("ninja",     "ninja|ninjas"),
+    ("squirrel",  "squirrel|squirrels"),
+    ("elemental", "elemental|elementals"),
+    ("dog",       "dog|dogs"),
+    ("spirit",    "spirit|spirits"),
+    ("knight",    "knight|knights"),
+    ("horror",    "horror|horrors"),
+    ("faerie",    "faerie|faeries"),
+    ("dwarf",     "dwarf|dwarves"),
 ]
 
 TRIBAL_PATTERNS: list[tuple[str, str, str]] = []
