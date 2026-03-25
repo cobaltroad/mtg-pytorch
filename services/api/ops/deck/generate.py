@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .signals import build_signals
-from .ramp import score_mana_producers, score_land_mana_quality, select_ramp
+from .ramp import score_mana_producers, score_land_mana_quality, select_ramp, MANA_PRODUCER_BOOST
 from .evasion import score_evasion_enablers, is_evasion_card, EVASION_BOOST
 from .removal import score_removal, is_removal_card, HARD_REMOVAL_BOOST
 from .value_engine import score_value_engine, is_value_card, DRAW_BOOST
@@ -400,18 +400,29 @@ async def generate(
                     )
                     nonbasic_scored.sort(key=lambda x: x[1], reverse=True)
 
-                    # ── Ramp selection ────────────────────────────────────────
-                    _progress(0.26, "Selecting ramp…")
-                    selected_ramp, selected_ramp_ids = select_ramp(
-                        spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
-                    )
+                    # ── Guaranteed ramp pre-pick (Sol Ring / Arcane Signet) ────
+                    # Only universal staples are pre-seeded.  All other ramp
+                    # cards enter the iterative loop and win slots by competing
+                    # on model score + synergy, lifted by a diminishing ramp
+                    # boost until RAMP_TARGET is met.  Archetype-synergistic
+                    # ramp (Wild Growth for Sythis, mana dorks for elfball)
+                    # therefore wins naturally while generic ramp fills any gap.
+                    _progress(0.26, "Pre-selecting guaranteed ramp…")
+                    _score_lk: dict[str, float] = {cid: sc for cid, sc in spell_scored}
+                    guaranteed_only: list[tuple[str, float]] = []
+                    for _gcid in guaranteed_ramp.values():
+                        guaranteed_only.append((_gcid, _score_lk.get(_gcid, 0.0)))
+                        score_tags.setdefault(_gcid, []).append("ramp:guaranteed")
+                    guaranteed_only_ids: set[str] = {cid for cid, _ in guaranteed_only}
 
                     # ── Iterative greedy spell selection ──────────────────────
-                    # Seats remaining after ramp slots.
-                    remaining_slots = SPELL_SLOTS - len(selected_ramp)
 
                     if synergy_alpha == 0.0:
-                        # Fast path: single-pass CMC bucket enforcement (original behaviour).
+                        # Fast path (legacy): full ramp pre-selection, then bucket fill.
+                        selected_ramp, selected_ramp_ids = select_ramp(
+                            spell_scored, ramp_ids, guaranteed_ramp, RAMP_TARGET, score_tags
+                        )
+                        remaining_slots = SPELL_SLOTS - len(selected_ramp)
                         ramp_bucket_fill: dict[int, int] = {}
                         for cid, _ in selected_ramp:
                             b = _curve_bucket(cmc_map.get(cid, 0.0))
@@ -441,20 +452,23 @@ async def generate(
                         selected_spells = (selected_ramp + selected_non_ramp)[:SPELL_SLOTS]
                     else:
                         # Synergy-ensemble iterative selection loop.
-                        # Seed the deck with guaranteed ramp cards.
-                        deck_so_far: list[str] = [cid for cid, _ in selected_ramp]
+                        # Only guaranteed ramp (Sol Ring, Arcane Signet) is pre-seeded.
+                        # All other ramp enters the loop; a diminishing boost provides
+                        # a floor without overriding synergy-driven selection.
+                        remaining_slots = SPELL_SLOTS - len(guaranteed_only)
+                        deck_so_far: list[str] = [cid for cid, _ in guaranteed_only]
 
-                        non_ramp_candidates: list[tuple[str, float]] = [
+                        spell_candidates: list[tuple[str, float]] = [
                             (cid, sc) for cid, sc in spell_scored
-                            if cid not in selected_ramp_ids
+                            if cid not in guaranteed_only_ids
                         ]
 
-                        cand_ids: list[str] = [cid for cid, _ in non_ramp_candidates]
+                        cand_ids: list[str] = [cid for cid, _ in spell_candidates]
                         cand_set: set[str] = set(cand_ids)
 
-                        # Track CMC bucket fills (seeded from ramp already selected).
+                        # Track CMC bucket fills (seeded from guaranteed ramp only).
                         bucket_fill: dict[int, int] = {}
-                        for cid, _ in selected_ramp:
+                        for cid, _ in guaranteed_only:
                             b = _curve_bucket(cmc_map.get(cid, 0.0))
                             bucket_fill[b] = bucket_fill.get(b, 0) + 1
 
@@ -496,24 +510,30 @@ async def generate(
                             [is_evasion_card(_ot.get(c, "")) for c in cand_ids],
                             dtype=np.float32,
                         )
+                        _role_ramp = np.array(
+                            [c in ramp_ids for c in cand_ids],
+                            dtype=np.float32,
+                        )
 
-                        # Seed role counts from already-selected ramp cards.
+                        # Seed role counts from guaranteed pre-picks only.
                         _rm_count = sum(
-                            1 for c, _ in selected_ramp
+                            1 for c, _ in guaranteed_only
                             if is_removal_card(oracle_texts.get(c, ""))
                         )
                         _dw_count = sum(
-                            1 for c, _ in selected_ramp
+                            1 for c, _ in guaranteed_only
                             if is_value_card(oracle_texts.get(c, ""))
                         )
                         _ev_count = sum(
-                            1 for c, _ in selected_ramp
+                            1 for c, _ in guaranteed_only
                             if is_evasion_card(oracle_texts.get(c, ""))
                         )
+                        _ramp_count: int = len(guaranteed_only)
 
-                        _tgt_rm = max(_COMPOSITION_TARGETS.get("removal", 8), 1)
-                        _tgt_dw = max(_COMPOSITION_TARGETS.get("draw",    8), 1)
-                        _tgt_ev = max(_COMPOSITION_TARGETS.get("evasion", 4), 1)
+                        _tgt_rm   = max(_COMPOSITION_TARGETS.get("removal", 8), 1)
+                        _tgt_dw   = max(_COMPOSITION_TARGETS.get("draw",    8), 1)
+                        _tgt_ev   = max(_COMPOSITION_TARGETS.get("evasion", 4), 1)
+                        _tgt_ramp = RAMP_TARGET
 
                         # Soft CMC penalty: candidates in full buckets score ×0.1.
                         _BUCKET_TARGETS = {b: t for b, (_, t) in enumerate(CURVE_BUCKETS)}
@@ -522,7 +542,7 @@ async def generate(
                             b = _curve_bucket(cmc_map.get(cid, 0.0))
                             cap = _BUCKET_TARGETS.get(b, 6)
                             ramp_fill = sum(
-                                1 for rc, _ in selected_ramp
+                                1 for rc, _ in guaranteed_only
                                 if _curve_bucket(cmc_map.get(rc, 0.0)) == b
                             )
                             effective_fill = bucket_fill.get(b, 0) + ramp_fill
@@ -572,18 +592,20 @@ async def generate(
                             # each structural target fills.  Scores are normalised
                             # to [0, 1] here, so boosts are additive (not × as in
                             # the upfront scorers) to stay in a sensible range.
-                            _bf_rm = max(0.0, (_tgt_rm - _rm_count) / _tgt_rm)
-                            _bf_dw = max(0.0, (_tgt_dw - _dw_count) / _tgt_dw)
-                            _bf_ev = (
+                            _bf_rm   = max(0.0, (_tgt_rm   - _rm_count)   / _tgt_rm)
+                            _bf_dw   = max(0.0, (_tgt_dw   - _dw_count)   / _tgt_dw)
+                            _bf_ramp = max(0.0, (_tgt_ramp - _ramp_count) / _tgt_ramp)
+                            _bf_ev   = (
                                 max(0.0, (_tgt_ev - _ev_count) / _tgt_ev)
                                 if signals.wants_attack else 0.0
                             )
-                            if _bf_rm or _bf_dw or _bf_ev:
+                            if _bf_rm or _bf_dw or _bf_ev or _bf_ramp:
                                 blended = (
                                     blended
-                                    + _role_rm[pos_arr] * (HARD_REMOVAL_BOOST - 1.0) * _bf_rm
-                                    + _role_dw[pos_arr] * (DRAW_BOOST          - 1.0) * _bf_dw
-                                    + _role_ev[pos_arr] * (EVASION_BOOST        - 1.0) * _bf_ev
+                                    + _role_rm[pos_arr]   * (HARD_REMOVAL_BOOST  - 1.0) * _bf_rm
+                                    + _role_dw[pos_arr]   * (DRAW_BOOST          - 1.0) * _bf_dw
+                                    + _role_ev[pos_arr]   * (EVASION_BOOST       - 1.0) * _bf_ev
+                                    + _role_ramp[pos_arr] * (MANA_PRODUCER_BOOST - 1.0) * _bf_ramp
                                 )
 
                             # Apply soft CMC penalty.
@@ -614,6 +636,9 @@ async def generate(
                             if _role_ev[best_orig]:
                                 _ev_count += 1
                                 score_tags.setdefault(best_cid, []).append("evasion:unblockable")
+                            if _role_ramp[best_orig]:
+                                _ramp_count += 1
+                                score_tags.setdefault(best_cid, []).append("ramp:iterative")
 
                             # Update bucket fill.
                             b = _curve_bucket(cmc_map.get(best_cid, 0.0))
@@ -623,7 +648,10 @@ async def generate(
                             cand_set.discard(best_cid)
                             cand_ids = [c for c in cand_ids if c != best_cid]
 
-                        selected_spells = (selected_ramp + selected_non_ramp_iter)[:SPELL_SLOTS]
+                        selected_spells = (guaranteed_only + selected_non_ramp_iter)[:SPELL_SLOTS]
+                        selected_ramp_ids = guaranteed_only_ids | {
+                            cid for cid, _ in selected_non_ramp_iter if cid in ramp_ids
+                        }
 
                     # ── Non-basic land selection ──────────────────────────────
                     _progress(0.86, "Selecting lands…")

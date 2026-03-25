@@ -33,9 +33,10 @@ param(
     [int]$Patience = 10,
     [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
-    # Phase 4 Option A: synergy-only training (default $true).
-    # Set -SynergyOnly $false to fall back to the legacy deck+synergy loop.
-    [bool]$SynergyOnly = $true,
+    # Phase 4: use artifact deck positions (default $false).
+    # Set -SynergyOnly $true to load 630k synergy positions from DB instead —
+    # this causes encoder collapse even at low lr_scale; avoid unless testing.
+    [bool]$SynergyOnly = $false,
     [int]$SynBatchSize = 256,
 
     # Phase 4 synergy-guided training weights
@@ -265,11 +266,19 @@ if ($Mode -eq 'train') {
         $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
     }
 
-    # Phase 3: pass encoder_lr_scale to protect Phase 2 geometry — the
-    # commanders artifact generates thousands of synthetic decks, so the encoder
-    # gets far more gradient updates per epoch than with human decklists.
+    # Phase 3: protect Phase 2 geometry.
+    # --freeze-encoder skips BPR training entirely and copies Phase 2 weights
+    # forward as phase3_best — use this when the encoder must be preserved
+    # verbatim.  Otherwise encoder_lr_scale throttles the update rate; the
+    # commanders artifact generates far more gradient updates per epoch than
+    # human decklists, so even 0.1× can cause collapse over 50 epochs.
     if ($Phase -eq 3) {
-        $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
+        $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
+        if ($resolvedFreezeEncoder) {
+            $cmd += '--freeze-encoder'
+        } else {
+            $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
+        }
     }
 
     if ($Phase -eq 4) {

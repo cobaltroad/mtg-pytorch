@@ -871,6 +871,7 @@ def train_deck_phase(
     archetype_weight: dict[str, float] | None = None,
     checkpoint_prefix: str = "phase",
     encoder_lr_scale: float = 1.0,
+    freeze_encoder: bool = False,
 ):
     """Phase 3: BPR ranking loss on human Commander decklists.
 
@@ -889,7 +890,23 @@ def train_deck_phase(
         1.0 to protect Phase 2 geometry — the commanders artifact generates
         thousands of synthetic decks, giving the encoder far more gradient
         updates per epoch than training on human decklists alone.
+
+    freeze_encoder: when True, skip training entirely and save the warm-started
+        weights directly as the Phase 3 checkpoint.  Use this when the Phase 2
+        encoder should be preserved verbatim — Phase 4 will warm-start from the
+        saved checkpoint just as it would from a trained one.
     """
+    device = next(model.parameters()).device
+
+    if freeze_encoder:
+        log.info(
+            "Phase 3: freeze_encoder=True — skipping BPR training, "
+            "saving Phase 2 weights as %s3_best",
+            checkpoint_prefix,
+        )
+        save_checkpoint(model, checkpoint_prefix + "3_best")
+        return
+
     all_ids = list(embeddings.keys())
     all_embs = torch.from_numpy(np.stack([embeddings[k] for k in all_ids]))  # (N, D)
 
@@ -901,7 +918,6 @@ def train_deck_phase(
         )
     optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    device = next(model.parameters()).device
     all_embs = all_embs.to(device)
 
     best_loss = float("inf")
@@ -2002,6 +2018,7 @@ def main():
             archetype_weight=archetype_weight,
             checkpoint_prefix=pfx,
             encoder_lr_scale=args.encoder_lr_scale,
+            freeze_encoder=args.freeze_encoder,
         )
 
     elif args.phase == 4:
