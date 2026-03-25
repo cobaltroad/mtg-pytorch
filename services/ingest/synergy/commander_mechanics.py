@@ -26,7 +26,7 @@ Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
 from __future__ import annotations
 
 
-PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
+PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
 
     # ── CONSUMER: Tyvar needs Elves ───────────────────────────────────────────
     # "Whenever one or more Elves you control attack …"
@@ -56,6 +56,9 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
         "   OR lower(oracle_text) LIKE '%mana ability%'"
         ")"
     ),
+}
+
+PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
 
     # ── PRODUCER: Tyvar produces attack triggers ───────────────────────────────
     # "they gain deathtouch until end of turn"
