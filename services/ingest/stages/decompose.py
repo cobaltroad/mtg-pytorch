@@ -10,11 +10,11 @@ Producer  — the commander *outputs* this; deck wants amplifiers
 
 Usage
 -----
-    docker compose run --rm ingest python scripts/decompose_commanders.py "Tyvar the Bellicose"
-    docker compose run --rm ingest python scripts/decompose_commanders.py "Raggadragga"
-    docker compose run --rm ingest python scripts/decompose_commanders.py "Atraxa"
+    docker compose run --rm ingest python -m stages.decompose "Tyvar the Bellicose"
+    docker compose run --rm ingest python -m stages.decompose "Raggadragga"
+    docker compose run --rm ingest python -m stages.decompose "Atraxa"
     # partial / case-insensitive match:
-    docker compose run --rm ingest python scripts/decompose_commanders.py tyvar
+    docker compose run --rm ingest python -m stages.decompose tyvar
 """
 
 from __future__ import annotations
