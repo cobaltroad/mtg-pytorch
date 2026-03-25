@@ -89,11 +89,20 @@ at all and gives it a meaningful starting geometry.
 
 ### Phase 2 — Ability-trigger synergy
 
-**Loss:** binary cross-entropy.
-**Data:** `synergy_edges` table (ability_trigger type) — does card B provide
-something that triggers or enables card A?
-**Negatives:** randomly sampled non-synergistic pairs at 3× the positive rate.
-**Goal:** the encoder learns to pull synergistic cards together.
+**Loss:** NT-Xent (InfoNCE) with cosine-annealed temperature.
+**Data:** `synergy_edges` table — ability_trigger, role_demand, combo_package,
+and commander_value edges.  Does card B provide something that triggers or
+enables card A?
+**Negatives:** 50% hard negatives (semantically similar but non-synergistic,
+mined from the embedding space) + 50% random, at 3× the positive rate.
+**Goal:** the encoder learns to pull synergistic cards together in latent space.
+
+NT-Xent is used instead of BCE because BCE on cosine similarity has a degenerate
+minimum: the model can achieve near-zero BCE loss while leaving Phase 1 geometry
+largely intact, producing gradients that amplify surface-text features rather
+than semantic synergy.  NT-Xent's in-batch negatives guarantee contrastive
+signal in every batch; temperature annealing (high → low) provides an
+easy-gradient warmup before sharpening clusters.
 
 Because the synergy table can reach 100 M+ rows, training samples 500 k
 positives with `TABLESAMPLE SYSTEM(10)` rather than a full table scan.
@@ -101,17 +110,17 @@ positives with `TABLESAMPLE SYSTEM(10)` rather than a full table scan.
 Final loss benchmark: >0.65 = barely learning, 0.55–0.60 = good,
 0.45–0.50 = excellent.
 
-### Phase 3 — Deck co-occurrence ranking
+### Phase 3 — Commander synergy ranking
 
 **Loss:** Bayesian Personalised Ranking (BPR).
-**Data:** ~171 human-built Commander decklists from Moxfield and cardtrak.
-**Triples:** (commander, positive card from a real deck, random negative card).
-**Goal:** the encoder learns that cards co-occurring with a given commander
-should score higher than random cards.
+**Data:** `mtg_commanders.pt` — synthetic per-commander positive sets derived
+from `synergy_edges` (ability_trigger + commander_value edges).
+**Triples:** (commander, synergy-positive card, color-legal random negative).
+**Goal:** the encoder learns that cards synergistic with a given commander
+should score higher than arbitrary color-legal cards.
 
-Deck co-occurrence is a supplementary signal, not the primary one.  The stronger
-long-term direction is compositional reasoning from oracle text and ability
-interactions (Phases 1–2, synergy graph) — see #71.
+Training without human decklists is deliberate — see
+[Training data: two-artifact design](#training-data-two-artifact-design) below.
 
 ### Phase 4 — Generative deck construction
 
@@ -121,15 +130,64 @@ weights loaded.  The encoder is **unfrozen** by default (controlled by
 `-FreezeEncoder` in `run.ps1`); `--encoder-lr-scale` (default 0.1×) keeps
 the encoder's learning rate well below the decoder's to protect Phase 3
 representations.
-**Data:** the same human decklists, now treated as ordered sequences; for each
-position the model predicts the next card given the commander and the cards
-selected so far.  Sampled freely at inference — not greedy.
+**Data:** the same `mtg_commanders.pt` synthetic decks.  For each position the
+model predicts the next card given the commander and the cards selected so far.
+Sampled freely at inference — not greedy.
 
-Keeping the encoder's learning rate low relative to the decoder is important:
-with only a few hundred decks, aggressive encoder updates can memorise training
-sequences and destroy Phase 3 synergy geometry, causing score compression (all
-cosine similarities collapse toward 1.0).  Pass `-FreezeEncoder true` in
-`run.ps1` to freeze the encoder entirely if this becomes a problem.
+Keeping the encoder's learning rate low is important: aggressive encoder updates
+can destroy Phase 3 synergy geometry, causing score compression (all cosine
+similarities collapse toward 1.0).  Pass `-FreezeEncoder true` in `run.ps1`
+to freeze the encoder entirely if this becomes a problem.
+
+---
+
+## Training data: two-artifact design
+
+Training uses two separate `.pt` artifacts rather than one:
+
+| Artifact | Phases | What it encodes |
+|----------|--------|-----------------|
+| `mtg_dataset.pt` | 1–2 | Card embeddings + pairwise synergy edges |
+| `mtg_commanders.pt` | 3–4 | Per-commander synthetic decks from `synergy_edges` |
+
+### Why not train Phases 3–4 on human decklists?
+
+The failure mode is **representation collapse**.  Every Commander deck needs
+the same baseline roles — draw, ramp, removal — regardless of what the
+commander actually does.  When the Phase 3 BPR objective sees (Atraxa, Praetors'
+Voice → Arcane Signet) and (Prossh, Skyraider of Kher → Arcane Signet) as
+both positive triples, the gradient signal pushes every commander toward the
+same generic-staple region of embedding space.  After training, all commanders
+end up in an indistinct high-similarity cluster: the model cannot distinguish
+"I'm building around Prossh's sacrifice trigger" from "I'm building around
+Atraxa's proliferate".
+
+This only gets worse the further a commander is from the decklists in training
+data.  For popular commanders the co-occurrence signal is strong; for the
+thousands of commanders with zero or few imported decks, Phase 3 provides no
+useful gradient at all — the encoder representation is frozen in Phase 2 geometry.
+
+### Why the commander artifact solves this
+
+`export_dataset_commanders.py` reads `synergy_edges` directly and builds
+per-commander positive sets from two edge types:
+
+- **ability_trigger** — cards that produce events the commander cares about
+  (e.g. for Syr Konrad, the Grim: every card that causes creatures to die or
+  enter graveyards is a producer).
+- **commander_value** — cards the commander's text explicitly rewards
+  (e.g. for Prossh: token producers and sacrifice outlets).
+
+Color-identity legality is re-applied strictly (⊆) so the negative pool is
+always confined to what is actually playable.  Because these positive sets
+are derived from the commander's own oracle text and ability structure, they
+are genuinely distinct per commander — Prossh's positives overlap very little
+with Atraxa's, giving BPR a meaningful gradient for each.
+
+Commanders with fewer than 10 producer cards are skipped (`COMMANDERS_MIN_POS`),
+so every training example has a real signal.  The artifact covers ~3,000 legal
+commanders versus the ~171 decklists previously imported from Moxfield/cardtrak,
+dramatically improving coverage of the commander space.
 
 ---
 
@@ -212,7 +270,7 @@ the parser couldn't interpret (gaps).  The analysis produces `boost_overrides`
 |--------|------|
 | MTGJSON AtomicCards | Primary card data — downloaded and cached by the ingest pipeline |
 | Commander Spellbook | Combo packages; used to boost completion of near-complete combo lines |
-| Moxfield exports | Human decklists for Phase 3/4 training |
+| Moxfield exports | Human decklists (imported for proxy context at inference; not used for Phase 3/4 training) |
 | cardtrak | Internal collection tracker; additional decklist source |
 | XMage source | Java reference implementation; used to cross-check ability pattern extraction |
 
