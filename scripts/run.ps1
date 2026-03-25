@@ -183,21 +183,33 @@ function Assert-Prerequisites {
         }
     }
 
-    # -- Warm-start checkpoint (train phase 3/4 with --resume) ------------
-    if ($mode -eq 'train' -and $phase -ge 3) {
-        # Mirror the default-resume logic from the train block
-        $resolvedResume = if ($null -ne $resume) { [bool]$resume } else { $true }
-        if ($resolvedResume) {
-            $ckptMap = @{ 3 = "phase2_best.pt"; 4 = "phase3_best.pt" }
-            $needed  = $ckptMap[$phase]
-            if ($needed) {
+    # -- Required checkpoints ------------------------------------------------
+    if ($mode -eq 'train') {
+        # Phase 3 (centroid expansion) always needs phase2_best.pt
+        if ($phase -eq 3) {
+            $needed = "phase2_best.pt"
+            Write-Host -NoNewline "  Checkpoint $needed"
+            if (Test-Path (Join-Path $checkpointsDir $needed)) {
+                Write-Host "[found]" -ForegroundColor Green
+            } else {
+                Write-Host "[NOT FOUND]" -ForegroundColor Red
+                Write-Host "    Expected: $checkpointsDir\$needed" -ForegroundColor Yellow
+                Write-Host "    Train Phase 2 first: .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
+                $ok = $false
+            }
+        }
+        # Phase 4 --resume needs phase3_best.pt (soft warning)
+        if ($phase -eq 4) {
+            $resolvedResume = if ($null -ne $resume) { [bool]$resume } else { $true }
+            if ($resolvedResume) {
+                $needed = "phase3_best.pt"
                 Write-Host -NoNewline "  Checkpoint $needed"
                 if (Test-Path (Join-Path $checkpointsDir $needed)) {
                     Write-Host "[found]" -ForegroundColor Green
                 } else {
                     Write-Host "[missing - will cold-start]" -ForegroundColor Yellow
                     Write-Host "    Expected: $checkpointsDir\$needed" -ForegroundColor Yellow
-                    Write-Host "    Use -Resume:$false to suppress this warning." -ForegroundColor Yellow
+                    Write-Host "    Use -Resume:`$false to suppress this warning." -ForegroundColor Yellow
                 }
             }
         }

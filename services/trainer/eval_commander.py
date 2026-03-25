@@ -1,16 +1,20 @@
 """Centroid expansion evaluator for a commander.
 
-Projects all card embeddings through the CardEncoder, computes the centroid of
-the commander's positive set, and displays the top-K nearest-neighbour
-expansion candidates (color-legal, excluding existing positives).
+Projects all card embeddings through the Phase 2 encoder, computes the centroid
+of the archetype-matched subset of the commander's positive set, then displays
+the top-K nearest-neighbour expansion candidates that are colour-legal and not
+already in the positive set.
 
-If centroid_expansion_idxs is already stored in the artifact (from running
-centroid_expansion.py / run.ps1 -Train 3), the stored order is shown and scores
-are recomputed for display.  Otherwise results are computed on the fly.
+Only cards whose trigger_event matches one of the commander's archetype labels
+contribute to the centroid.  This prevents the mean from collapsing to a generic
+colour-identity cluster when the positive set mixes unrelated trigger_event types.
+
+Requires card_trigger_events to be present in the artifact
+(re-run export_dataset_commanders if missing).
 
 Usage
 -----
-    python eval_commander.py "Sythis, Harvest's Hand"
+    python eval_commander.py "Tyvar the Bellicose"
     python eval_commander.py "Anje Falkenrath" --top 30 --checkpoint phase2_best
 """
 from __future__ import annotations
@@ -107,16 +111,32 @@ def main() -> None:
     cmd_idx  = deck["commander_idx"]
     cmd_id   = card_ids[cmd_idx]
     cmd_meta = card_meta.get(cmd_id, {})
+    archetype = deck.get("archetype", "")
 
     print("=" * 70)
     print(f"  {cmd_meta.get('name', cmd_id)}")
     print("=" * 70)
     print(f"  Color identity : {deck['color_identity']}")
-    print(f"  Archetype      : {deck.get('archetype', '—')}")
+    print(f"  Archetype      : {archetype}")
     print(f"  Positive set   : {len(deck['card_idxs'])} cards")
+
+    # Determine archetype-filtered subset
+    archetype_labels = {s.strip() for s in archetype.split(",") if s.strip()}
+    pos_idxs = deck["card_idxs"]
+    card_te  = deck.get("card_trigger_events", [])
+    if card_te:
+        arch_idxs = [
+            idx for idx, te in zip(pos_idxs, card_te)
+            if te in archetype_labels
+        ] or pos_idxs
+        print(f"  Centroid basis : {len(arch_idxs)} archetype-matched cards"
+              f" (trigger_events: {', '.join(sorted(archetype_labels))})")
+    else:
+        arch_idxs = pos_idxs
+        print("  Centroid basis : all positives (no card_trigger_events — re-export artifact)")
     print()
 
-    # Load model and project all embeddings
+    # Load model + project
     model = CardEncoder(input_dim=emb_np.shape[1]).to(device)
     load_checkpoint(model, args.checkpoint, device)
 
@@ -124,13 +144,11 @@ def main() -> None:
     proj   = project_all(emb_np, model, device)  # (N, D) L2-normalised
     proj_t = torch.from_numpy(proj)
 
-    # Centroid of positive-set projected embeddings, then L2-normalise
-    pos_idxs = deck["card_idxs"]
-    centroid  = proj_t[pos_idxs].mean(dim=0)
-    centroid  = F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
+    # Archetype centroid
+    centroid = proj_t[arch_idxs].mean(dim=0)
+    centroid = F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
 
-    # Cosine similarity to all cards
-    sims = (proj_t @ centroid).numpy()   # (N,) float32
+    sims = (proj_t @ centroid).numpy()   # (N,)
 
     excluded = set(pos_idxs) | {cmd_idx}
     cmd_ci   = frozenset(deck["color_identity"])
@@ -146,7 +164,6 @@ def main() -> None:
     top = args.top
     print(f"{'─' * 76}")
     print(f"  Top {top} centroid expansion candidates for: {cmd_meta.get('name', cmd_id)}")
-    print(f"  (centroid of {len(pos_idxs)}-card positive set → nearest colour-legal cards)")
     print(f"{'─' * 76}")
     print(f"  {'#':>3}  {'Score':>6}  {'Name':<32}  Type")
     print(f"  {'─'*3}  {'─'*6}  {'─'*32}  {'─'*28}")

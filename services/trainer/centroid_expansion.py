@@ -1,17 +1,18 @@
 """Centroid expansion for the commander artifact.
 
-For each commander in mtg_commanders.pt, computes the mean of the Phase 2
-projected embeddings of all positive-set cards to produce an "archetype vector".
-Finds the top-K color-legal cards nearest to that centroid that are not already
-in the positive set, and stores them as centroid_expansion_idxs per deck entry.
+For each commander, projects all card embeddings through the Phase 2 encoder,
+then computes the mean of the projected embeddings for cards whose trigger_event
+matches one of the commander's archetype labels.  Using only archetype-matched
+cards prevents the centroid from collapsing to a generic "colour-identity blob"
+when the positive set contains unrelated trigger_event categories.
 
-This is a fast complement to KNN expansion: one centroid query per commander
-instead of one per positive-set card.  The centroid captures the aggregate
-character of the archetype (e.g. for Sythis it lands near the enchantress cluster)
-and surfaces broadly on-theme cards that may not appear as neighbours of any
-single positive-set member individually.
+Top-K colour-legal nearest neighbours of the centroid (excluding the positive
+set and commander) are stored as centroid_expansion_idxs per deck entry.
 
 Idempotent — re-running with the same arguments overwrites prior results.
+
+Requires: mtg_commanders.pt built with a version of export_dataset_commanders.py
+that stores card_trigger_events alongside card_idxs.
 
 Usage
 -----
@@ -58,6 +59,24 @@ def project_all(
     return np.concatenate(projected, axis=0)
 
 
+def _archetype_indices(
+    pos_idxs: list[int],
+    card_trigger_events: list[str],
+    archetype_labels: set[str],
+) -> list[int]:
+    """Return the subset of pos_idxs whose trigger_event is in archetype_labels.
+
+    Falls back to all pos_idxs if the filtered set would be empty (e.g. an old
+    artifact without card_trigger_events, or a commander whose archetype labels
+    don't overlap with any stored trigger_events).
+    """
+    filtered = [
+        idx for idx, te in zip(pos_idxs, card_trigger_events)
+        if te in archetype_labels
+    ]
+    return filtered if filtered else pos_idxs
+
+
 def compute_centroid_expansions(
     decks: list[dict],
     proj: np.ndarray,
@@ -71,7 +90,6 @@ def compute_centroid_expansions(
     Returns the number of commanders that received ≥1 expansion candidate.
     """
     card_ci = [frozenset(color_identities.get(cid, [])) for cid in card_ids]
-
     proj_t  = torch.from_numpy(proj)   # (N, D) float32, L2-normalised
     k_store = min(top_k, cap)
 
@@ -85,8 +103,15 @@ def compute_centroid_expansions(
             deck["centroid_expansion_idxs"] = []
             continue
 
-        # Mean of positive-set projected embeddings, then L2-normalise
-        centroid = proj_t[pos_idxs].mean(dim=0)
+        # Filter to archetype-matched cards before computing centroid
+        archetype_labels = {
+            s.strip() for s in deck.get("archetype", "").split(",") if s.strip()
+        }
+        card_te = deck.get("card_trigger_events", [""] * len(pos_idxs))
+        arch_idxs = _archetype_indices(pos_idxs, card_te, archetype_labels)
+
+        # Mean of archetype-subset embeddings, then L2-normalise
+        centroid = proj_t[arch_idxs].mean(dim=0)
         centroid = F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
 
         # Cosine similarity to all cards
@@ -147,13 +172,20 @@ def main() -> None:
     log.info("Artifact   : %s", dataset_path)
     log.info("Top-K      : %d  (cap: %d)", args.top_k, args.cap)
 
-    data     = load_artifact(str(dataset_path))
-    card_ids = data["card_ids"]
-    emb_np   = data["embeddings"].numpy().astype(np.float32)
-    decks    = data["decks"]
+    data      = load_artifact(str(dataset_path))
+    card_ids  = data["card_ids"]
+    emb_np    = data["embeddings"].numpy().astype(np.float32)
+    decks     = data["decks"]
     color_ids = data.get("color_identities", {})
 
     log.info("Loaded: %d cards, %d commander decks", len(card_ids), len(decks))
+
+    has_te = sum(1 for d in decks if d.get("card_trigger_events"))
+    if has_te == 0:
+        log.warning(
+            "No card_trigger_events found in artifact — re-run "
+            "export_dataset_commanders to get archetype-filtered centroids"
+        )
 
     model = CardEncoder(input_dim=emb_np.shape[1]).to(device)
     load_checkpoint(model, args.checkpoint, device)

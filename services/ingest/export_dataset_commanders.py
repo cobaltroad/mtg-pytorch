@@ -125,8 +125,13 @@ def _load_commander_positives(
     commander_ids: set[str],
     id_to_idx: dict[str, int],
     color_ids: dict[str, frozenset],
-) -> dict[str, tuple[set[str], list[str]]]:
-    """Return {commander_id: (pos_card_ids, trigger_events)} from synergy_edges.
+) -> dict[str, tuple[dict[str, str], list[str]]]:
+    """Return {commander_id: (pos_card_events, trigger_events)} from synergy_edges.
+
+    pos_card_events maps each positive card_id to its primary trigger_event
+    (empty string for commander_value payoffs which have no trigger_event).
+    trigger_events is the flat list of all trigger_event labels across all edges,
+    used for archetype derivation.
 
     Sources:
     - ability_trigger WHERE card_b = commander
@@ -141,9 +146,9 @@ def _load_commander_positives(
         Color filtering already applied at build time via type-line membership.
     """
     cmd_list = list(commander_ids)
-    # {commander_id: (set of positive card_ids, list of trigger_event labels)}
-    result: dict[str, tuple[set[str], list[str]]] = {
-        cid: (set(), []) for cid in commander_ids
+    # {commander_id: ({card_id: primary_trigger_event}, list of all trigger_event labels)}
+    result: dict[str, tuple[dict[str, str], list[str]]] = {
+        cid: ({}, []) for cid in commander_ids
     }
 
     with get_conn() as conn:
@@ -172,8 +177,8 @@ def _load_commander_positives(
             card_ci = color_ids.get(card_a, frozenset())
             # Strict subset: producer must fit entirely within commander CI
             if card_ci <= cmd_ci:
-                pos_ids, events = result[card_b]
-                pos_ids.add(card_a)
+                pos_events, events = result[card_b]
+                pos_events.setdefault(card_a, trigger_event)  # first edge wins
                 if trigger_event:
                     events.append(trigger_event)
 
@@ -199,8 +204,8 @@ def _load_commander_positives(
             cmd_ci  = color_ids.get(card_a, frozenset())
             card_ci = color_ids.get(card_b, frozenset())
             if card_ci <= cmd_ci:
-                pos_ids, events = result[card_a]
-                pos_ids.add(card_b)
+                pos_events, events = result[card_a]
+                pos_events.setdefault(card_b, "")  # no trigger_event for payoffs
 
         # ── tribal typeline: commander → tribe members ────────────────────────
         log.info("Loading tribal typeline edges for %d commanders…", len(cmd_list))
@@ -224,8 +229,8 @@ def _load_commander_positives(
             if card_a not in result or card_b not in id_to_idx:
                 continue
             # Tribal edges already color-filtered at build time; accept as-is
-            pos_ids, events = result[card_a]
-            pos_ids.add(card_b)
+            pos_events, events = result[card_a]
+            pos_events.setdefault(card_b, trigger_event)
             if trigger_event:
                 events.append(trigger_event)
 
@@ -262,19 +267,20 @@ def _build_commander_decks(
     skipped_few = 0
 
     for commander_id in sorted(commander_ids):
-        pos_ids, trigger_events = positives.get(commander_id, (set(), []))
-        pos_ids.discard(commander_id)
+        pos_events, trigger_events = positives.get(commander_id, ({}, []))
+        pos_events.pop(commander_id, None)
 
-        if len(pos_ids) < MIN_POSITIVES:
+        if len(pos_events) < MIN_POSITIVES:
             skipped_few += 1
             continue
 
-        pos_list = list(pos_ids)
+        pos_list = list(pos_events.keys())
         if len(pos_list) > MAX_POSITIVES:
             random.shuffle(pos_list)
             pos_list = pos_list[:MAX_POSITIVES]
 
-        pos_idxs   = [id_to_idx[pid] for pid in pos_list if pid in id_to_idx]
+        pos_idxs = [id_to_idx[pid] for pid in pos_list if pid in id_to_idx]
+        card_trigger_events = [pos_events[pid] for pid in pos_list if pid in id_to_idx]
         cmd_ci     = color_ids.get(commander_id, frozenset())
         legal      = _legal_indices(cmd_ci)
         pos_idx_set = set(pos_idxs)
@@ -296,11 +302,12 @@ def _build_commander_decks(
         )[:5])
 
         decks.append({
-            "commander_idx":     cmd_idx,
-            "card_idxs":         pos_idxs,
-            "color_identity":    sorted(cmd_ci),
-            "legal_neg_indices": torch.from_numpy(neg_legal),
-            "archetype":         archetype,
+            "commander_idx":       cmd_idx,
+            "card_idxs":           pos_idxs,
+            "card_trigger_events": card_trigger_events,
+            "color_identity":      sorted(cmd_ci),
+            "legal_neg_indices":   torch.from_numpy(neg_legal),
+            "archetype":           archetype,
         })
 
     log.info(
