@@ -1,19 +1,21 @@
-"""Producer SQL fragments keyed by mechanic role.
+"""SQL fragments keyed by mechanic role, split into producer and consumer maps.
 
 Design principle
 ----------------
-A commander is either a **consumer** or a **producer** of each mechanic:
+Every pattern key belongs to exactly one side of a commander's game plan:
 
-  consumer  — the commander *needs* the deck full of these cards
-               (e.g. Tyvar wants Elves to attack with)
-  producer  — the commander *generates* this trigger / resource
-               (e.g. Tyvar grants deathtouch → deck wants things
-               that pay off from deathtouch attackers)
+  PRODUCER  — the commander *outputs* a resource or trigger as a primary
+               effect.  The SQL selects cards that amplify or pay off from
+               that output.
+               Key encodes what the commander generates; SQL finds consumers.
+               e.g. Tyvar places +1/+1 counters → key "counter_placement"
+                    → SQL returns doublers, proliferate, power-matters payoffs.
 
-Each entry maps a key to a SQL WHERE body that selects the cards which fill
-that role in a Tyvar deck.  The key also tells you *why* those cards belong:
-does the deck need them as inputs (consumer), does the commander output value
-that they amplify (producer)?
+  CONSUMER  — the commander *needs* the deck to supply a resource or card
+               type in order for its ability to fire or scale.
+               Key encodes what the commander demands; SQL finds providers.
+               e.g. Tyvar triggers off mana abilities → key "mana_dork"
+                    → SQL returns creatures that tap for mana.
 
 Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
   "Whenever one or more Elves you control attack, they gain deathtouch until
@@ -21,6 +23,11 @@ Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
   "Each creature you control has 'Whenever a mana ability of this creature
    resolves, put a number of +1/+1 counters on it equal to the amount of mana
    this creature produced.  This ability triggers only once each turn.'"
+
+  PRODUCER keys: counter_placement  (Tyvar outputs counters onto mana dorks)
+  CONSUMER keys: mana_dork          (Tyvar needs creatures that tap for mana)
+                 attack_trigger     (Tyvar needs a deck that wants to attack)
+                 tribal_elf         (Tyvar needs Elves to trigger his ability)
 """
 
 from __future__ import annotations
@@ -28,13 +35,14 @@ from __future__ import annotations
 from synergy.triggered_ability import PATTERNS as _triggered_abilities
 from synergy.activated_ability import PATTERNS as _activated_abilities
 from synergy.spell import PATTERNS as _spells
+from synergy.combat import PATTERNS as _combat_tricks
 from synergy.tribal import tribal_sql, TRIBES as _tribes
 
 
 # _spells values are raw SQL strings; _triggered_abilities / _activated_abilities
 # values are list[str] key groups.  They have different shapes so cannot share a
 # dict — _family_sql() expects list[str].  Reference _spells directly below.
-PATTERNS = {**_triggered_abilities, **_activated_abilities}
+PATTERNS = {**_triggered_abilities, **_activated_abilities, **_combat_tricks}
 
 
 def _family_sql(family_key: str) -> str:
@@ -55,16 +63,6 @@ def _family_sql(family_key: str) -> str:
 
 PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
 
-    # ── PRODUCER: deck needs tribal creatures (all supported tribes) ──────────
-    # Any commander with a tribal payoff (e.g. Tyvar for Elves) wants the deck
-    # filled with creatures of that tribe (and changelings).
-    **{f"tribal_{_tribe}": tribal_sql(_tribe) for _tribe, _ in _tribes},
-
-    # ── PRODUCER: deck needs mana-ability creatures ───────────────────────────
-    # Tyvar's second ability triggers off mana abilities — the deck produces
-    # the game state he needs by running creatures that tap for mana.
-    "mana_dork": f"type_line ILIKE '%%Creature%%' AND {_family_sql('mana_producer')}",
-
     # ── PRODUCER: deck needs lifegain payoff cards ────────────────────────────
     # A commander that outputs lifegain (e.g. Sythis, Oloro) wants cards that
     # consume life-gain triggers: Ajani's Pridemate, Archangel of Thune, etc.
@@ -75,7 +73,32 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # wants cards that consume draw triggers: Niv-Mizzet, Psychosis Crawler, etc.
     "draw_producer": _family_sql("draw_trigger"),
 
-    # ── PRODUCER: deck needs spells of the type the commander cares about ─────
+    # ── PRODUCER: counter synergy from commanders that place counters ──────────
+    # Any commander whose oracle text places +1/+1 counters as a primary output
+    # wants the same counter consumer package.
+    "counter_placement": _family_sql("counter_trigger"),
+}
+
+PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
+
+    # ── CONSUMER: deck needs tribal creatures (all supported tribes) ──────────
+    # Any commander with a tribal payoff (e.g. Tyvar for Elves) wants the deck
+    # filled with creatures of that tribe (and changelings).
+    **{f"tribal_{_tribe}": tribal_sql(_tribe) for _tribe, _ in _tribes},
+
+    # ── CONSUMER: deck needs mana-ability creatures ───────────────────────────
+    # Tyvar's second ability triggers off mana abilities — the deck produces
+    # the game state he needs by running creatures that tap for mana.
+    "mana_dork": f"type_line ILIKE '%%Creature%%' AND {_family_sql('mana_producer')}",
+
+    # ── CONSUMER: attack triggers want cards that encourage combat ────────────
+    # A commander with an attack trigger (e.g. Tyvar, Isshin, Gahiji) benefits
+    # most from a deck full of evasion granters, keyword enablers, and pump
+    # spells — anything that makes attacking creatures more dangerous or harder
+    # to profitably block.
+    "attack_trigger": _family_sql("combat_tricks"),
+
+    # ── CONSUMER: deck needs spells of the type the commander cares about ─────
     # A commander with a cast trigger (e.g. Sythis) wants the deck filled with
     # the triggering spell type — enchantments for Sythis, creatures for Beast
     # Whisperer, etc.  SQL comes from _spells directly (raw type_line filters).
@@ -85,35 +108,4 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     "cast_trigger_instant_sorcery": _spells["spell_instant_sorcery"],
     "cast_trigger_historic":        _spells["spell_historic"],
     "cast_trigger_aura_equipment":  _spells["spell_aura_equipment"],
-}
-
-PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
-
-    # ── CONSUMER: attack triggers benefit from Tyvar's deathtouch grant ───────
-    # Tyvar turns every Elf attack into a deathtouch assault.  The deck wants
-    # cards that consume/reward attack triggers: combat-damage payoffs, trample
-    # enablers, cards that care about creatures connecting.
-    "attack_trigger": _family_sql("attack_trigger"),
-
-    # ── CONSUMER: counter synergy consumes Tyvar's +1/+1 counter output ───────
-    # Tyvar grows every mana dork every turn.  The deck wants cards that consume
-    # counter accumulation: doublers, proliferate, power-matters payoffs.
-    "counter_trigger": _family_sql("counter_trigger"),
-
-    # ── CONSUMER: counter synergy from commanders that place counters ──────────
-    # Any commander whose oracle text places +1/+1 counters as a primary output
-    # wants the same counter consumer package.
-    "counter_placement": _family_sql("counter_trigger"),
-
-    # ── CONSUMER: lifegain payoffs ─────────────────────────────────────────────
-    # A commander that produces life gain (e.g. Sythis) wants cards that
-    # trigger or scale off life being gained: Ajani's Pridemate, Archangel of
-    # Thune, Well of Lost Dreams, etc.
-    "lifegain_trigger": _family_sql("lifegain_trigger"),
-
-    # ── CONSUMER: draw payoffs ─────────────────────────────────────────────────
-    # A commander that draws cards as a primary output (e.g. Sythis) wants
-    # cards that trigger or scale off drawing: Niv-Mizzet, Psychosis Crawler,
-    # Consecrated Sphinx, etc.
-    "draw_trigger": _family_sql("draw_trigger"),
 }
