@@ -25,6 +25,7 @@ from land_tags import annotate_land_oracle  # noqa: E402
 
 from synergy.trigger_patterns import TRIGGER_PATTERNS as _trigger_patterns  # noqa: E402
 from synergy.activated_ability import ACTIVATED_PATTERNS as _activated_patterns  # noqa: E402
+from synergy.tribal import TRIBAL_PATTERNS  # noqa: E402
 
 TRIGGER_PATTERNS = [*_trigger_patterns, *_activated_patterns]
 
@@ -105,23 +106,23 @@ async def tag_abilities(rescan: bool = False) -> None:
     # Processes cards that have no ability rows yet (fresh cards).
     async with Session() as db:
         result = await db.execute(text("""
-            SELECT c.id, c.oracle_text
+            SELECT c.id, c.type_line, c.oracle_text
             FROM cards c
             WHERE NOT EXISTS (
                 SELECT 1 FROM card_abilities a WHERE a.card_id = c.id
             )
-            AND c.oracle_text IS NOT NULL
         """))
         rows = result.fetchall()
 
     log.info("Tagging %d new cards…", len(rows))
     async with Session() as db:
         for row in tqdm(rows):
-            card_id, oracle_text = row[0], row[1] or ""
+            card_id = row[0]
+            search_text = f"{row[1] or ''}\n{row[2] or ''}"
             inserts = []
 
             for key, name, pattern in TRIGGER_PATTERNS:
-                m = pattern.search(oracle_text)
+                m = pattern.search(search_text)
                 if m:
                     inserts.append({
                         "card_id": str(card_id),
@@ -174,17 +175,18 @@ async def tag_abilities(rescan: bool = False) -> None:
             log.info("  Rescan: deleted existing rows for %d event(s)", len(event_keys))
         async with Session() as db:
             all_cards_result = await db.execute(text("""
-                SELECT c.id, c.oracle_text FROM cards c WHERE c.oracle_text IS NOT NULL
+                SELECT c.id, c.type_line, c.oracle_text FROM cards c
             """))
             all_cards = all_cards_result.fetchall()
 
         log.info("  Scanning %d cards for %d new event(s)…", len(all_cards), len(new_events))
         backfill_count = 0
         async with Session() as db:
-            for card_id, oracle_text in tqdm(all_cards):
+            for card_id, type_line, oracle_text in tqdm(all_cards):
+                search_text = f"{type_line or ''}\n{oracle_text or ''}"
                 inserts = []
                 for key, name, pattern in new_events:
-                    m = pattern.search(oracle_text)
+                    m = pattern.search(search_text)
                     if m:
                         inserts.append({
                             "card_id": str(card_id),
@@ -208,6 +210,28 @@ async def tag_abilities(rescan: bool = False) -> None:
         log.info("  Gap detection complete: %d rows inserted", backfill_count)
     else:
         log.info("Gap detection: all trigger events already have consumer rows — nothing to backfill (use --rescan to force)")
+
+    # ── Pass 2: tribal membership via SQL ─────────────────────────────────────
+    # Tribal tags are resolved by type_line / changeling SQL rather than
+    # oracle-text regex, so they run as a separate bulk INSERT pass.
+    log.info("Tagging tribal membership (%d pattern(s))…", len(TRIBAL_PATTERNS))
+    async with Session() as db:
+        for key, name, where_sql in TRIBAL_PATTERNS:
+            if rescan:
+                await db.execute(
+                    text("DELETE FROM card_abilities WHERE trigger_event = :key"),
+                    {"key": key},
+                )
+            result = await db.execute(text(f"""
+                INSERT INTO card_abilities
+                    (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
+                SELECT id, 'tribal', :name, :key, NULL, NULL
+                FROM cards
+                WHERE {where_sql}
+                ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, '')) DO NOTHING
+            """), {"name": name, "key": key})
+            log.info("  %s: %d rows", key, result.rowcount)
+        await db.commit()
 
 
 if __name__ == "__main__":

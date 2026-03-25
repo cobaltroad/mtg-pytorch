@@ -339,14 +339,12 @@ def _fetch(name: str) -> list[dict]:
 
 def _detect(oracle_text: str, type_line: str) -> list[tuple[str, str, str]]:
     """Return list of (key, label, matched_phrase) for every firing pattern."""
-    # Prepend type_line so tribal / type-check patterns can fire on it
-    text = f"{type_line}\n{oracle_text}"
     seen: set[str] = set()
     hits: list[tuple[str, str, str]] = []
     for key, label, regex in ORACLE_PATTERNS:
         if key in seen:
             continue
-        m = regex.search(text)
+        m = regex.search(oracle_text)
         if m:
             seen.add(key)
             hits.append((key, label, m.group(0).strip()))

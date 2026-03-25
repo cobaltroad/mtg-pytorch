@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from synergy.trigger_patterns import PATTERN_FAMILIES as _trigger_families
 from synergy.activated_ability import PATTERN_FAMILIES as _activated_families
+from synergy.tribal import tribal_sql
+
 
 PATTERN_FAMILIES = {**_trigger_families, **_activated_families}
 
@@ -47,45 +49,34 @@ def _family_sql(family_key: str) -> str:
     )
 
 
-PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
-
-    # ── CONSUMER: Tyvar needs Elves ───────────────────────────────────────────
-    # "Whenever one or more Elves you control attack …"
-    # The deck should be packed with Elf creatures so Tyvar's first ability
-    # fires as often as possible and the deathtouch grant is relevant.
-    "tribal_elf": (
-        "lower(type_line) LIKE '%elf%'"
-        " AND lower(type_line) LIKE '%creature%'"
-    ),
-
-    # ── CONSUMER: Tyvar needs mana dorks ──────────────────────────────────────
-    # "Whenever a mana ability of this creature resolves …"
-    # Any creature that can tap to produce mana triggers Tyvar's second ability,
-    # growing itself by the amount of mana it made.  Llanowar Elves tapping for
-    # {G} gets one counter; a Priest of Titania tapping for {G}{G}{G}{G} gets
-    # four.  The deck wants as many mana-ability creatures as possible.
-    "mana_dork": _family_sql("mana_producer"),
-}
-
 PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
 
-    # ── PRODUCER: Tyvar produces attack triggers ───────────────────────────────
-    # "they gain deathtouch until end of turn"
+    # ── PRODUCER: deck needs Elf creatures ────────────────────────────────────
+    # Tyvar's first ability requires Elves attacking — the deck produces the
+    # game state he needs by being full of Elf creatures (and changelings).
+    "tribal_elf": tribal_sql("elf"),
+
+    # ── PRODUCER: deck needs mana-ability creatures ───────────────────────────
+    # Tyvar's second ability triggers off mana abilities — the deck produces
+    # the game state he needs by running creatures that tap for mana.
+    "mana_dork": f"type_line ILIKE '%%Creature%%' AND {_family_sql('mana_producer')}",
+}
+
+PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
+
+    # ── CONSUMER: attack triggers benefit from Tyvar's deathtouch grant ───────
     # Tyvar turns every Elf attack into a deathtouch assault.  The deck wants
-    # cards that reward this: combat-damage payoffs, trample enablers (deathtouch
-    # + trample = one damage kills, rest tramples), and cards that care about
-    # creatures dealing combat damage or connecting.
+    # cards that consume/reward attack triggers: combat-damage payoffs, trample
+    # enablers, cards that care about creatures connecting.
     "attack_trigger": _family_sql("attack_trigger"),
 
-    # ── PRODUCER: Tyvar produces +1/+1 counters ───────────────────────────────
-    # "put a number of +1/+1 counters on it equal to the amount of mana"
-    # Tyvar grows every mana dork every turn.  The deck wants cards that amplify
-    # counter accumulation: counter doublers, proliferate, cards that care about
-    # +1/+1 counters or creatures with large power (which the counters build).
+    # ── CONSUMER: counter synergy consumes Tyvar's +1/+1 counter output ───────
+    # Tyvar grows every mana dork every turn.  The deck wants cards that consume
+    # counter accumulation: doublers, proliferate, power-matters payoffs.
     "counter_trigger": _family_sql("counter_trigger"),
 
-    # ── PRODUCER: commander places +1/+1 counters ─────────────────────────────
+    # ── CONSUMER: counter synergy from commanders that place counters ──────────
     # Any commander whose oracle text places +1/+1 counters as a primary output
-    # wants the same counter_trigger amplifier package.
+    # wants the same counter consumer package.
     "counter_placement": _family_sql("counter_trigger"),
 }
