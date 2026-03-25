@@ -15,9 +15,6 @@
 .PARAMETER Card
     Card name to query.  Partial / case-insensitive match accepted.
 
-.PARAMETER TrainingPath
-    Which artifact to inspect: 'compositional' (default) or 'cooccurrence'.
-
 .PARAMETER Top
     Number of pairs to display per section (default 20).
 
@@ -31,15 +28,12 @@
     .\scripts\eval_artifact.ps1 "Impact Tremors" -Top 30
 
 .EXAMPLE
-    .\scripts\eval_artifact.ps1 "Garruk's Uprising" -TrainingPath cooccurrence
+    .\scripts\eval_artifact.ps1 "Impact Tremors" -Top 30
 #>
 
 param(
     [Parameter(Mandatory)]
     [string]$Card,
-
-    [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'compositional',
 
     [int]$Top = 20,
 
@@ -54,16 +48,11 @@ if (-not (Test-Path "$RepoRoot\.venv\Scripts\python.exe")) {
 }
 
 if (-not $Dataset) {
-    $artifactName = if ($TrainingPath -eq 'compositional') {
-        'mtg_dataset_compositional.pt'
-    } else {
-        'mtg_dataset.pt'
-    }
-    $Dataset = Join-Path $RepoRoot "ingest_cache\$artifactName"
+    $Dataset = Join-Path $RepoRoot "ingest_cache\mtg_dataset.pt"
 }
 
 if (-not (Test-Path $Dataset)) {
-    Write-Error "Artifact not found: $Dataset"
+    Write-Error "Artifact not found: $Dataset`nRun: .\scripts\download_dataset.ps1"
     exit 1
 }
 

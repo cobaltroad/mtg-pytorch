@@ -11,7 +11,7 @@ Usage
 -----
     python eval_neighbors.py "Swords to Plowshares"
     python eval_neighbors.py "Llanowar Elves" --top 20
-    python eval_neighbors.py "Swords to Plowshares" --checkpoint comp_phase1_best --dataset .\\ingest_cache\\mtg_dataset_compositional.pt
+    python eval_neighbors.py "Swords to Plowshares" --checkpoint phase1_best --dataset .\\ingest_cache\\mtg_dataset.pt
 """
 
 from __future__ import annotations
@@ -70,12 +70,12 @@ def main():
     parser.add_argument("card", help="Card name to query (partial match ok)")
     parser.add_argument("--top", type=int, default=20, help="Number of neighbours to show")
     parser.add_argument(
-        "--checkpoint", default="comp_phase1_best",
-        help="Checkpoint name in CHECKPOINT_DIR (default: comp_phase1_best)",
+        "--checkpoint", default="phase1_best",
+        help="Checkpoint name in CHECKPOINT_DIR (default: phase1_best)",
     )
     parser.add_argument(
         "--dataset",
-        default=str(Path(__file__).parent.parent.parent / "ingest_cache" / "mtg_dataset_compositional.pt"),
+        default=str(Path(__file__).parent.parent.parent / "ingest_cache" / "mtg_dataset.pt"),
         help="Path to training artifact .pt file",
     )
     args = parser.parse_args()
@@ -95,7 +95,7 @@ def main():
     if not card_meta:
         print(
             "ERROR: artifact contains no card_meta — re-export with a current version of "
-            "export_dataset.py / export_dataset_compositional.py",
+            "export_dataset.py",
             file=sys.stderr,
         )
         sys.exit(1)

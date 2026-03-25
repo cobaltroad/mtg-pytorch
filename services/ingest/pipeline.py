@@ -21,7 +21,7 @@ Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan],
   compute_synergy, compute_synergy_xmage, compute_effect_peer_synergy,
   compute_commander_value_synergy, compute_tribal_typeline_synergy,
-  export_cooccurrence_dataset, export_dataset, export_dataset_commanders
+  export_dataset, export_dataset_commanders
 
 Data sources
 ------------
@@ -49,7 +49,6 @@ from stages.commander import (                             # noqa: E402
     compute_tribal_typeline_synergy,
 )
 from stages.export import (                                # noqa: E402
-    export_cooccurrence_dataset_stage,
     export_dataset_stage,
     export_dataset_commanders_stage,
     composition_profile_stage,
@@ -67,7 +66,7 @@ async def download() -> None:
 
 
 async def process() -> None:
-    """Embed -> tag -> compute both synergy paths -> export compositional dataset.
+    """Embed -> tag -> compute synergy paths -> export training dataset.
 
     Requires the download step to have been run first.
 
@@ -108,8 +107,7 @@ if __name__ == "__main__":
             "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
             # Export sub-stages
-            "export_cooccurrence_dataset", "export_dataset",
-            "export_dataset_commanders", "composition_profile",
+            "export_dataset", "export_dataset_commanders", "composition_profile",
         ],
         default=None,
         help=(
@@ -155,8 +153,6 @@ if __name__ == "__main__":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":
         asyncio.run(compute_tribal_typeline_synergy())
-    elif args.stage == "export_cooccurrence_dataset":
-        export_cooccurrence_dataset_stage()
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":

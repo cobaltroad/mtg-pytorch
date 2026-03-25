@@ -115,8 +115,396 @@ def load_embeddings(model_name: str = EMBEDDING_MODEL) -> dict[str, np.ndarray]:
     return embeddings
 
 
-# Phase 2 data loading lives in phases/cooccurrence.py (or phases/compositional.py).
-# The path module is selected at runtime via --training-path and injected into main().
+# ── DB loading helpers (Phase 2 / 3 / 4) ──────────────────────────────────────
+
+
+def _mine_hard_negatives(
+    positives: list[tuple],
+    embeddings: dict,
+    all_ids: list[str],
+    pos_set: set,
+    n_hard: int,
+    top_k: int = 200,
+) -> list[tuple[str, str, float]]:
+    """Return hard negatives: cards semantically similar to card_a but not synergistic."""
+    log.info("Mining %d hard negatives (top_k=%d)…", n_hard, top_k)
+    id_to_idx = {card_id: i for i, card_id in enumerate(all_ids)}
+    emb_matrix = np.stack([embeddings[k] for k in all_ids])
+    norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
+    normed = (emb_matrix / np.maximum(norms, 1e-8)).astype(np.float32)
+
+    unique_a = list({a for a, _, _ in positives})
+    random.shuffle(unique_a)
+    per_anchor = max(1, -(-n_hard // max(len(unique_a), 1)))
+
+    hard_negs: list[tuple[str, str, float]] = []
+    for card_a in unique_a:
+        if len(hard_negs) >= n_hard:
+            break
+        a_vec = normed[id_to_idx[card_a]]
+        sims = normed @ a_vec
+        ranked = np.argsort(sims)[::-1]
+        collected = 0
+        for idx in ranked[1: top_k + 1]:
+            cand = all_ids[int(idx)]
+            if (card_a, cand) not in pos_set and (cand, card_a) not in pos_set:
+                hard_negs.append((card_a, cand, 0.0))
+                collected += 1
+                if collected >= per_anchor or len(hard_negs) >= n_hard:
+                    break
+
+    log.info("  %d hard negatives mined", len(hard_negs))
+    return hard_negs
+
+
+def load_synergy_pairs(
+    embeddings: dict,
+    neg_ratio: int = 3,
+    sample: int = 500_000,
+    hard_neg_frac: float = 0.5,
+    role_demand_sample: int = 100_000,
+    combo_sample: int = 200_000,
+    commander_value_sample: int = 200_000,
+) -> list[tuple[str, str, float]]:
+    """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
+
+    Positives: ability_trigger, role_demand, commander_value, and combo_package
+    edges from synergy_edges.  Negatives: hard (nearest-neighbour) + random.
+    """
+    log.info(
+        "Loading synergy pairs (ability_trigger=%d, role_demand=%d, combo=%d, "
+        "commander_value=%d)…",
+        sample, role_demand_sample, combo_sample, commander_value_sample,
+    )
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_a::text, card_b::text
+                FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                WHERE score_type = 'ability_trigger'
+                LIMIT %s
+            """, (sample,))
+            positives = [
+                (r[0], r[1], 1.0) for r in cur.fetchall()
+                if r[0] in embeddings and r[1] in embeddings
+            ]
+
+            if role_demand_sample > 0:
+                cur.execute("""
+                    SELECT card_a::text, card_b::text, score
+                    FROM synergy_edges
+                    WHERE score_type = 'role_demand'
+                    LIMIT %s
+                """, (role_demand_sample,))
+                role_pairs = [
+                    (r[0], r[1], float(r[2])) for r in cur.fetchall()
+                    if r[0] in embeddings and r[1] in embeddings
+                ]
+                log.info("  %d ability_trigger + %d role_demand pairs",
+                         len(positives), len(role_pairs))
+                positives = positives + role_pairs
+            else:
+                log.info("  %d ability_trigger pairs (role_demand disabled)", len(positives))
+
+            if combo_sample > 0:
+                cur.execute("""
+                    SELECT a.card_id::text, b.card_id::text
+                    FROM combo_package_cards a
+                    JOIN combo_package_cards b
+                      ON a.combo_package_id = b.combo_package_id
+                     AND a.card_id < b.card_id
+                    WHERE a.card_id IS NOT NULL
+                      AND b.card_id IS NOT NULL
+                      AND a.is_template = FALSE
+                      AND b.is_template = FALSE
+                    LIMIT %s
+                """, (combo_sample,))
+                combo_pairs = [
+                    (r[0], r[1], 1.0) for r in cur.fetchall()
+                    if r[0] in embeddings and r[1] in embeddings
+                ]
+                log.info("  + %d combo_package pairs", len(combo_pairs))
+                positives = positives + combo_pairs
+
+            if commander_value_sample > 0:
+                cur.execute("""
+                    SELECT card_a::text, card_b::text, score
+                    FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                    WHERE score_type = 'commander_value'
+                    LIMIT %s
+                """, (commander_value_sample,))
+                cv_pairs = [
+                    (r[0], r[1], float(r[2])) for r in cur.fetchall()
+                    if r[0] in embeddings and r[1] in embeddings
+                ]
+                log.info("  + %d commander_value pairs", len(cv_pairs))
+                positives = positives + cv_pairs
+
+    log.info("  %d total positive pairs", len(positives))
+
+    all_ids = list(embeddings.keys())
+    pos_set = {(a, b) for a, b, _ in positives}
+    n_neg   = len(positives) * neg_ratio
+    n_hard  = int(n_neg * hard_neg_frac)
+    n_rand  = n_neg - n_hard
+
+    hard_negs = _mine_hard_negatives(positives, embeddings, all_ids, pos_set, n_hard)
+
+    rand_negs: list[tuple[str, str, float]] = []
+    attempts = 0
+    while len(rand_negs) < n_rand and attempts < n_rand * 10:
+        a, b = random.sample(all_ids, 2)
+        if (a, b) not in pos_set and (b, a) not in pos_set:
+            rand_negs.append((a, b, 0.0))
+        attempts += 1
+
+    negatives = hard_negs + rand_negs
+    log.info("  %d negative pairs (%d hard, %d random)",
+             len(negatives), len(hard_negs), len(rand_negs))
+    pairs = positives + negatives
+    random.shuffle(pairs)
+    return pairs
+
+
+def load_color_identities(embeddings: dict[str, np.ndarray]) -> dict[str, frozenset]:
+    """Return {card_id: frozenset of color letters} for every embedded card."""
+    ids = list(embeddings.keys())
+    result: dict[str, frozenset] = {}
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                "SELECT id::text, color_identity FROM cards WHERE id::text = ANY(%s)",
+                (ids,),
+            )
+            for row in cur.fetchall():
+                result[row["id"]] = frozenset(row["color_identity"] or [])
+    for card_id in ids:
+        result.setdefault(card_id, frozenset())
+    return result
+
+
+def load_decks(embeddings: dict[str, np.ndarray]) -> list[dict]:
+    """Load human Commander decklists, filtered to embedded cards."""
+    import json as _json
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT commander_id::text,
+                       ARRAY(SELECT unnest(card_ids)::text) AS card_ids,
+                       metadata
+                FROM decks
+                WHERE commander_id IS NOT NULL
+            """)
+            rows = cur.fetchall()
+
+    color_ids = load_color_identities(embeddings)
+    all_ids   = list(embeddings.keys())
+
+    _legal_cache: dict[frozenset, np.ndarray] = {}
+
+    def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
+        if cmd_ci not in _legal_cache:
+            idx = np.array(
+                [i for i, cid in enumerate(all_ids)
+                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                dtype=np.int64,
+            )
+            _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(len(all_ids), dtype=np.int64)
+        return _legal_cache[cmd_ci]
+
+    decks = []
+    for row in rows:
+        cmd_id = row["commander_id"]
+        if cmd_id not in embeddings:
+            continue
+        card_ids = [str(c) for c in (row["card_ids"] or []) if str(c) in embeddings]
+        if len(card_ids) < 10:
+            continue
+        cmd_ci   = color_ids.get(cmd_id, frozenset())
+        metadata = row["metadata"] or {}
+        if isinstance(metadata, str):
+            metadata = _json.loads(metadata)
+        for pid in metadata.get("partner_commander_ids", []):
+            cmd_ci = cmd_ci | color_ids.get(pid, frozenset())
+        decks.append({
+            "commander_id":      cmd_id,
+            "card_ids":          card_ids,
+            "color_identity":    cmd_ci,
+            "legal_neg_indices": _legal_indices(cmd_ci),
+            "archetype":         metadata.get("archetype", "unknown"),
+        })
+
+    log.info("Loaded %d decks (%d skipped — commander or cards not embedded)",
+             len(decks), len(rows) - len(decks))
+    return decks
+
+
+def load_synergy_positions(
+    decks: list[dict],
+    embeddings: dict[str, np.ndarray],
+    combo_weight: float = 3.0,
+    ability_weight: float = 2.0,
+    tribal_weight: float = 1.5,
+    synergy_limit_per_commander: int = 300,
+) -> list[dict]:
+    """Build Phase 4 synthetic training positions from combo packages and synergy edges."""
+    from collections import Counter, defaultdict
+    log.info(
+        "Building synergy positions "
+        "(combo=%.1f×, ability=%.1f×, tribal=%.1f×, limit=%d/commander)…",
+        combo_weight, ability_weight, tribal_weight, synergy_limit_per_commander,
+    )
+
+    emb_set  = set(embeddings.keys())
+    cmd_legal = {d["commander_id"]: d["legal_neg_indices"] for d in decks}
+    commander_ids  = list(cmd_legal.keys())
+    deck_card_sets = {d["commander_id"]: set(d["card_ids"]) for d in decks}
+
+    positions: list[dict] = []
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT cpc.combo_package_id, cpc.card_id::text
+                FROM combo_package_cards cpc
+                JOIN combo_packages cp ON cp.id = cpc.combo_package_id
+                WHERE cpc.card_id IS NOT NULL
+                  AND cpc.is_template = FALSE
+                  AND cp.legal_commander = TRUE
+            """)
+            pkg_map: dict[str, list[str]] = defaultdict(list)
+            for pkg_id, card_id in cur.fetchall():
+                if card_id in emb_set:
+                    pkg_map[pkg_id].append(card_id)
+
+        combo_count = 0
+        for deck in decks:
+            cmd_id  = deck["commander_id"]
+            in_deck = deck_card_sets[cmd_id]
+            legal   = cmd_legal[cmd_id]
+            for pkg_card_list in pkg_map.values():
+                overlap = [c for c in pkg_card_list if c in in_deck]
+                if len(overlap) < 2:
+                    continue
+                for target in overlap:
+                    positions.append({
+                        "commander_id":      cmd_id,
+                        "context_card_ids":  [c for c in overlap if c != target],
+                        "target_card_id":    target,
+                        "weight":            combo_weight,
+                        "legal_neg_indices": legal,
+                    })
+                    combo_count += 1
+
+        log.info("  %d combo completion positions", combo_count)
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_a::text, card_b::text, score_type
+                FROM synergy_edges
+                WHERE score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND card_a::text = ANY(%s)
+            """, (commander_ids,))
+            fwd = list(cur.fetchall())
+
+            cur.execute("""
+                SELECT card_b::text AS card_a, card_a::text AS card_b, score_type
+                FROM synergy_edges
+                WHERE score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND card_b::text = ANY(%s)
+            """, (commander_ids,))
+            rev = list(cur.fetchall())
+
+        cmd_count: Counter = Counter()
+        syn_count = 0
+        for card_a, card_b, score_type in fwd + rev:
+            if card_a not in cmd_legal or card_b not in emb_set:
+                continue
+            if cmd_count[card_a] >= synergy_limit_per_commander:
+                continue
+            weight = ability_weight if score_type == "ability_trigger" else tribal_weight
+            positions.append({
+                "commander_id":      card_a,
+                "context_card_ids":  [],
+                "target_card_id":    card_b,
+                "weight":            weight,
+                "legal_neg_indices": cmd_legal[card_a],
+            })
+            cmd_count[card_a] += 1
+            syn_count += 1
+
+        log.info("  %d ability/tribal positions across %d commanders",
+                 syn_count, len(cmd_count))
+
+    log.info("Total synergy positions: %d", len(positions))
+    return positions
+
+
+def load_synergy_positions_global(
+    embeddings: dict[str, np.ndarray],
+    ability_weight: float = 2.0,
+    tribal_weight: float = 1.5,
+    synergy_limit_per_commander: int = 300,
+) -> list[dict]:
+    """Build Phase 4 synergy positions for ALL legal commanders in synergy_edges."""
+    from collections import Counter
+    log.info("Building global synergy positions (all legal commanders, no decks required)…")
+
+    emb_set = set(embeddings.keys())
+    all_ids = list(embeddings.keys())
+    color_ids = load_color_identities(embeddings)
+
+    _legal_cache: dict[frozenset, np.ndarray] = {}
+
+    def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
+        if cmd_ci not in _legal_cache:
+            idx = np.array(
+                [i for i, cid in enumerate(all_ids)
+                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                dtype=np.int64,
+            )
+            _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(len(all_ids), dtype=np.int64)
+        return _legal_cache[cmd_ci]
+
+    positions: list[dict] = []
+    cmd_count: Counter = Counter()
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT se.card_a::text, se.card_b::text, se.score_type
+                FROM synergy_edges se
+                JOIN cards c ON c.id = se.card_a
+                WHERE se.score_type IN ('ability_trigger', 'tribal_typeline')
+                  AND se.card_b IS NOT NULL
+                  AND c.legalities->>'commander' = 'legal'
+                  AND (c.type_line ILIKE '%Legendary Creature%'
+                    OR c.type_line ILIKE '%Legendary Planeswalker%'
+                    OR c.oracle_text ILIKE '%can be your commander%')
+                ORDER BY se.card_a, se.score DESC
+            """)
+            rows = cur.fetchall()
+
+    for card_a, card_b, score_type in rows:
+        if card_a not in emb_set or card_b not in emb_set:
+            continue
+        if cmd_count[card_a] >= synergy_limit_per_commander:
+            continue
+        cmd_ci = color_ids.get(card_a, frozenset())
+        weight = ability_weight if score_type == "ability_trigger" else tribal_weight
+        positions.append({
+            "commander_id":      card_a,
+            "context_card_ids":  [],
+            "target_card_id":    card_b,
+            "weight":            weight,
+            "legal_neg_indices": _legal_indices(cmd_ci),
+        })
+        cmd_count[card_a] += 1
+
+    log.info("Global synergy positions: %d across %d commanders",
+             len(positions), len(cmd_count))
+    return positions
 
 
 # ── Phase 1 data ──────────────────────────────────────────────────────────────
@@ -135,35 +523,6 @@ class AllCardsDataset(Dataset):
     def __getitem__(self, idx):
         return torch.from_numpy(self.embs[idx])
 
-
-class FunctionalPairsDataset(Dataset):
-    """Phase 1 compositional: pre-computed functional equivalence pairs.
-
-    Each sample is a positive pair (emb_a, emb_b) where both cards belong to
-    the same functional equivalence class (same role + color-identity bucket +
-    CMC bracket).  NT-Xent loss treats these as positive pairs; all other
-    cross-pair combinations in the batch are in-batch negatives.
-    """
-
-    def __init__(self, pairs: list[tuple[str, str]], embeddings: dict[str, np.ndarray]):
-        valid = [(a, b) for a, b in pairs if a in embeddings and b in embeddings]
-        if len(valid) < len(pairs):
-            log.warning(
-                "FunctionalPairsDataset: dropped %d pairs with missing embeddings",
-                len(pairs) - len(valid),
-            )
-        self.pairs = valid
-        self.embeddings = embeddings
-
-    def __len__(self):
-        return len(self.pairs)
-
-    def __getitem__(self, idx):
-        a, b = self.pairs[idx]
-        return (
-            torch.from_numpy(self.embeddings[a]),
-            torch.from_numpy(self.embeddings[b]),
-        )
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -386,95 +745,6 @@ def train_contrastive_phase(
     save_checkpoint(model, f"{checkpoint_prefix}1_epoch{epochs}")
 
 
-def train_functional_pairs_phase(
-    model: CardEncoder,
-    dataset: FunctionalPairsDataset,
-    epochs: int,
-    lr: float,
-    batch_size: int = 512,
-    noise_std: float = 0.02,
-    temperature: float = 0.07,
-    checkpoint_prefix: str = "comp_phase",
-):
-    """Phase 1 compositional: NT-Xent on functional equivalence pairs.
-
-    Each batch contains (emb_a, emb_b) pairs where both cards share a
-    dominant ability role, color-identity bucket, and CMC bracket.  These
-    real semantic pairs replace the noise-augmented views used in the
-    co-occurrence Phase 1, giving the model a stronger functional signal:
-    Llanowar Elves and Birds of Paradise are pulled together because they
-    are both 'ramp' in a similar color/CMC class, not just because they
-    are noisy copies of the same embedding.
-
-    A small amount of Gaussian noise (noise_std) is still applied to each
-    view before projection — this acts as a regulariser and prevents the
-    model from learning a trivial identity mapping on the exact input vectors.
-    """
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
-    )
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    device = next(model.parameters()).device
-
-    log.info(
-        "Phase 1 (compositional): %d pairs, batch=%d, epochs=%d, temp=%.3f",
-        len(dataset),
-        batch_size,
-        epochs,
-        temperature,
-    )
-
-    best_loss = float("inf")
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0.0
-        for emb_a, emb_b in loader:
-            emb_a = emb_a.to(device)
-            emb_b = emb_b.to(device)
-            # Small noise for regularisation — much less than the co-occurrence
-            # path because the pair signal is already meaningful.
-            if noise_std > 0:
-                emb_a = F.normalize(emb_a + torch.randn_like(emb_a) * noise_std, dim=-1)
-                emb_b = F.normalize(emb_b + torch.randn_like(emb_b) * noise_std, dim=-1)
-
-            z_a = model(emb_a)
-            z_b = model(emb_b)
-            loss = nt_xent_loss(z_a, z_b, temperature)
-
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            total_loss += loss.item()
-
-        scheduler.step()
-        avg = total_loss / len(loader)
-        log.info(
-            "Phase 1  epoch %d/%d  loss=%.4f  lr=%.2e",
-            epoch + 1,
-            epochs,
-            avg,
-            scheduler.get_last_lr()[0],
-        )
-
-        if WANDB_ENABLED:
-            _wandb_log(
-                {
-                    "phase": 1,
-                    "epoch": epoch + 1,
-                    "loss": avg,
-                    "lr": scheduler.get_last_lr()[0],
-                }
-            )
-
-        if avg < best_loss:
-            best_loss = avg
-            save_checkpoint(model, checkpoint_prefix + "1_best")
-
-    save_checkpoint(model, f"{checkpoint_prefix}1_epoch{epochs}")
-
-
 def train_synergy_phase(
     model: CardEncoder,
     dataset: SynergyDataset,
@@ -588,7 +858,7 @@ def train_synergy_phase(
     save_checkpoint(model, f"{checkpoint_prefix}2_epoch{epochs}")
 
 
-# ── Phase 3: data loading lives in phases/cooccurrence.py ─────────────────────
+# ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 
 def train_deck_phase(
@@ -616,10 +886,9 @@ def train_deck_phase(
         in the dict default to a weight of 1.0.  Pass None to disable.
 
     encoder_lr_scale: multiplier on lr for all encoder parameters.  Set below
-        1.0 for the compositional path where the dataset is much larger than
-        the co-occurrence path (~thousands of role-matched commanders vs ~171
-        human decklists) to prevent the Phase 2 geometry from collapsing.
-        Default 1.0 preserves existing co-occurrence path behaviour.
+        1.0 to protect Phase 2 geometry — the commanders artifact generates
+        thousands of synthetic decks, giving the encoder far more gradient
+        updates per epoch than training on human decklists alone.
     """
     all_ids = list(embeddings.keys())
     all_embs = torch.from_numpy(np.stack([embeddings[k] for k in all_ids]))  # (N, D)
@@ -717,8 +986,6 @@ def train_deck_phase(
 
 
 # ── Phase 4: Synergy-guided synthetic positions ───────────────────────────────
-# Data loading (load_synergy_positions, load_synergy_positions_global) lives in
-# phases/cooccurrence.py.  Training loops below are shared across both paths.
 
 
 # ── Phase 4: Synergy-only training loop (Option A) ────────────────────────────
@@ -1262,19 +1529,6 @@ def load_artifact(path: str) -> dict:
     return data
 
 
-def load_functional_pairs_from_artifact(
-    data: dict,
-) -> list[tuple[str, str]]:
-    """Reconstruct [(card_id_a, card_id_b)] from a compositional artifact."""
-    fp = data.get("functional_pairs")
-    if not fp:
-        return []
-    card_ids = data["card_ids"]
-    a_list = fp["a_idx"].tolist()
-    b_list = fp["b_idx"].tolist()
-    return [(card_ids[a], card_ids[b]) for a, b in zip(a_list, b_list)]
-
-
 def load_embeddings_from_artifact(data: dict) -> dict[str, np.ndarray]:
     """Reconstruct {card_id: np.ndarray} from artifact tensors."""
     card_ids = data["card_ids"]
@@ -1595,24 +1849,9 @@ def main():
         help="Phase 4 --synergy-only: positions per gradient step "
         "(default 256 — larger than deck batch=32 to saturate the GPU)",
     )
-    parser.add_argument(
-        "--training-path",
-        choices=["cooccurrence", "compositional"],
-        default="cooccurrence",
-        help="Training path: cooccurrence (default) uses human deck "
-        "co-occurrence; compositional uses rules-derived "
-        "oracle-text signal (see issue #71).",
-    )
     args = parser.parse_args()
 
-    # Select path module -- determines data loading and checkpoint prefix.
-    if args.training_path == "compositional":
-        from phases import compositional as path_mod
-    else:
-        from phases import cooccurrence as path_mod
-
-    pfx = path_mod.CHECKPOINT_PREFIX
-    log.info("Training path: %s  (checkpoint prefix: %s)", args.training_path, pfx)
+    pfx = "phase"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("Training phase %d on %s", args.phase, device)
@@ -1641,40 +1880,18 @@ def main():
         if args.resume:
             load_checkpoint(model, pfx + "1_best", device)
 
-        if args.training_path == "compositional":
-            pairs = load_functional_pairs_from_artifact(_artifact) if _artifact else []
-            if not pairs:
-                log.error(
-                    "No functional pairs found in artifact -- "
-                    "run: docker compose run --rm ingest python pipeline.py "
-                    "--stage export_dataset_compositional"
-                )
-                return
-            dataset = FunctionalPairsDataset(pairs, embeddings)
-            log.info("Dataset: %d functional pairs", len(dataset))
-            train_functional_pairs_phase(
-                model,
-                dataset,
-                args.epochs,
-                args.lr,
-                args.batch_size,
-                noise_std=args.noise,
-                temperature=args.temperature,
-                checkpoint_prefix=pfx,
-            )
-        else:
-            dataset = AllCardsDataset(embeddings)
-            log.info("Dataset: %d cards", len(dataset))
-            train_contrastive_phase(
-                model,
-                dataset,
-                args.epochs,
-                args.lr,
-                args.batch_size,
-                noise_std=args.noise,
-                temperature=args.temperature,
-                checkpoint_prefix=pfx,
-            )
+        dataset = AllCardsDataset(embeddings)
+        log.info("Dataset: %d cards", len(dataset))
+        train_contrastive_phase(
+            model,
+            dataset,
+            args.epochs,
+            args.lr,
+            args.batch_size,
+            noise_std=args.noise,
+            temperature=args.temperature,
+            checkpoint_prefix=pfx,
+        )
 
     elif args.phase == 2:
         embeddings = (
@@ -1687,7 +1904,7 @@ def main():
         if _artifact:
             pairs = load_synergy_pairs_from_artifact(_artifact, sample=args.sample)
         else:
-            pairs = path_mod.load_synergy_pairs(
+            pairs = load_synergy_pairs(
                 embeddings,
                 neg_ratio=args.neg_ratio,
                 sample=args.sample,
@@ -1706,7 +1923,7 @@ def main():
         input_dim = len(next(iter(embeddings.values())))
         model = CardEncoder(input_dim=input_dim).to(device)
         if args.resume:
-            warm = path_mod.warm_start_name(2)
+            warm = "phase1_best"
             if (CHECKPOINT_DIR / (warm + ".pt")).exists():
                 load_checkpoint(model, warm, device)
             else:
@@ -1735,13 +1952,13 @@ def main():
             return
 
         # Use pre-built decks from the artifact when available (the commanders
-        # artifact, mtg_commanders.pt, stores synergy-derived synthetic decks
-        # in the same schema).  Fall through to path_mod.load_decks() only
-        # when no artifact was provided or the artifact has no 'decks' key.
+        # mtg_commanders.pt stores synergy-derived synthetic decks in the same
+        # DeckDataset schema.  Fall through to load_decks() only when no
+        # artifact was provided or the artifact has no 'decks' key.
         if _artifact and "decks" in _artifact:
             decks = load_decks_from_artifact(_artifact)
         else:
-            decks = path_mod.load_decks(embeddings)
+            decks = load_decks(embeddings)
         if not decks:
             log.error("No decks found -- run import_decklists.py first.")
             return
@@ -1752,7 +1969,7 @@ def main():
         input_dim = len(next(iter(embeddings.values())))
         model = CardEncoder(input_dim=input_dim).to(device)
         if args.resume:
-            warm = path_mod.warm_start_name(3)
+            warm = "phase2_best"
             if (CHECKPOINT_DIR / (warm + ".pt")).exists():
                 load_checkpoint(model, warm, device)
             else:
@@ -1775,13 +1992,6 @@ def main():
             if archetype_weight:
                 log.info("Archetype weights: %s", archetype_weight)
 
-        # Co-occurrence Phase 3 has ~171 decks and was tuned without encoder LR
-        # scaling — preserve that behaviour.  Compositional Phase 3 generates
-        # thousands of role-matched "decks", so the encoder gets 10–50× more
-        # gradient updates per epoch and needs the same protection Phase 4 uses.
-        p3_encoder_lr_scale = (
-            args.encoder_lr_scale if args.training_path == "compositional" else 1.0
-        )
         train_deck_phase(
             model,
             dataset,
@@ -1791,7 +2001,7 @@ def main():
             args.batch_size,
             archetype_weight=archetype_weight,
             checkpoint_prefix=pfx,
-            encoder_lr_scale=p3_encoder_lr_scale,
+            encoder_lr_scale=args.encoder_lr_scale,
         )
 
     elif args.phase == 4:
@@ -1831,7 +2041,7 @@ def main():
                     "Synergy-only: no positions in artifact — loading from DB "
                     "(requires DATABASE_URL)"
                 )
-                syn_positions = path_mod.load_synergy_positions_global(
+                syn_positions = load_synergy_positions_global(
                     embeddings,
                     ability_weight=args.ability_weight,
                     tribal_weight=args.tribal_weight,
@@ -1857,7 +2067,7 @@ def main():
             decks = (
                 load_decks_from_artifact(_artifact)
                 if _artifact
-                else path_mod.load_decks(embeddings)
+                else load_decks(embeddings)
             )
             if not decks:
                 log.error("No decks found -- run import_decklists.py first.")
@@ -1869,7 +2079,7 @@ def main():
             if _artifact:
                 syn_positions = load_synergy_positions_from_artifact(_artifact)
             else:
-                syn_positions = path_mod.load_synergy_positions(
+                syn_positions = load_synergy_positions(
                     decks,
                     embeddings,
                     combo_weight=args.combo_weight,

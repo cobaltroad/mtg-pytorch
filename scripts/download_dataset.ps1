@@ -1,40 +1,29 @@
 <#
 .SYNOPSIS
-    Download a training artifact from the Docker host to the local GPU machine.
+    Download the training artifact from the Docker host to the local GPU machine.
 
 .DESCRIPTION
-    Fetches either mtg_dataset.pt (compositional path, default) or
-    mtg_cooccurrence_dataset.pt (co-occurrence path) from the API and saves
-    it to ingest_cache/.
+    Fetches mtg_dataset.pt (Phases 1-2) from the API and saves it to ingest_cache/.
+    For Phases 3-4 download the commanders artifact with download_commanders.ps1.
 
     The trainer uses it with:
         .\scripts\run.ps1 -Train 1
         .\scripts\run.ps1 -Train 2
-    For Phases 3/4 (compositional path), download the commanders artifact instead:
-        .\scripts\download_commanders.ps1
-
-.PARAMETER TrainingPath
-    Which artifact to download: 'compositional' (default) or 'cooccurrence'.
 
 .PARAMETER DatasetUrl
-    Override the download URL.  Defaults to https://<API_HOST>/dataset/compositional/download
-    (or /dataset/cooccurrence/download) read from .env.
+    Override the download URL.  Defaults to https://<API_HOST>/dataset/download
+    read from .env.
 
 .PARAMETER OutputDir
     Local directory to save the file (default: .\ingest_cache).
 
 .EXAMPLE
     .\scripts\download_dataset.ps1
-
-.EXAMPLE
-    .\scripts\download_dataset.ps1 -TrainingPath cooccurrence
 #>
 
 param(
-    [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'compositional',
-    [string]$DatasetUrl   = "",
-    [string]$OutputDir    = ""
+    [string]$DatasetUrl = "",
+    [string]$OutputDir  = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,19 +55,10 @@ if (-not $DatasetUrl) {
         $apiHost = 'edh-api.cardtrak.app'
         Write-Warning "API_HOST not set in .env - defaulting to $apiHost"
     }
-    if ($TrainingPath -eq 'compositional') {
-        $DatasetUrl = "https://$apiHost/dataset/compositional/download"
-    } else {
-        $DatasetUrl = "https://$apiHost/dataset/cooccurrence/download"
-    }
+    $DatasetUrl = "https://$apiHost/dataset/download"
 }
 
-$artifactName = if ($TrainingPath -eq 'compositional') {
-    'mtg_dataset.pt'
-} else {
-    'mtg_cooccurrence_dataset.pt'
-}
-$OutputPath = Join-Path $OutputDir $artifactName
+$OutputPath = Join-Path $OutputDir 'mtg_dataset.pt'
 
 # -- Fetch metadata (fast, shows what we're about to download) ----------------
 
@@ -90,12 +70,7 @@ try {
     $created = $info.created_at.Substring(0, 19).Replace('T', ' ')
     Write-Host ""
     Write-Host "  Cards:             $($info.card_count.ToString('N0'))" -ForegroundColor Cyan
-    if ($info.functional_pair_count) {
-        Write-Host "  Functional pairs:  $($info.functional_pair_count.ToString('N0'))" -ForegroundColor Cyan
-    }
     Write-Host "  Synergy pairs:     $($info.synergy_count.ToString('N0'))" -ForegroundColor Cyan
-    Write-Host "  Decks:             $($info.deck_count.ToString('N0'))" -ForegroundColor Cyan
-    Write-Host "  Phase 4 positions: $($info.position_count.ToString('N0'))" -ForegroundColor Cyan
     Write-Host "  Model:             $($info.model)" -ForegroundColor Cyan
     Write-Host "  Size:              $sizeMb MB" -ForegroundColor Cyan
     Write-Host "  Created:           $created UTC" -ForegroundColor Cyan
@@ -130,14 +105,8 @@ try {
 # -- Usage hint ---------------------------------------------------------------
 
 Write-Host "Train with:" -ForegroundColor Yellow
-if ($TrainingPath -eq 'compositional') {
-    Write-Host "  .\scripts\run.ps1 -Train 1" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Train 3" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Train 4" -ForegroundColor Yellow
-} else {
-    Write-Host "  .\scripts\run.ps1 -Train 1 -TrainingPath cooccurrence" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Train 2 -TrainingPath cooccurrence" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Train 3 -TrainingPath cooccurrence" -ForegroundColor Yellow
-    Write-Host "  .\scripts\run.ps1 -Train 4 -TrainingPath cooccurrence" -ForegroundColor Yellow
-}
+Write-Host "  .\scripts\run.ps1 -Train 1" -ForegroundColor Yellow
+Write-Host "  .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "For Phases 3-4 download the commanders artifact:" -ForegroundColor Yellow
+Write-Host "  .\scripts\download_commanders.ps1" -ForegroundColor Yellow

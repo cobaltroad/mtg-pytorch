@@ -4,14 +4,12 @@ All functions here are thin wrappers that delegate to the dedicated
 export modules so pipeline.py stays free of artifact-specific logic.
 
 Artifacts:
-  mtg_cooccurrence_dataset.pt   — co-occurrence training path (Phases 1-2)
-  mtg_dataset.pt (compositional) — compositional training path (Phases 1-2)
-  mtg_commanders.pt             — commander artifact (Phases 3-4)
+  mtg_dataset.pt      — Phases 1-2 (text equivalence + ability-trigger synergy)
+  mtg_commanders.pt   — Phases 3-4 (commander BPR from synergy_edges)
   deck_composition_profile.json — structural targets for deck generation
 
 Entrypoint:  python -m stages.export
-             [--stage export_cooccurrence_dataset|export_dataset|
-                      export_dataset_commanders|composition_profile]
+             [--stage export_dataset|export_dataset_commanders|composition_profile]
 """
 from __future__ import annotations
 
@@ -20,14 +18,8 @@ import logging
 log = logging.getLogger(__name__)
 
 
-def export_cooccurrence_dataset_stage() -> None:
-    """Serialize the co-occurrence training artifact to /data/mtg_cooccurrence_dataset.pt."""
-    import export_cooccurrence_dataset
-    export_cooccurrence_dataset.main()
-
-
 def export_dataset_stage() -> None:
-    """Serialize the compositional training artifact to /data/mtg_dataset.pt."""
+    """Serialize the training artifact to /data/mtg_dataset.pt."""
     import export_dataset
     export_dataset.main()
 
@@ -65,7 +57,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--stage",
         choices=[
-            "export_cooccurrence_dataset",
             "export_dataset",
             "export_dataset_commanders",
             "composition_profile",
@@ -75,16 +66,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.stage == "export_cooccurrence_dataset":
-        export_cooccurrence_dataset_stage()
-    elif args.stage == "export_dataset":
+    if args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":
         export_dataset_commanders_stage()
     elif args.stage == "composition_profile":
         asyncio.run(composition_profile_stage())
     else:
-        export_cooccurrence_dataset_stage()
         export_dataset_stage()
         export_dataset_commanders_stage()
         asyncio.run(composition_profile_stage())

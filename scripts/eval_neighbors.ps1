@@ -10,11 +10,6 @@
 .PARAMETER Card
     Card name to query.  Partial / case-insensitive match is accepted.
 
-.PARAMETER TrainingPath
-    Which checkpoint and artifact to use: 'cooccurrence' or 'compositional'
-    (default).  Determines both the checkpoint prefix (phase1 vs comp_phase1)
-    and the artifact file (mtg_dataset.pt vs mtg_dataset_compositional.pt).
-
 .PARAMETER Top
     Number of nearest neighbours to display (default 20).
 
@@ -25,12 +20,10 @@
     training signal.
 
 .PARAMETER Checkpoint
-    Override the checkpoint name.  Defaults to <prefix><phase>_best derived
-    from -TrainingPath and -Phase.
+    Override the checkpoint name.  Defaults to phase<N>_best.
 
 .PARAMETER Dataset
-    Override the artifact path.  Defaults to
-    .\ingest_cache\mtg_dataset[_compositional].pt derived from -TrainingPath.
+    Override the artifact path.  Defaults to .\ingest_cache\mtg_dataset.pt.
 
 .EXAMPLE
     .\scripts\eval_neighbors.ps1 "Swords to Plowshares"
@@ -40,17 +33,11 @@
 
 .EXAMPLE
     .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Top 30
-
-.EXAMPLE
-    .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -TrainingPath cooccurrence -Phase 2
 #>
 
 param(
     [Parameter(Mandatory)]
     [string]$Card,
-
-    [ValidateSet('cooccurrence', 'compositional')]
-    [string]$TrainingPath = 'compositional',
 
     [ValidateRange(1, 4)]
     [int]$Phase = 1,
@@ -68,30 +55,22 @@ if (-not (Test-Path "$RepoRoot\.venv\Scripts\python.exe")) {
     throw "Missing .venv. Create it with: py -3.12 -m venv .venv"
 }
 
-# -- Resolve defaults from TrainingPath ---------------------------------------
-
 if (-not $Checkpoint) {
-    $prefix     = if ($TrainingPath -eq 'compositional') { 'comp_phase' } else { 'phase' }
-    $Checkpoint = "${prefix}${Phase}_best"
+    $Checkpoint = "phase${Phase}_best"
 }
 
 if (-not $Dataset) {
-    $artifactName = if ($TrainingPath -eq 'compositional') {
-        'mtg_dataset_compositional.pt'
-    } else {
-        'mtg_dataset.pt'
-    }
-    $Dataset = Join-Path $RepoRoot "ingest_cache\$artifactName"
+    $Dataset = Join-Path $RepoRoot "ingest_cache\mtg_dataset.pt"
 }
 
 if (-not (Test-Path $Dataset)) {
-    Write-Error "Artifact not found: $Dataset`nRun: .\scripts\download_dataset.ps1 -TrainingPath $TrainingPath"
+    Write-Error "Artifact not found: $Dataset`nRun: .\scripts\download_dataset.ps1"
     exit 1
 }
 
 $checkpointFile = Join-Path $RepoRoot "checkpoints\${Checkpoint}.pt"
 if (-not (Test-Path $checkpointFile)) {
-    Write-Error "Checkpoint not found: $checkpointFile`nTrain Phase 1 first: .\scripts\run.ps1 -Train 1 -TrainingPath $TrainingPath"
+    Write-Error "Checkpoint not found: $checkpointFile`nTrain Phase 1 first: .\scripts\run.ps1 -Train 1"
     exit 1
 }
 
