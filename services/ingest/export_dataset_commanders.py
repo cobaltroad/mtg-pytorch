@@ -10,19 +10,16 @@ Human decklists introduce representation collapse in BPR training because
 every commander needs the same generic roles (draw, ramp, removal), driving
 all commander embeddings toward an indistinct high-similarity cluster.
 
-This artifact builds per-commander positive sets from synergy_edges, which
-encode distinct mechanic-specific card relationships:
+This artifact builds per-commander positive sets by decomposing each
+commander's oracle text into mechanic pattern keys, then executing SQL
+from commander_mechanics.py to find the relevant producer/consumer cards.
 
-  ability_trigger edges  card_a (producer) → card_b (commander/consumer)
-                         "card_a belongs in a deck with this commander
-                         because the commander's ability fires when card_a
-                         is in play or cast"
+  PRODUCER keys  commander *needs* these cards (e.g. tribal_elf → Elf creatures,
+                 mana_dork → mana-ability creatures for Tyvar)
+  CONSUMER keys  commander *outputs* something these cards amplify (e.g.
+                 attack_trigger → attack payoffs for an attack-trigger commander)
 
-  commander_value edges  card_a (commander) → card_b (payoff card)
-                         "card_b is better when this commander is in play"
-
-Because producers are selected by what each commander's abilities *react to*
-(ETB creatures for an ETB commander, enchantments for Sythis, etc.) the
+Because each commander decomposes into a distinct set of pattern keys, the
 positive sets are genuinely distinct across commanders, giving BPR a
 meaningful gradient.
 
@@ -30,16 +27,15 @@ Data flow
 ---------
 1. Load embeddings + card metadata from the database.
 2. Load all embedded legal commanders.
-3. Two bulk queries against synergy_edges:
-   a. ability_trigger WHERE card_b IN commanders  → producers per commander
-   b. commander_value WHERE card_a IN commanders  → payoffs per commander
+3. Decompose each commander via ORACLE_PATTERNS (_detect):
+   a. Match pattern keys from oracle_text.
+   b. Execute PRODUCER / CONSUMER SQL once per unique key (cached).
+   c. Apply color-identity filter: card_ci ⊆ commander_ci.
 4. Per commander:
-   a. Union ability_trigger producers + commander_value payoffs,
-      re-filtered to strict color-identity legality (⊆ commander CI).
-   b. Skip commanders with < MIN_POSITIVES cards.
-   c. Cap positives at MAX_POSITIVES (shuffle + truncate).
-   d. Build legal_neg_indices: color-legal embedded cards NOT in positive set.
-   e. Archetype derived from distinct trigger_event values on the edges.
+   a. Skip commanders with < MIN_POSITIVES cards.
+   b. Cap positives at MAX_POSITIVES (shuffle + truncate).
+   c. Build legal_neg_indices: color-legal embedded cards NOT in positive set.
+   d. Archetype derived from matched pattern keys.
 5. Save artifact as mtg_commanders.pt.
 
 Artifact keys
@@ -92,6 +88,11 @@ from export_db_helpers import (
     _load_color_identities,
     get_conn,
 )
+from stages.decompose import _detect
+from synergy.commander_mechanics import (
+    PATTERN_KEY_TO_PRODUCER_SQL,
+    PATTERN_KEY_TO_CONSUMER_SQL,
+)
 
 OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
 MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
@@ -119,115 +120,87 @@ def _load_commander_ids(id_to_idx: dict[str, int]) -> set[str]:
     return embedded
 
 
-# ── Step 5: Synergy edges ─────────────────────────────────────────────────────
+# ── Step 5: Decompose-based positives ────────────────────────────────────────
 
 def _load_commander_positives(
     commander_ids: set[str],
     id_to_idx: dict[str, int],
     color_ids: dict[str, frozenset],
 ) -> dict[str, tuple[set[str], list[str]]]:
-    """Return {commander_id: (pos_card_ids, trigger_events)} from synergy_edges.
+    """Return {commander_id: (pos_card_ids, pattern_keys)} using decompose patterns.
 
-    Sources:
-    - ability_trigger WHERE card_b = commander
-        Producers of the commander's triggers (oracle text + decompose patterns).
-        Color filtering at edge-build time uses && (overlap); re-applied ⊆ here.
-    - commander_value WHERE card_a = commander
-        Payoff cards unlocked by having this commander in play (CMC-based).
-        Color filtering was skipped at build time; applied here.
-    - ability_trigger WHERE card_a = commander (tribal typeline)
-        Tribe members for tribal commanders: card_a = commander, card_b = member.
-        Written by compute_tribal_typeline_synergy with trigger_event='tribal_*'.
-        Color filtering already applied at build time via type-line membership.
+    For each commander:
+    1. Detect pattern keys from oracle_text via ORACLE_PATTERNS (_detect).
+    2. For each matched key, look up PRODUCER or CONSUMER SQL from
+       commander_mechanics.py and execute it once (results are cached by key).
+    3. Apply color-identity filter: card_ci ⊆ commander_ci.
     """
-    cmd_list = list(commander_ids)
-    # {commander_id: (set of positive card_ids, list of trigger_event labels)}
     result: dict[str, tuple[set[str], list[str]]] = {
         cid: (set(), []) for cid in commander_ids
     }
 
+    # ── Load oracle_text + type_line for all commanders ───────────────────────
+    cmd_list = list(commander_ids)
+    cmd_oracle: dict[str, tuple[str, str]] = {}
     with get_conn() as conn:
-
-        # ── ability_trigger: producers → commander ────────────────────────────
-        log.info("Loading ability_trigger edges for %d commanders…", len(cmd_list))
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT card_a::text, card_b::text,
-                       COALESCE(metadata->>'trigger_event', '') AS trigger_event
-                FROM synergy_edges
-                WHERE score_type = 'ability_trigger'
-                  AND card_b::text = ANY(%s)
+                SELECT id::text, COALESCE(oracle_text, ''), COALESCE(type_line, '')
+                FROM cards
+                WHERE id::text = ANY(%s)
             """, (cmd_list,))
-            ability_rows = cur.fetchall()
-        log.info("  %d ability_trigger rows fetched", len(ability_rows))
+            for cid, oracle_text, type_line in cur.fetchall():
+                cmd_oracle[cid] = (oracle_text, type_line)
 
-        for row in ability_rows:
-            if len(row) != 3:
-                log.warning("Unexpected ability_trigger row shape: %s", row)
-                continue
-            card_a, card_b, trigger_event = row[0], row[1], row[2]
-            if card_a not in id_to_idx or card_b not in result:
-                continue
-            cmd_ci  = color_ids.get(card_b, frozenset())
-            card_ci = color_ids.get(card_a, frozenset())
-            # Strict subset: producer must fit entirely within commander CI
-            if card_ci <= cmd_ci:
-                pos_ids, events = result[card_b]
-                pos_ids.add(card_a)
-                if trigger_event:
-                    events.append(trigger_event)
+    # ── Detect patterns for each commander ───────────────────────────────────
+    cmd_patterns: dict[str, list[str]] = {}
+    all_keys: set[str] = set()
+    for cid in commander_ids:
+        oracle_text, type_line = cmd_oracle.get(cid, ("", ""))
+        hits = _detect(oracle_text, type_line)
+        keys = [k for k, _, _ in hits]
+        cmd_patterns[cid] = keys
+        all_keys.update(keys)
 
-        # ── commander_value: commander → payoff card ──────────────────────────
-        log.info("Loading commander_value edges for %d commanders…", len(cmd_list))
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT card_a::text, card_b::text
-                FROM synergy_edges
-                WHERE score_type = 'commander_value'
-                  AND card_a::text = ANY(%s)
-            """, (cmd_list,))
-            cv_rows = cur.fetchall()
-        log.info("  %d commander_value rows fetched", len(cv_rows))
+    # ── Execute SQL for each unique key (cached) ──────────────────────────────
+    # A key may appear in PRODUCER, CONSUMER, or both — union the card sets.
+    key_cards: dict[str, set[str]] = {}
+    with get_conn() as conn:
+        for key in sorted(all_keys):
+            where_clauses = []
+            if key in PATTERN_KEY_TO_PRODUCER_SQL:
+                where_clauses.append(PATTERN_KEY_TO_PRODUCER_SQL[key])
+            if key in PATTERN_KEY_TO_CONSUMER_SQL:
+                where_clauses.append(PATTERN_KEY_TO_CONSUMER_SQL[key])
+            if not where_clauses:
+                continue
 
-        for row in cv_rows:
-            if len(row) != 2:
-                log.warning("Unexpected commander_value row shape: %s", row)
-                continue
-            card_a, card_b = row[0], row[1]
-            if card_a not in result or card_b not in id_to_idx:
-                continue
-            cmd_ci  = color_ids.get(card_a, frozenset())
-            card_ci = color_ids.get(card_b, frozenset())
-            if card_ci <= cmd_ci:
-                pos_ids, events = result[card_a]
-                pos_ids.add(card_b)
+            cards_for_key: set[str] = set()
+            for where in where_clauses:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT id::text FROM cards WHERE {where}")
+                    for (card_id,) in cur.fetchall():
+                        if card_id in id_to_idx:
+                            cards_for_key.add(card_id)
+            key_cards[key] = cards_for_key
+            log.debug("  key=%-30s  %d cards", key, len(cards_for_key))
 
-        # ── tribal typeline: commander → tribe members ────────────────────────
-        log.info("Loading tribal typeline edges for %d commanders…", len(cmd_list))
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT card_a::text, card_b::text,
-                       COALESCE(metadata->>'trigger_event', '') AS trigger_event
-                FROM synergy_edges
-                WHERE score_type = 'ability_trigger'
-                  AND card_a::text = ANY(%s)
-                  AND metadata->>'trigger_event' ~ '^tribal_'
-            """, (cmd_list,))
-            tribal_rows = cur.fetchall()
-        log.info("  %d tribal typeline rows fetched", len(tribal_rows))
+    log.info("Executed SQL for %d/%d unique pattern keys", len(key_cards), len(all_keys))
 
-        for row in tribal_rows:
-            if len(row) != 3:
-                log.warning("Unexpected tribal_typeline row shape: %s", row)
+    # ── Assign positives per commander with color filter ─────────────────────
+    for cid in commander_ids:
+        keys = cmd_patterns.get(cid, [])
+        pos_ids, key_list = result[cid]
+        cmd_ci = color_ids.get(cid, frozenset())
+
+        for key in keys:
+            if key not in key_cards:
                 continue
-            card_a, card_b, trigger_event = row[0], row[1], row[2]
-            if card_a not in result or card_b not in id_to_idx:
-                continue
-            # Tribal edges already color-filtered at build time; accept as-is
-            pos_ids, events = result[card_a]
-            pos_ids.add(card_b)
-            if trigger_event:
-                events.append(trigger_event)
+            for card_id in key_cards[key]:
+                card_ci = color_ids.get(card_id, frozenset())
+                if card_ci <= cmd_ci:
+                    pos_ids.add(card_id)
+            key_list.append(key)
 
     total_pos = sum(len(v[0]) for v in result.values())
     covered   = sum(1 for v in result.values() if v[0])
@@ -324,7 +297,7 @@ def main() -> None:
     # 3. Legal commanders (embedded subset)
     commander_ids = _load_commander_ids(id_to_idx)
 
-    # 4. Positives from synergy_edges (two bulk queries)
+    # 4. Positives from decompose patterns
     positives = _load_commander_positives(commander_ids, id_to_idx, color_ids)
 
     # 5. Build synthetic decks
@@ -335,7 +308,7 @@ def main() -> None:
     if not decks:
         raise RuntimeError(
             "No synthetic decks were built. "
-            "Ensure compute_synergy and compute_commander_value_synergy have been run."
+            "Ensure commander_mechanics.py has SQL entries for the detected pattern keys."
         )
 
     # 6. Assemble and save
@@ -349,7 +322,7 @@ def main() -> None:
         "avg_positives":  round(avg_pos, 1),
         "min_positives":  MIN_POSITIVES,
         "max_positives":  MAX_POSITIVES,
-        "source":         "synergy_edges",
+        "source":         "decompose",
         "created_at":     datetime.now(timezone.utc).isoformat(),
     }
 
