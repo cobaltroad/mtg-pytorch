@@ -59,20 +59,6 @@ def project_all(
     return np.concatenate(projected, axis=0)
 
 
-def _label_centroid(
-    label: str,
-    pos_idxs: list[int],
-    card_trigger_events: list[str],
-    proj_t: torch.Tensor,
-) -> torch.Tensor | None:
-    """Return L2-normalised centroid for cards matching label, or None if empty."""
-    idxs = [idx for idx, te in zip(pos_idxs, card_trigger_events) if te == label]
-    if not idxs:
-        return None
-    centroid = proj_t[idxs].mean(dim=0)
-    return F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
-
-
 def compute_centroid_expansions(
     decks: list[dict],
     proj: np.ndarray,
@@ -83,13 +69,22 @@ def compute_centroid_expansions(
 ) -> int:
     """Annotate each deck dict in-place with centroid_expansion_idxs.
 
-    Computes one centroid per archetype label, collects the top-K candidates
-    from each, then unions and re-sorts by best score across all labels.
-    This ensures minority archetype dimensions aren't drowned out by the
-    largest trigger_event bucket.
+    Groups positive-set cards by their card_trigger_events value and computes
+    one centroid per distinct trigger_event.  Candidates are the union of top-K
+    from each centroid, keeping the best score per card across all centroids.
+
+    Using trigger_event groups (from synergy_edges) rather than archetype labels
+    (from decompose_commanders) avoids vocabulary mismatch between the two
+    systems, and ensures the centroid vocabulary matches what Phase 2 was
+    trained on.
+
+    Falls back to a single centroid over all positives when card_trigger_events
+    is absent (old artifact) or all trigger_events are empty.
 
     Returns the number of commanders that received ≥1 expansion candidate.
     """
+    from collections import defaultdict
+
     card_ci = [frozenset(color_identities.get(cid, [])) for cid in card_ids]
     proj_t  = torch.from_numpy(proj)   # (N, D) float32, L2-normalised
     k_store = min(top_k, cap)
@@ -104,19 +99,19 @@ def compute_centroid_expansions(
             deck["centroid_expansion_idxs"] = []
             continue
 
-        archetype_labels = [
-            s.strip() for s in deck.get("archetype", "").split(",") if s.strip()
-        ]
-        card_te = deck.get("card_trigger_events", [""] * len(pos_idxs))
+        card_te = deck.get("card_trigger_events", [])
         excluded = set(pos_idxs) | {cmd_idx}
 
-        # One centroid per archetype label; fall back to a single global centroid
-        # if card_trigger_events is absent or no label matches.
+        # Group by trigger_event; skip empty-string entries (commander_value payoffs)
+        te_groups: dict[str, list[int]] = defaultdict(list)
+        for idx, te in zip(pos_idxs, card_te):
+            if te:
+                te_groups[te].append(idx)
+
         centroids: list[torch.Tensor] = []
-        for label in archetype_labels:
-            c = _label_centroid(label, pos_idxs, card_te, proj_t)
-            if c is not None:
-                centroids.append(c)
+        for idxs in te_groups.values():
+            c = F.normalize(proj_t[idxs].mean(dim=0).unsqueeze(0), dim=1).squeeze(0)
+            centroids.append(c)
         if not centroids:
             # Fallback: single centroid over all positives
             c = F.normalize(proj_t[pos_idxs].mean(dim=0).unsqueeze(0), dim=1).squeeze(0)

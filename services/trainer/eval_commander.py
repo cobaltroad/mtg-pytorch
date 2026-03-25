@@ -124,25 +124,29 @@ def main() -> None:
 
     pos_idxs = deck["card_idxs"]
     card_te  = deck.get("card_trigger_events", [])
-    archetype_labels = [s.strip() for s in archetype.split(",") if s.strip()]
 
-    if card_te:
-        label_counts = {
-            label: sum(1 for te in card_te if te == label)
-            for label in archetype_labels
-        }
-        basis_desc = "  ".join(f"{lb}({n})" for lb, n in label_counts.items() if n)
-        print(f"  Centroid basis : one per archetype label — {basis_desc}")
+    # Group positive-set cards by their actual trigger_event values.
+    # Skips empty-string entries (commander_value payoffs have no trigger_event).
+    # This avoids vocabulary mismatch between decompose_commanders archetype
+    # labels and the synergy_edges trigger_event strings used during Phase 2.
+    from collections import defaultdict
+    te_groups: dict[str, list[int]] = defaultdict(list)
+    for idx, te in zip(pos_idxs, card_te):
+        if te:
+            te_groups[te].append(idx)
+
+    if te_groups:
+        basis_desc = "  ".join(f"{te}({len(idxs)})" for te, idxs in sorted(te_groups.items()))
+        print(f"  Centroid basis : one per trigger_event — {basis_desc}")
+    elif card_te:
+        print("  Centroid basis : all positives (no non-empty trigger_events in positive set)")
     else:
         print("  Centroid basis : all positives (no card_trigger_events — re-export artifact)")
     print()
 
-    if args.show_basis and card_te:
-        for label in archetype_labels:
-            idxs = [idx for idx, te in zip(pos_idxs, card_te) if te == label]
-            if not idxs:
-                continue
-            print(f"  [{label}]")
+    if args.show_basis:
+        for te, idxs in sorted(te_groups.items()):
+            print(f"  [{te}]")
             for idx in idxs[:20]:
                 cid  = card_ids[idx]
                 meta = card_meta.get(cid, {})
@@ -164,13 +168,11 @@ def main() -> None:
     cmd_ci   = frozenset(deck["color_identity"])
     card_ci  = [frozenset(color_ids.get(cid, [])) for cid in card_ids]
 
-    # One centroid per archetype label; union of top-K, best score wins per card
+    # One centroid per trigger_event group; union of top-K, best score wins per card
     centroids: list[torch.Tensor] = []
-    for label in archetype_labels:
-        idxs = [idx for idx, te in zip(pos_idxs, card_te) if te == label] if card_te else []
-        if idxs:
-            c = proj_t[idxs].mean(dim=0)
-            centroids.append(F.normalize(c.unsqueeze(0), dim=1).squeeze(0))
+    for idxs in te_groups.values():
+        c = proj_t[idxs].mean(dim=0)
+        centroids.append(F.normalize(c.unsqueeze(0), dim=1).squeeze(0))
     if not centroids:
         c = proj_t[pos_idxs].mean(dim=0)
         centroids.append(F.normalize(c.unsqueeze(0), dim=1).squeeze(0))
