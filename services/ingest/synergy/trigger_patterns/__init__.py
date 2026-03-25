@@ -1,0 +1,16 @@
+import re
+
+from .attack import TRIGGER_PATTERNS as _attack_patterns
+from .counter import TRIGGER_PATTERNS as _counter_patterns
+
+# Aggregated list of all trigger patterns.
+# Tuple shape: (key, label, pattern)
+#   key     — pattern key, used as trigger_event in card_abilities
+#   label   — human-readable name, used as ability_name
+#   pattern — compiled re.Pattern applied to oracle_text via pattern.search()
+TRIGGER_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+    *_attack_patterns,
+    *_counter_patterns,
+]
+
+__all__ = ["TRIGGER_PATTERNS"]

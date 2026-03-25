@@ -28,9 +28,9 @@ from land_tags import annotate_land_oracle  # noqa: E402
 from synergy import (  # noqa: E402
     ROLE_PATTERNS,
     LAND_ROLE_PATTERNS,
-    TRIGGER_PATTERNS,
     is_land_card,
 )
+from synergy.trigger_patterns import TRIGGER_PATTERNS  # noqa: E402
 
 KEYWORD_RE = re.compile(
     r"\b(flying|trample|haste|vigilance|deathtouch|lifelink|reach|hexproof|"
@@ -185,14 +185,14 @@ async def tag_abilities(rescan: bool = False) -> None:
                     "raw_text": kw,
                 })
 
-            for pattern, name, event in TRIGGER_PATTERNS:
-                m = re.search(pattern, oracle_text, re.IGNORECASE)
+            for key, name, pattern in TRIGGER_PATTERNS:
+                m = pattern.search(oracle_text)
                 if m:
                     inserts.append({
                         "card_id": str(card_id),
                         "ability_type": "triggered" if "trigger" in name else ("static" if "lord" in name or "anthem" in name else "activated"),
                         "ability_name": name,
-                        "trigger_event": event,
+                        "trigger_event": key,
                         "effect_class": None,
                         "raw_text": m.group(0),
                     })
@@ -229,9 +229,9 @@ async def tag_abilities(rescan: bool = False) -> None:
     # newly ingested cards during Pass 1 are still detected as gaps (they won't
     # have rows on any *existing* cards).
     new_events = [
-        (pattern, name, event)
-        for pattern, name, event in TRIGGER_PATTERNS
-        if event and event not in existing_events
+        (key, name, pattern)
+        for key, name, pattern in TRIGGER_PATTERNS
+        if key not in existing_events
     ]
 
     if new_events:
@@ -251,14 +251,14 @@ async def tag_abilities(rescan: bool = False) -> None:
         async with Session() as db:
             for card_id, oracle_text in tqdm(all_cards):
                 inserts = []
-                for pattern, name, event in new_events:
-                    m = re.search(pattern, oracle_text, re.IGNORECASE)
+                for key, name, pattern in new_events:
+                    m = pattern.search(oracle_text)
                     if m:
                         inserts.append({
                             "card_id": str(card_id),
                             "ability_type": "triggered" if "trigger" in name else ("static" if "lord" in name or "anthem" in name else "activated"),
                             "ability_name": name,
-                            "trigger_event": event,
+                            "trigger_event": key,
                             "effect_class": None,
                             "raw_text": m.group(0)[:200],
                         })
