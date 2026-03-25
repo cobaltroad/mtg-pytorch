@@ -13,4 +13,15 @@ TRIGGER_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     *_counter_patterns,
 ]
 
-__all__ = ["TRIGGER_PATTERNS"]
+# Maps a commander-level mechanic family key to all trigger_event keys that
+# belong to it.  When a commander needs "attack_trigger", the deck wants cards
+# tagged with ANY of the patterns in the attack family.
+#
+# Convention: the family key matches the triggering module's filename stem
+# suffixed with "_trigger" (attack.py → "attack_trigger").
+PATTERN_FAMILIES: dict[str, list[str]] = {
+    "attack_trigger":  [key for key, _, _ in _attack_patterns],
+    "counter_trigger": [key for key, _, _ in _counter_patterns],
+}
+
+__all__ = ["TRIGGER_PATTERNS", "PATTERN_FAMILIES"]

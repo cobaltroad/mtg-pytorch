@@ -25,6 +25,24 @@ Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
 
 from __future__ import annotations
 
+from synergy.trigger_patterns import PATTERN_FAMILIES
+
+
+def _family_sql(family_key: str) -> str:
+    """Generate SQL that selects cards tagged with any pattern in *family_key*.
+
+    Queries card_abilities.trigger_event so the result is driven entirely by
+    what tag.py wrote — no oracle_text LIKE chains needed here.
+    """
+    keys = PATTERN_FAMILIES[family_key]
+    in_list = ", ".join(f"'{k}'" for k in keys)
+    return (
+        f"card_id IN ("
+        f"  SELECT card_id FROM card_abilities"
+        f"  WHERE trigger_event IN ({in_list})"
+        f")"
+    )
+
 
 PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
 
@@ -66,27 +84,12 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # cards that reward this: combat-damage payoffs, trample enablers (deathtouch
     # + trample = one damage kills, rest tramples), and cards that care about
     # creatures dealing combat damage or connecting.
-    "attack_trigger": (
-        "lower(type_line) LIKE '%creature%'"
-        " AND ("
-        "   OR lower(oracle_text) LIKE '%whenever%attacks%'"
-        ")"
-    ),
+    "attack_trigger": _family_sql("attack_trigger"),
 
     # ── PRODUCER: Tyvar produces +1/+1 counters ───────────────────────────────
     # "put a number of +1/+1 counters on it equal to the amount of mana"
     # Tyvar grows every mana dork every turn.  The deck wants cards that amplify
     # counter accumulation: counter doublers, proliferate, cards that care about
     # +1/+1 counters or creatures with large power (which the counters build).
-    "counter_trigger": (
-        "lower(type_line) NOT LIKE '%land%'"
-        " AND ("
-        "   lower(oracle_text) LIKE '%proliferate%'"
-        "   OR lower(oracle_text) LIKE '%double the number of counters%'"
-        "   OR lower(oracle_text) LIKE '%one additional +1/+1 counter%'"
-        "   OR lower(oracle_text) LIKE '%an additional +1/+1 counter%'"
-        "   OR lower(oracle_text) LIKE '%for each +1/+1 counter%'"
-        "   OR lower(oracle_text) LIKE '%number of +1/+1 counters%'"
-        ")"
-    ),
+    "counter_trigger": _family_sql("counter_trigger"),
 }

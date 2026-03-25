@@ -29,6 +29,8 @@ import psycopg2
 import psycopg2.extras
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from regex_utils import p  # noqa: E402
 from synergy.commander_mechanics import (
     PATTERN_KEY_TO_CONSUMER_SQL,
     PATTERN_KEY_TO_PRODUCER_SQL,
@@ -48,278 +50,259 @@ DATABASE_URL = (
 ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     # ETB trigger
     ("etb_trigger", "ETB trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+"
          r"(?:(?:a |an |another |one or more )?(?:creature|permanent|token|land|artifact|enchantment)"
          r".{0,40}|.{2,50}?)"
          r"enters(?:\s+the battlefield)?",
-         re.I,
      )),
 
     # Spell cast — creature
     ("cast_trigger_creature", "Creature cast trigger",
-     re.compile(r"when(?:ever)?\s+you cast (?:a |an )?creature", re.I)),
+     p(r"when(?:ever)?\s+you cast (?:a |an )?creature")),
 
     # Spell cast — instant/sorcery
     ("cast_trigger_instant_sorcery", "Instant/sorcery cast trigger",
-     re.compile(r"when(?:ever)?\s+you cast (?:a |an )?(?:instant|sorcery|noncreature)", re.I)),
+     p(r"when(?:ever)?\s+you cast (?:a |an )?(?:instant|sorcery|noncreature)")),
 
     # Spell cast — enchantment
     ("cast_trigger_enchantment", "Enchantment cast trigger",
-     re.compile(r"when(?:ever)?\s+you cast (?:a |an )?enchantment", re.I)),
+     p(r"when(?:ever)?\s+you cast (?:a |an )?enchantment")),
 
     # Spell cast — artifact
     ("cast_trigger_artifact", "Artifact cast trigger",
-     re.compile(r"when(?:ever)?\s+you cast (?:a |an )?artifact", re.I)),
+     p(r"when(?:ever)?\s+you cast (?:a |an )?artifact")),
 
     # Spell cast — historic
     ("cast_trigger_historic", "Historic spell cast trigger",
-     re.compile(r"when(?:ever)?\s+you cast (?:a |an )?historic", re.I)),
+     p(r"when(?:ever)?\s+you cast (?:a |an )?historic")),
 
     # Spell cast — color-based
     ("cast_trigger_colored", "Color-based cast trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+you cast (?:a |an )?"
          r"(?:red|blue|green|white|black|colorless|multicolored|monocolored)"
          r"(?:\s+or\s+(?:red|blue|green|white|black|colorless|multicolored|artifact|creature))?"
          r"\s+spell",
-         re.I,
      )),
 
     # Group hug
     ("group_hug", "Group hug",
-     re.compile(
+     p(
          r"each player (?:draws?|may draw|may put)"
          r"|each player's draw step.{0,50}draws?"
          r"|\bparley\b",
-         re.I,
      )),
 
     # Poison / infect / toxic
     ("poison_infect", "Poison / infect / toxic",
-     re.compile(r"\binfect\b|\bpoison counter|\btoxic\b", re.I)),
+     p(r"\binfect\b|\bpoison counter|\btoxic\b")),
 
     # Equipment matters
     ("equipment_matters", "Equipment matters",
-     re.compile(
+     p(
          r"equipped creature"
          r"|equipment (?:you control|attached|spell|token|are)"
          r"|target equipment"
          r"|aura or equipment"
          r"|aura,?\s+and equipment"
          r"|aura,\s+equipment",
-         re.I,
      )),
 
     # Artifact count
     ("artifact_count", "Artifact count matters",
-     re.compile(r"for each (?:tapped )?artifact you control|artifacts you control", re.I)),
+     p(r"for each (?:tapped )?artifact you control|artifacts you control")),
 
     # Artifact creatures
     ("artifact_creatures", "Artifact creatures matter",
-     re.compile(r"artifact creatures? you control", re.I)),
+     p(r"artifact creatures? you control")),
 
     # Death trigger
     ("death_trigger", "Death trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+(?:a |an |another |one or more )?(?:nontoken )?creature"
          r".{0,40}dies",
-         re.I,
      )),
 
     # Graveyard from play
     ("graveyard_from_play", "Permanent to graveyard trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+(?:a |an )?(?:nontoken )?permanent.{0,40}"
          r"(?:put into|goes to|enters?) (?:a |your )?graveyard",
-         re.I,
      )),
 
     # Attack trigger
     ("attack_trigger", "Attack trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+"
          r"(?:this creature|one or more creatures you control|a creature you control|you"
          r"|.{2,50}?)"
          r"\s+attacks?(?:\s+alone)?",
-         re.I,
      )),
 
     # Combat damage to player
     ("combat_damage_to_player", "Combat damage to player",
-     re.compile(r"deals? combat damage to (?:a |an )?(?:player|opponent)", re.I)),
+     p(r"deals? combat damage to (?:a |an )?(?:player|opponent)")),
 
     # Madness payoff
     ("madness_payoff", "Madness payoff",
-     re.compile(r"\bmadness\b|for its madness cost", re.I)),
+     p(r"\bmadness\b|for its madness cost")),
 
     # Discard outlet
     ("discard_outlet", "Discard outlet",
-     re.compile(r"discard (?:a |one or more )?(?:card|cards)", re.I)),
+     p(r"discard (?:a |one or more )?(?:card|cards)")),
 
     # Sacrifice payoff
     ("sacrifice_payoff", "Sacrifice payoff",
-     re.compile(
+     p(
          r"when(?:ever)?\s+you sacrifice"
          r"|sacrifice (?:a |an |another )?(?:creature|permanent)",
-         re.I,
      )),
 
     # Landfall
     ("landfall", "Landfall",
-     re.compile(r"\blandfall\b|when(?:ever)?\s+(?:a |one or more )?land.{0,20}enters", re.I)),
+     p(r"\blandfall\b|when(?:ever)?\s+(?:a |one or more )?land.{0,20}enters")),
 
     # Counter placement
     ("counter_placement", "Counter placement",
-     re.compile(r"put (?:a |one or more |an? )?\+1/\+1 counter", re.I)),
+     p(r"put (?:a |one or more |an? )?\+1/\+1 counter")),
 
     # Lifegain trigger
     ("lifegain_trigger", "Life gain trigger",
-     re.compile(r"when(?:ever)?\s+you (?:gain|gained) life", re.I)),
+     p(r"when(?:ever)?\s+you (?:gain|gained) life")),
 
     # Draw trigger
     ("draw_trigger", "Draw trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+you draw (?:a card|cards|your (?:first|second|third) card)",
-         re.I,
      )),
 
     # Token trigger
     ("token_trigger", "Token creation trigger",
-     re.compile(
+     p(
          r"when(?:ever)?\s+(?:one or more )?tokens? (?:enters?|(?:is |are )?created|(?:is |are )?put)",
-         re.I,
      )),
 
     # Trigger doubling
     ("trigger_doubling", "Trigger doubling",
-     re.compile(r"triggers? an additional time|triggers? twice", re.I)),
+     p(r"triggers? an additional time|triggers? twice")),
 
     # Proliferate
     ("proliferate_matters", "Proliferate",
-     re.compile(r"\bproliferate\b", re.I)),
+     p(r"\bproliferate\b")),
 
     # Second spell
     ("second_spell", "Second spell matters",
-     re.compile(
+     p(
          r"second spell (?:each turn|you cast this turn)"
          r"|when(?:ever)?\s+you cast your second",
-         re.I,
      )),
 
     # Punisher
     ("punisher", "Punisher effect",
-     re.compile(
+     p(
          r"each opponent (?:loses? \d+ life|takes? \d+ damage)"
          r"|deals? \d+ damage to each opponent",
-         re.I,
      )),
 
     # Weenie matters
     ("weenie_matters", "Weenie matters",
-     re.compile(
+     p(
          r"power (?:of )?(?:1|2|one|two) or less"
          r"|creatures? with power (?:1|2|one|two) or less",
-         re.I,
      )),
 
     # Unearth / encore
     ("unearth_encore", "Unearth / encore / temporary reanimation",
-     re.compile(
+     p(
          r"\bunearth\b|\bencore\b"
          r"|(?:exile|sacrifice) (?:it|them) at the beginning of the next end step",
-         re.I,
      )),
 
     # Graveyard payoff
     ("graveyard_payoff", "Graveyard payoff",
-     re.compile(
+     p(
          r"from (?:your |a |the )?graveyard.{0,30}(?:cast|play|battlefield)"
          r"|when.{0,30}put into (?:a |your )?graveyard from",
-         re.I,
      )),
 
     # Keyword lord
     ("keyword_lord", "Keyword grant (lord)",
-     re.compile(
+     p(
          r"(?:creatures? you control|other [a-z\s]+you control).{0,40}"
          r"(?:gain|have|get) (?:flying|trample|haste|menace|hexproof|lifelink|"
          r"deathtouch|reach|vigilance|indestructible|first strike|double strike)",
-         re.I,
      )),
 
     # Cycling trigger
     ("cycling_trigger", "Cycling trigger",
-     re.compile(r"when(?:ever)?\s+(?:a player )?(?:cycles?|discards?) (?:a |this )?card", re.I)),
+     p(r"when(?:ever)?\s+(?:a player )?(?:cycles?|discards?) (?:a |this )?card")),
 
     # Counter doubler
     ("counter_doubler", "Counter doubler",
-     re.compile(
+     p(
          r"(?:double|twice) the (?:number of )?(?:counters?|\+1/\+1)"
          r"|one additional (?:\+1/\+1 )?counter",
-         re.I,
      )),
 
     # Extra combat
     ("extra_combat", "Extra combat phase",
-     re.compile(
+     p(
          r"additional combat phase"
          r"|second combat phase"
          r"|you may attack again this turn"
          r"|there is an additional combat",
-         re.I,
      )),
 
     # Opponent restriction (stax)
     ("opponent_restriction", "Opponent restriction",
-     re.compile(r"opponents? can't", re.I)),
+     p(r"opponents? can't")),
 
     # Activated ability restriction (stax)
     ("activated_restriction", "Activated ability restriction",
-     re.compile(r"activated abilit.{0,40}can't be activated", re.I)),
+     p(r"activated abilit.{0,40}can't be activated")),
 
     # Tax effect (stax)
     ("tax_effect", "Tax effect",
-     re.compile(r"spells?.{0,30}opponents?.{0,30}cost.{0,20}more", re.I)),
+     p(r"spells?.{0,30}opponents?.{0,30}cost.{0,20}more")),
 
     # Enters tapped (stax)
     ("enters_tapped_opponent", "Opponents' permanents enter tapped",
-     re.compile(
+     p(
          r"(?:permanents?|lands?).{0,40}(?:opponents?|other players?).{0,30}enter.{0,15}tapped",
-         re.I,
      )),
 
     # Monarch
     ("monarch", "Monarch mechanic",
-     re.compile(r"\bmonarch\b", re.I)),
+     p(r"\bmonarch\b")),
 
     # Initiative
     ("initiative", "Initiative mechanic",
-     re.compile(r"\binitiative\b", re.I)),
+     p(r"\binitiative\b")),
 
     # Goad
     ("goad", "Goad",
-     re.compile(r"\bgoad\b", re.I)),
+     p(r"\bgoad\b")),
 
     # Forced attack
     ("forced_attack", "Forced attack each combat",
-     re.compile(r"attacks? each combat if able|all creatures attack each combat", re.I)),
+     p(r"attacks? each combat if able|all creatures attack each combat")),
 
     # Cascade / discover
     ("cascade", "Cascade / discover",
-     re.compile(r"\bcascade\b|\bdiscover\b", re.I)),
+     p(r"\bcascade\b|\bdiscover\b")),
 
     # Mana ability (Tyvar-style: rewards creatures with mana abilities)
     ("mana_dork", "Mana ability matters",
-     re.compile(r"mana ability of this creature|mana ability", re.I)),
+     p(r"mana ability of this creature|mana ability")),
 
     # Tribal — elf (type-line check handled separately; oracle fallback here)
     ("tribal_elf", "Elf tribal",
-     re.compile(r"\belves?\b", re.I)),
+     p(r"\belves?\b")),
 
     # Counter trigger (Tyvar-style: puts counters equal to mana produced)
     ("counter_trigger", "Counter trigger (mana-based)",
-     re.compile(r"\+1/\+1 counters?.{0,30}equal to.{0,30}mana", re.I)),
+     p(r"\+1/\+1 counters?.{0,30}equal to.{0,30}mana")),
 ]
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
