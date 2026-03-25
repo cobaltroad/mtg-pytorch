@@ -1,6 +1,6 @@
 import re
 
-from ._common import p
+from regex_utils import p
 
 TRIGGER_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("proliferate",         "Keyword: Proliferate",             p(r"proliferate")),
