@@ -59,22 +59,18 @@ def project_all(
     return np.concatenate(projected, axis=0)
 
 
-def _archetype_indices(
+def _label_centroid(
+    label: str,
     pos_idxs: list[int],
     card_trigger_events: list[str],
-    archetype_labels: set[str],
-) -> list[int]:
-    """Return the subset of pos_idxs whose trigger_event is in archetype_labels.
-
-    Falls back to all pos_idxs if the filtered set would be empty (e.g. an old
-    artifact without card_trigger_events, or a commander whose archetype labels
-    don't overlap with any stored trigger_events).
-    """
-    filtered = [
-        idx for idx, te in zip(pos_idxs, card_trigger_events)
-        if te in archetype_labels
-    ]
-    return filtered if filtered else pos_idxs
+    proj_t: torch.Tensor,
+) -> torch.Tensor | None:
+    """Return L2-normalised centroid for cards matching label, or None if empty."""
+    idxs = [idx for idx, te in zip(pos_idxs, card_trigger_events) if te == label]
+    if not idxs:
+        return None
+    centroid = proj_t[idxs].mean(dim=0)
+    return F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
 
 
 def compute_centroid_expansions(
@@ -86,6 +82,11 @@ def compute_centroid_expansions(
     cap: int,
 ) -> int:
     """Annotate each deck dict in-place with centroid_expansion_idxs.
+
+    Computes one centroid per archetype label, collects the top-K candidates
+    from each, then unions and re-sorts by best score across all labels.
+    This ensures minority archetype dimensions aren't drowned out by the
+    largest trigger_event bucket.
 
     Returns the number of commanders that received ≥1 expansion candidate.
     """
@@ -103,30 +104,37 @@ def compute_centroid_expansions(
             deck["centroid_expansion_idxs"] = []
             continue
 
-        # Filter to archetype-matched cards before computing centroid
-        archetype_labels = {
+        archetype_labels = [
             s.strip() for s in deck.get("archetype", "").split(",") if s.strip()
-        }
-        card_te = deck.get("card_trigger_events", [""] * len(pos_idxs))
-        arch_idxs = _archetype_indices(pos_idxs, card_te, archetype_labels)
-
-        # Mean of archetype-subset embeddings, then L2-normalise
-        centroid = proj_t[arch_idxs].mean(dim=0)
-        centroid = F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
-
-        # Cosine similarity to all cards
-        sims = (proj_t @ centroid).numpy()   # (N,) float32
-
-        excluded = set(pos_idxs)
-        excluded.add(cmd_idx)
-
-        candidates = [
-            (float(sims[i]), i)
-            for i in range(len(card_ids))
-            if i not in excluded and card_ci[i] <= cmd_ci
         ]
-        candidates.sort(reverse=True)
-        deck["centroid_expansion_idxs"] = [idx for _, idx in candidates[:k_store]]
+        card_te = deck.get("card_trigger_events", [""] * len(pos_idxs))
+        excluded = set(pos_idxs) | {cmd_idx}
+
+        # One centroid per archetype label; fall back to a single global centroid
+        # if card_trigger_events is absent or no label matches.
+        centroids: list[torch.Tensor] = []
+        for label in archetype_labels:
+            c = _label_centroid(label, pos_idxs, card_te, proj_t)
+            if c is not None:
+                centroids.append(c)
+        if not centroids:
+            # Fallback: single centroid over all positives
+            c = F.normalize(proj_t[pos_idxs].mean(dim=0).unsqueeze(0), dim=1).squeeze(0)
+            centroids.append(c)
+
+        # Union of top-K per centroid; keep best score per card across centroids
+        best_score: dict[int, float] = {}
+        for centroid in centroids:
+            sims = (proj_t @ centroid).numpy()
+            for i in range(len(card_ids)):
+                if i in excluded or card_ci[i] > cmd_ci:
+                    continue
+                s = float(sims[i])
+                if s > best_score.get(i, -1.0):
+                    best_score[i] = s
+
+        candidates = sorted(best_score.items(), key=lambda x: -x[1])
+        deck["centroid_expansion_idxs"] = [idx for idx, _ in candidates[:k_store]]
 
         if candidates:
             covered += 1

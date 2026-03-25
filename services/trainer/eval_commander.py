@@ -120,19 +120,18 @@ def main() -> None:
     print(f"  Archetype      : {archetype}")
     print(f"  Positive set   : {len(deck['card_idxs'])} cards")
 
-    # Determine archetype-filtered subset
-    archetype_labels = {s.strip() for s in archetype.split(",") if s.strip()}
     pos_idxs = deck["card_idxs"]
     card_te  = deck.get("card_trigger_events", [])
+    archetype_labels = [s.strip() for s in archetype.split(",") if s.strip()]
+
     if card_te:
-        arch_idxs = [
-            idx for idx, te in zip(pos_idxs, card_te)
-            if te in archetype_labels
-        ] or pos_idxs
-        print(f"  Centroid basis : {len(arch_idxs)} archetype-matched cards"
-              f" (trigger_events: {', '.join(sorted(archetype_labels))})")
+        label_counts = {
+            label: sum(1 for te in card_te if te == label)
+            for label in archetype_labels
+        }
+        basis_desc = "  ".join(f"{lb}({n})" for lb, n in label_counts.items() if n)
+        print(f"  Centroid basis : one per archetype label — {basis_desc}")
     else:
-        arch_idxs = pos_idxs
         print("  Centroid basis : all positives (no card_trigger_events — re-export artifact)")
     print()
 
@@ -144,22 +143,32 @@ def main() -> None:
     proj   = project_all(emb_np, model, device)  # (N, D) L2-normalised
     proj_t = torch.from_numpy(proj)
 
-    # Archetype centroid
-    centroid = proj_t[arch_idxs].mean(dim=0)
-    centroid = F.normalize(centroid.unsqueeze(0), dim=1).squeeze(0)  # (D,)
-
-    sims = (proj_t @ centroid).numpy()   # (N,)
-
     excluded = set(pos_idxs) | {cmd_idx}
     cmd_ci   = frozenset(deck["color_identity"])
     card_ci  = [frozenset(color_ids.get(cid, [])) for cid in card_ids]
 
-    candidates = [
-        (float(sims[i]), i)
-        for i in range(len(card_ids))
-        if i not in excluded and card_ci[i] <= cmd_ci
-    ]
-    candidates.sort(reverse=True)
+    # One centroid per archetype label; union of top-K, best score wins per card
+    centroids: list[torch.Tensor] = []
+    for label in archetype_labels:
+        idxs = [idx for idx, te in zip(pos_idxs, card_te) if te == label] if card_te else []
+        if idxs:
+            c = proj_t[idxs].mean(dim=0)
+            centroids.append(F.normalize(c.unsqueeze(0), dim=1).squeeze(0))
+    if not centroids:
+        c = proj_t[pos_idxs].mean(dim=0)
+        centroids.append(F.normalize(c.unsqueeze(0), dim=1).squeeze(0))
+
+    best_score: dict[int, float] = {}
+    for centroid in centroids:
+        sims = (proj_t @ centroid).numpy()
+        for i in range(len(card_ids)):
+            if i in excluded or card_ci[i] > cmd_ci:
+                continue
+            s = float(sims[i])
+            if s > best_score.get(i, -1.0):
+                best_score[i] = s
+
+    candidates = sorted(best_score.items(), key=lambda x: -x[1])
 
     top = args.top
     print(f"{'─' * 76}")
@@ -167,7 +176,7 @@ def main() -> None:
     print(f"{'─' * 76}")
     print(f"  {'#':>3}  {'Score':>6}  {'Name':<32}  Type")
     print(f"  {'─'*3}  {'─'*6}  {'─'*32}  {'─'*28}")
-    for rank, (score, idx) in enumerate(candidates[:top], 1):
+    for rank, (idx, score) in enumerate(candidates[:top], 1):
         cid   = card_ids[idx]
         meta  = card_meta.get(cid, {})
         name  = (meta.get("name") or cid)[:31]
