@@ -62,20 +62,8 @@ are needed when a sub-module is extended.  Commander-specific maps
 
 from __future__ import annotations
 
-from . import archetypes, commander_value, commander_mechanics, events, lifegain, roles, tribal, utility, xmage
-
-# Exported surface consumed by pipeline.py
-TRIBES = tribal.TRIBES
-ALL_TYPES_SQL = tribal.ALL_TYPES_SQL
-
-TRIGGER_PATTERNS: list[tuple[str, str, str]] = [
-    *events.TRIGGER_PATTERNS,
-    *lifegain.TRIGGER_PATTERNS,
-    *archetypes.TRIGGER_PATTERNS,
-    *tribal.TRIGGER_PATTERNS,
-    *utility.TRIGGER_PATTERNS,
-    *commander_value.TRIGGER_PATTERNS,
-]
+# from . import archetypes, commander_value, commander_mechanics, events, lifegain, roles, tribal, utility, xmage
+from . import commander_mechanics
 
 PRODUCER_MAP: dict[str, str] = {
     # Commander-specific mechanics (goad, extra_combat, monarch, etc.) — SQL
@@ -85,11 +73,11 @@ PRODUCER_MAP: dict[str, str] = {
     **commander_mechanics.PATTERN_KEY_TO_PRODUCER_SQL,
     # Core synergy sub-modules (take precedence over commander mechanics for
     # any pattern keys that overlap, e.g. equipment_matters, proliferate_matters).
-    **events.PRODUCER_MAP,
-    **lifegain.PRODUCER_MAP,
+    #TODO: **events.PRODUCER_MAP,
+    #TODO: **lifegain.PRODUCER_MAP,
     # archetypes uses CARD_SYNERGY_MAP / score_type='card_synergy' — not merged here.
-    **tribal.PRODUCER_MAP,
-    **utility.PRODUCER_MAP,
+    #TODO: **tribal.PRODUCER_MAP,
+    #TODO: **utility.PRODUCER_MAP,
     # commander_value producers are NOT merged into PRODUCER_MAP — they use a
     # dedicated pipeline stage (compute_commander_value_synergy) that writes
     # score_type='commander_value' edges with per-event scores, rather than
@@ -98,31 +86,22 @@ PRODUCER_MAP: dict[str, str] = {
     # card_abilities so the dedicated stage can cross-join against them.
 }
 
-CARD_SYNERGY_MAP: dict[str, str] = archetypes.CARD_SYNERGY_MAP
+#TODO: CARD_SYNERGY_MAP: dict[str, str] = archetypes.CARD_SYNERGY_MAP
 
-ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
-LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
-is_land_card = roles.is_land_card
+#TODO: ROLE_PATTERNS: list[tuple[str, str]] = roles.ROLE_PATTERNS
+#TODO: LAND_ROLE_PATTERNS: list[tuple[str, str]] = roles.LAND_ROLE_PATTERNS
+#TODO: is_land_card = roles.is_land_card
 
 # Compositional training path: XMage class name → producer SQL.
 # Used by compute_synergy_xmage() to build score_type='xmage_ability_trigger'
 # edges without the lossy trigger_event translation layer.
-XMAGE_PRODUCER_MAP: dict[str, str] = xmage.XMAGE_PRODUCER_MAP
+#TODO: XMAGE_PRODUCER_MAP: dict[str, str] = xmage.XMAGE_PRODUCER_MAP
 
 # SpellCastControllerTriggeredAbility sub-bucket → producer SQL.
 # Used by compute_synergy_xmage() to select type-specific producers for each
 # refined trigger_event (e.g. "enchantment_cast" → enchantment producers only).
-SPELLCAST_TRIGGER_PRODUCER_MAP: dict[str, str] = xmage.SPELLCAST_TRIGGER_PRODUCER_MAP
+#TODO: SPELLCAST_TRIGGER_PRODUCER_MAP: dict[str, str] = xmage.SPELLCAST_TRIGGER_PRODUCER_MAP
 
 __all__ = [
-    "TRIGGER_PATTERNS",
-    "PRODUCER_MAP",
-    "TRIBES",
-    "ALL_TYPES_SQL",
-    "ROLE_PATTERNS",
-    "LAND_ROLE_PATTERNS",
-    "is_land_card",
-    "XMAGE_PRODUCER_MAP",
-    "SPELLCAST_TRIGGER_PRODUCER_MAP",
-    "CARD_SYNERGY_MAP",
+    "PRODUCER_MAP"
 ]

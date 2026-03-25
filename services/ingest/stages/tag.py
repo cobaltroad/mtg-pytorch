@@ -23,7 +23,10 @@ log = logging.getLogger(__name__)
 
 from land_tags import annotate_land_oracle  # noqa: E402
 
-from synergy.trigger_patterns import TRIGGER_PATTERNS  # noqa: E402
+from synergy.trigger_patterns import TRIGGER_PATTERNS as _trigger_patterns  # noqa: E402
+from synergy.activated_ability import ACTIVATED_PATTERNS as _activated_patterns  # noqa: E402
+
+TRIGGER_PATTERNS = [*_trigger_patterns, *_activated_patterns]
 
 
 def _card_text(row) -> str:
@@ -160,6 +163,15 @@ async def tag_abilities(rescan: bool = False) -> None:
             "Full rescan" if rescan else "Gap detection",
             len(new_events), [k for k, _, _ in new_events],
         )
+        if rescan:
+            event_keys = [k for k, _, _ in new_events]
+            async with Session() as db:
+                await db.execute(
+                    text("DELETE FROM card_abilities WHERE trigger_event = ANY(:keys)"),
+                    {"keys": event_keys},
+                )
+                await db.commit()
+            log.info("  Rescan: deleted existing rows for %d event(s)", len(event_keys))
         async with Session() as db:
             all_cards_result = await db.execute(text("""
                 SELECT c.id, c.oracle_text FROM cards c WHERE c.oracle_text IS NOT NULL

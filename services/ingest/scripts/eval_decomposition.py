@@ -37,19 +37,20 @@ DATABASE_URL = (
     .replace("postgresql+asyncpg://", "postgresql://")
 )
 
-_CARD_QUERY = """
-    SELECT name, mana_cost, type_line,
-           left(oracle_text, 120) AS oracle_snippet
-    FROM cards
-    WHERE ({where})
-    ORDER BY name
-    LIMIT %(limit)s
-"""
-
-
 def _query_cards(where_sql: str, limit: int, conn) -> list[dict]:
+    # Build the query as a plain string — where_sql comes from hardcoded
+    # commander_mechanics.py fragments and limit is a CLI int, so no injection
+    # risk.  Avoid psycopg2 param substitution entirely: % in LIKE clauses and
+    # {g}-style mana symbols in the WHERE fragments would corrupt it.
+    query = (
+        "SELECT name, mana_cost, type_line, left(oracle_text, 120) AS oracle_snippet"
+        " FROM cards"
+        f" WHERE ({where_sql})"
+        " ORDER BY name"
+        f" LIMIT {limit}"
+    )
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-        cur.execute(_CARD_QUERY.format(where=where_sql), {"limit": limit})
+        cur.execute(query)
         return [dict(r) for r in cur.fetchall()]
 
 

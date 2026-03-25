@@ -163,7 +163,8 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("landfall", "Landfall",
      p(r"\blandfall\b|when(?:ever)?\s+(?:a |one or more )?land.{0,20}enters")),
 
-    # Counter placement
+    # Counter placement — commander puts +1/+1 counters on things.
+    # Producer key: deck wants counter_trigger amplifiers (Hardened Scales, etc.)
     ("counter_placement", "Counter placement",
      p(r"put (?:a |one or more |an? )?\+1/\+1 counter")),
 
@@ -312,9 +313,9 @@ _QUERY = """
     FROM cards
     WHERE legalities->>'commander' = 'legal'
       AND (
-          type_line ILIKE '%Legendary Creature%'
-          OR type_line ILIKE '%Legendary Planeswalker%'
-          OR oracle_text ILIKE '%can be your commander%'
+          type_line ILIKE '%%Legendary Creature%%'
+          OR type_line ILIKE '%%Legendary Planeswalker%%'
+          OR oracle_text ILIKE '%%can be your commander%%'
       )
       AND name ILIKE %s
     ORDER BY name

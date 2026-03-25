@@ -25,7 +25,10 @@ Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
 
 from __future__ import annotations
 
-from synergy.trigger_patterns import PATTERN_FAMILIES
+from synergy.trigger_patterns import PATTERN_FAMILIES as _trigger_families
+from synergy.activated_ability import PATTERN_FAMILIES as _activated_families
+
+PATTERN_FAMILIES = {**_trigger_families, **_activated_families}
 
 
 def _family_sql(family_key: str) -> str:
@@ -37,7 +40,7 @@ def _family_sql(family_key: str) -> str:
     keys = PATTERN_FAMILIES[family_key]
     in_list = ", ".join(f"'{k}'" for k in keys)
     return (
-        f"card_id IN ("
+        f"id IN ("
         f"  SELECT card_id FROM card_abilities"
         f"  WHERE trigger_event IN ({in_list})"
         f")"
@@ -61,19 +64,7 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # growing itself by the amount of mana it made.  Llanowar Elves tapping for
     # {G} gets one counter; a Priest of Titania tapping for {G}{G}{G}{G} gets
     # four.  The deck wants as many mana-ability creatures as possible.
-    "mana_dork": (
-        "lower(type_line) LIKE '%creature%'"
-        " AND ("
-        "   lower(oracle_text) LIKE '%add {g}%'"
-        "   OR lower(oracle_text) LIKE '%add {b}%'"
-        "   OR lower(oracle_text) LIKE '%add {c}%'"
-        "   OR lower(oracle_text) LIKE '%add one mana%'"
-        "   OR lower(oracle_text) LIKE '%add mana%'"
-        "   OR lower(oracle_text) LIKE '%add an amount of%'"
-        "   OR lower(oracle_text) LIKE '%produces mana%'"
-        "   OR lower(oracle_text) LIKE '%mana ability%'"
-        ")"
-    ),
+    "mana_dork": _family_sql("mana_producer"),
 }
 
 PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
@@ -92,4 +83,9 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # counter accumulation: counter doublers, proliferate, cards that care about
     # +1/+1 counters or creatures with large power (which the counters build).
     "counter_trigger": _family_sql("counter_trigger"),
+
+    # ── PRODUCER: commander places +1/+1 counters ─────────────────────────────
+    # Any commander whose oracle text places +1/+1 counters as a primary output
+    # wants the same counter_trigger amplifier package.
+    "counter_placement": _family_sql("counter_trigger"),
 }
