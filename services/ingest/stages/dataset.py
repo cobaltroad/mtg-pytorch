@@ -38,11 +38,12 @@ log = logging.getLogger(__name__)
 EFFECT_PEER_LIMIT = int(os.environ.get("EFFECT_PEER_LIMIT", "500_000"))
 """Maximum effect_peer edges total (across all (trigger_event, effect_class) groups)."""
 
-from synergy import (  # noqa: E402
-    PRODUCER_MAP,
-    XMAGE_PRODUCER_MAP,
-    SPELLCAST_TRIGGER_PRODUCER_MAP,
-)
+from synergy import PRODUCER_MAP  # noqa: E402
+
+def _xmage_maps():
+    """Lazy import — only available once xmage sub-module is wired into synergy/__init__.py."""
+    from synergy import XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP
+    return XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP
 
 
 # ── Oracle-text synergy edges ─────────────────────────────────────────────────
@@ -249,6 +250,7 @@ async def compute_xmage_synergy() -> None:
     by the co-occurrence training path.
     """
     log.info("Computing XMage-class synergy edges (compositional path)…")
+    XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP = _xmage_maps()
 
     for ability_class, default_producer_where in XMAGE_PRODUCER_MAP.items():
         if ability_class == "SpellCastControllerTriggeredAbility":

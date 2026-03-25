@@ -44,10 +44,6 @@ log = logging.getLogger(__name__)
 from stages.download import download as _download          # noqa: E402
 from stages.tag import embed_cards, tag_abilities          # noqa: E402
 from stages.dataset import compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy  # noqa: E402
-from stages.commander import (                             # noqa: E402
-    compute_commander_value_synergy,
-    compute_tribal_typeline_synergy,
-)
 from stages.export import (                                # noqa: E402
     export_dataset_stage,
     export_dataset_commanders_stage,
@@ -103,9 +99,6 @@ if __name__ == "__main__":
             "embed_cards", "tag_abilities", "tag_abilities_xmage",
             # Synergy sub-stages
             "compute_textmatch_synergy", "compute_xmage_synergy", "compute_xmage_effect_synergy",
-            # Commander synergy (prerequisites for export_dataset_commanders)
-            "compute_commander_value_synergy",
-            "compute_tribal_typeline_synergy",
             # Export sub-stages
             "export_dataset", "export_dataset_commanders", "composition_profile",
         ],
@@ -113,8 +106,6 @@ if __name__ == "__main__":
         help=(
             "download: fetch MTGJSON + load cards + import combos. "
             "process: embed + tag + compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy + export_dataset. "
-            "compute_commander_value_synergy / compute_tribal_typeline_synergy: "
-            "  run these (plus compute_textmatch_synergy if not done) before export_dataset_commanders. "
             "tag_abilities_xmage: supplement card_abilities from XMage source tree "
             "(requires XMAGE_DIR env var; mount mage/ read-only). "
             "Omit to run both download and process."
@@ -149,10 +140,6 @@ if __name__ == "__main__":
         asyncio.run(compute_xmage_synergy())
     elif args.stage == "compute_xmage_effect_synergy":
         asyncio.run(compute_xmage_effect_synergy())
-    elif args.stage == "compute_commander_value_synergy":
-        asyncio.run(compute_commander_value_synergy())
-    elif args.stage == "compute_tribal_typeline_synergy":
-        asyncio.run(compute_tribal_typeline_synergy())
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":
