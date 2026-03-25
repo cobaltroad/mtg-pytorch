@@ -77,6 +77,12 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # Any commander whose oracle text places +1/+1 counters as a primary output
     # wants the same counter consumer package.
     "counter_placement": _family_sql("counter_trigger"),
+
+    # ── PRODUCER: creature token generators want ETB payoff cards ─────────────
+    # A commander that outputs creature tokens (e.g. Krenko, Mob Boss) wants
+    # cards that fire when creatures enter: Purphoros, Impact Tremors, Anointed
+    # Procession, etc.  Both token and non-token ETB consumers qualify.
+    "creature_token_generator": _family_sql("creature_etb"),
 }
 
 PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
@@ -97,6 +103,12 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # spells — anything that makes attacking creatures more dangerous or harder
     # to profitably block.
     "attack_trigger": _family_sql("combat_tricks"),
+
+    # ── CONSUMER: creature token generators want sac outlets ─────────────────
+    # A commander that floods the board with tokens (e.g. Krenko) wants sac
+    # outlets to convert that board presence into damage, draw, or mana:
+    # Ashnod's Altar, Goblin Bombardment, Viscera Seer, etc.
+    "creature_token_generator": _family_sql("sac_outlet"),
 
     # ── CONSUMER: deck needs spells of the type the commander cares about ─────
     # A commander with a cast trigger (e.g. Sythis) wants the deck filled with
