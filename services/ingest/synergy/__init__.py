@@ -49,7 +49,7 @@ Sub-modules, each covering one broad theme:
                             pattern keys (``goad``, ``extra_combat``, ``monarch``,
                             ``initiative``, ``forced_attack``, ``poison_infect``,
                             ``group_hug``, ``second_spell``, etc.).  Merged into
-                            :data:`PRODUCER_MAP` so ``compute_synergy`` builds
+                            :data:`PRODUCER_MAP` so ``compute_textmatch_synergy`` builds
                             edges for commanders tagged by ``decompose_commanders.py``.
                             Also used by that script directly for gap analysis.
 
@@ -81,7 +81,7 @@ PRODUCER_MAP: dict[str, str] = {
     # commander_value producers are NOT merged into PRODUCER_MAP — they use a
     # dedicated pipeline stage (compute_commander_value_synergy) that writes
     # score_type='commander_value' edges with per-event scores, rather than
-    # the flat score=1.0 / score_type='ability_trigger' that compute_synergy()
+    # the flat score=1.0 / score_type='ability_trigger' that compute_textmatch_synergy()
     # uses.  The TRIGGER_PATTERNS above still tag consumer cards in
     # card_abilities so the dedicated stage can cross-join against them.
 }
@@ -93,12 +93,12 @@ PRODUCER_MAP: dict[str, str] = {
 #TODO: is_land_card = roles.is_land_card
 
 # Compositional training path: XMage class name → producer SQL.
-# Used by compute_synergy_xmage() to build score_type='xmage_ability_trigger'
+# Used by compute_xmage_synergy() to build score_type='xmage_ability_trigger'
 # edges without the lossy trigger_event translation layer.
 #TODO: XMAGE_PRODUCER_MAP: dict[str, str] = xmage.XMAGE_PRODUCER_MAP
 
 # SpellCastControllerTriggeredAbility sub-bucket → producer SQL.
-# Used by compute_synergy_xmage() to select type-specific producers for each
+# Used by compute_xmage_synergy() to select type-specific producers for each
 # refined trigger_event (e.g. "enchantment_cast" → enchantment producers only).
 #TODO: SPELLCAST_TRIGGER_PRODUCER_MAP: dict[str, str] = xmage.SPELLCAST_TRIGGER_PRODUCER_MAP
 

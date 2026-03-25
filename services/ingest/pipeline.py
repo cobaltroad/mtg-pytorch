@@ -19,7 +19,7 @@ Run process only:   python pipeline.py --stage process
 
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan],
-  compute_synergy, compute_synergy_xmage, compute_effect_peer_synergy,
+  compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy,
   compute_commander_value_synergy, compute_tribal_typeline_synergy,
   export_dataset, export_dataset_commanders
 
@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 
 from stages.download import download as _download          # noqa: E402
 from stages.tag import embed_cards, tag_abilities          # noqa: E402
-from stages.dataset import compute_synergy, compute_synergy_xmage, compute_effect_peer_synergy  # noqa: E402
+from stages.dataset import compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy  # noqa: E402
 from stages.commander import (                             # noqa: E402
     compute_commander_value_synergy,
     compute_tribal_typeline_synergy,
@@ -77,9 +77,9 @@ async def process() -> None:
     """
     await embed_cards()
     await tag_abilities()
-    await compute_synergy()
-    await compute_synergy_xmage()
-    await compute_effect_peer_synergy()
+    await compute_textmatch_synergy()
+    await compute_xmage_synergy()
+    await compute_xmage_effect_synergy()
     export_dataset_stage()
     await composition_profile_stage()
 
@@ -102,7 +102,7 @@ if __name__ == "__main__":
             # Tag sub-stages
             "embed_cards", "tag_abilities", "tag_abilities_xmage",
             # Synergy sub-stages
-            "compute_synergy", "compute_synergy_xmage", "compute_effect_peer_synergy",
+            "compute_textmatch_synergy", "compute_xmage_synergy", "compute_xmage_effect_synergy",
             # Commander synergy (prerequisites for export_dataset_commanders)
             "compute_commander_value_synergy",
             "compute_tribal_typeline_synergy",
@@ -112,9 +112,9 @@ if __name__ == "__main__":
         default=None,
         help=(
             "download: fetch MTGJSON + load cards + import combos. "
-            "process: embed + tag + compute_synergy + compute_synergy_xmage + compute_effect_peer_synergy + export_dataset. "
+            "process: embed + tag + compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy + export_dataset. "
             "compute_commander_value_synergy / compute_tribal_typeline_synergy: "
-            "  run these (plus compute_synergy if not done) before export_dataset_commanders. "
+            "  run these (plus compute_textmatch_synergy if not done) before export_dataset_commanders. "
             "tag_abilities_xmage: supplement card_abilities from XMage source tree "
             "(requires XMAGE_DIR env var; mount mage/ read-only). "
             "Omit to run both download and process."
@@ -143,12 +143,12 @@ if __name__ == "__main__":
         import os as _os
         from pathlib import Path as _Path
         asyncio.run(_xmage_tag(_Path(_os.environ.get("XMAGE_DIR", "/mage"))))
-    elif args.stage == "compute_synergy":
-        asyncio.run(compute_synergy())
-    elif args.stage == "compute_synergy_xmage":
-        asyncio.run(compute_synergy_xmage())
-    elif args.stage == "compute_effect_peer_synergy":
-        asyncio.run(compute_effect_peer_synergy())
+    elif args.stage == "compute_textmatch_synergy":
+        asyncio.run(compute_textmatch_synergy())
+    elif args.stage == "compute_xmage_synergy":
+        asyncio.run(compute_xmage_synergy())
+    elif args.stage == "compute_xmage_effect_synergy":
+        asyncio.run(compute_xmage_effect_synergy())
     elif args.stage == "compute_commander_value_synergy":
         asyncio.run(compute_commander_value_synergy())
     elif args.stage == "compute_tribal_typeline_synergy":
