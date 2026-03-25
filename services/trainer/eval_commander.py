@@ -71,6 +71,8 @@ def main() -> None:
     parser.add_argument("commander", help="Commander name (partial match ok)")
     parser.add_argument("--top", type=int, default=20,
                         help="Candidates to display (default: 20)")
+    parser.add_argument("--show-basis", action="store_true",
+                        help="Print the cards used to build each per-label centroid")
     parser.add_argument("--checkpoint", default="phase2_best",
                         help="Checkpoint name in CHECKPOINT_DIR (default: phase2_best)")
     parser.add_argument(
@@ -134,6 +136,21 @@ def main() -> None:
     else:
         print("  Centroid basis : all positives (no card_trigger_events — re-export artifact)")
     print()
+
+    if args.show_basis and card_te:
+        for label in archetype_labels:
+            idxs = [idx for idx, te in zip(pos_idxs, card_te) if te == label]
+            if not idxs:
+                continue
+            print(f"  [{label}]")
+            for idx in idxs[:20]:
+                cid  = card_ids[idx]
+                meta = card_meta.get(cid, {})
+                print(f"    {meta.get('name','?'):<40}  {meta.get('type_line','')}")
+            if len(idxs) > 20:
+                print(f"    ... and {len(idxs) - 20} more")
+            print()
+        print()
 
     # Load model + project
     model = CardEncoder(input_dim=emb_np.shape[1]).to(device)
