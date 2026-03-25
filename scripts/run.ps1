@@ -31,6 +31,9 @@ param(
     [double]$Phase2TempStart = 0.3,
     [double]$Phase2TempEnd = 0.07,
     [int]$Patience = 10,
+    # Phase 3 (centroid expansion): stored candidates per commander
+    [int]$TopK = 50,
+    [int]$Cap  = 100,
     [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
     # Phase 4: use artifact deck positions (default $false).
@@ -215,16 +218,33 @@ if ($Mode -eq 'train') {
     # Phase 4 synergy-only mode: the commanders artifact has no synergy_positions
     # key, so train.py falls back to computing them from the DB at runtime.
     # All other artifact-based phases are fully self-contained.
-    $needsDb = (-not $Dataset) -or ($Phase -eq 4 -and $SynergyOnly)
+    $needsDb = ($Phase -ne 3) -and ((-not $Dataset) -or ($Phase -eq 4 -and $SynergyOnly))
     if ($needsDb) {
         $env:DATABASE_URL = Ensure-SyncDbUrl
     }
     $env:CHECKPOINT_DIR = $checkpointsDir
 
+    # Phase 3: centroid expansion (no training — augments the commander artifact)
+    if ($Phase -eq 3) {
+        if (-not $Dataset) {
+            $Dataset = Join-Path $RepoRoot "ingest_cache\mtg_commanders.pt"
+        }
+        $cmd = @(
+            'centroid_expansion.py',
+            '--dataset',    $Dataset,
+            '--checkpoint', 'phase2_best',
+            '--top-k',      $TopK,
+            '--cap',        $Cap
+        )
+        Write-Host "Running centroid expansion with args: $($cmd -join ' ')"
+        Set-Location (Join-Path $RepoRoot 'services\trainer')
+        & "$RepoRoot\.venv\Scripts\python.exe" -u @cmd
+        exit $LASTEXITCODE
+    }
+
     if ($null -eq $Epochs) {
         if ($Phase -eq 1)    { $Epochs = 50 }
         elseif ($Phase -eq 2) { $Epochs = 60 }
-        elseif ($Phase -eq 3) { $Epochs = 50 }
         else                  { $Epochs = 30 }
     }
 
@@ -264,21 +284,6 @@ if ($Mode -eq 'train') {
         $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
         $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
         $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
-    }
-
-    # Phase 3: protect Phase 2 geometry.
-    # --freeze-encoder skips BPR training entirely and copies Phase 2 weights
-    # forward as phase3_best — use this when the encoder must be preserved
-    # verbatim.  Otherwise encoder_lr_scale throttles the update rate; the
-    # commanders artifact generates far more gradient updates per epoch than
-    # human decklists, so even 0.1× can cause collapse over 50 epochs.
-    if ($Phase -eq 3) {
-        $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
-        if ($resolvedFreezeEncoder) {
-            $cmd += '--freeze-encoder'
-        } else {
-            $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
-        }
     }
 
     if ($Phase -eq 4) {
