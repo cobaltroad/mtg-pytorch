@@ -21,7 +21,29 @@ def oracle_mention_sql(pattern: str) -> str:
 #   label     — human-readable name, used as ability_name
 #   where_sql — SQL WHERE fragment from tribal_sql(); selects matching cards
 
-TRIBAL_PATTERNS: list[tuple[str, str, str]] = [
-    ("tribal_elf",    "Tribal: Elf",             tribal_sql("elf")),
-    ("oracle_elf",    "Oracle mention: Elf",      oracle_mention_sql("elf|elves")),
+# (tribe, oracle_regex) — tribe is the MTG subtype word (always singular in
+# type_line); oracle_regex handles irregular plurals for oracle text matching.
+_TRIBES: list[tuple[str, str]] = [
+    ("elf",       "elf|elves"),
+    ("dragon",    "dragon|dragons"),
+    ("zombie",    "zombie|zombies"),
+    ("vampire",   "vampire|vampires"),
+    ("eldrazi",   "eldrazi"),
+    ("human",     "human|humans"),
+    ("dinosaur",  "dinosaur|dinosaurs"),
+    ("goblin",    "goblin|goblins"),
+    ("angel",     "angel|angels"),
+    ("pirate",    "pirate|pirates"),
+    ("wizard",    "wizard|wizards"),
+    ("assassin",  "assassin|assassins"),
+    ("merfolk",   "merfolk"),
+    ("cat",       "cat|cats"),
+    ("sliver",    "sliver|slivers"),
+    ("wolf",      "wolf|wolves"),
 ]
+
+TRIBAL_PATTERNS: list[tuple[str, str, str]] = []
+for _tribe, _oracle_pattern in _TRIBES:
+    _label = _tribe.title()
+    TRIBAL_PATTERNS.append((f"tribal_{_tribe}", f"Tribal: {_label}",          tribal_sql(_tribe)))
+    TRIBAL_PATTERNS.append((f"oracle_{_tribe}", f"Oracle mention: {_label}",  oracle_mention_sql(_oracle_pattern)))
