@@ -39,7 +39,9 @@ Sub-modules, each covering one broad theme:
                             ``repeatable_draw``, ``removal``, ``sweeper``, ``tutor``,
                             ``protection``, ``win_condition``, ``anthem``,
                             ``token_generator``, ``recursion``, ``interaction``,
-                            ``combat_trick``, ``mana_land``, ``utility_land``).
+                            ``combat_trick``, ``aura_equipment``, ``etb_trigger``,
+                            ``wide_payoff``, ``sac_outlet``, ``discard_trigger``,
+                            ``mana_land``, ``utility_land``).
                             Stored as ``ability_type = 'role'`` rows in
                             ``card_abilities``.
 

@@ -97,7 +97,7 @@ _EVASION_KEYWORDS: frozenset[str] = frozenset({
 def _compile_role_patterns() -> list[tuple[re.Pattern[str], str]]:
     """Import ROLE_PATTERNS from synergy.roles and compile them."""
     from synergy.roles import ROLE_PATTERNS  # noqa: PLC0415
-    return [(re.compile(pat, re.IGNORECASE), role) for pat, role in ROLE_PATTERNS]
+    return [(re.compile(pat, re.IGNORECASE), role) for pat, role, _effect in ROLE_PATTERNS]
 
 
 _COMPILED: list[tuple[re.Pattern[str], str]] | None = None

@@ -91,6 +91,32 @@ combat_trick
     first strike, double strike, lifelink, haste) until end of turn.
     Evasion grants (flying, menace, unblockable) are also included.
 
+aura_equipment
+    The card IS an Equipment (has an equip cost) or a creature/permanent-targeting
+    Aura (``enchant creature`` / ``enchant permanent``).  Voltron commanders
+    demand these at high weight.
+
+etb_trigger
+    Payoff that fires whenever one or more creatures enter the battlefield under
+    your control.  Covers damage pingers (Impact Tremors, Purphoros), counter
+    doublers (Cathars' Crusade), and life-gain engines (Essence Warden).
+
+wide_payoff
+    Non-pump effect that scales with the number of creatures or tokens on the
+    battlefield.  Distinct from ``anthem`` (which covers static +N/+N boosts):
+    wide_payoff captures damage-based count-matters effects and draw engines
+    that scale with board size.
+
+sac_outlet
+    Lets you sacrifice one or more creatures as an activated-ability cost or as
+    part of an effect (Goblin Bombardment, Altar of Dementia, Viscera Seer).
+    Aristocrats and go-wide commanders value these to convert excess tokens into
+    damage, mill, or scry.
+
+discard_trigger
+    Payoff that fires when you (or a player) discards a card: Bone Miser,
+    Waste Not, Surly Badgersaur.  Discard-outlet commanders demand these.
+
 mana_land  (LAND_ROLE_PATTERNS only)
     A land card whose oracle text contains ``{T}: Add`` — i.e. it taps to
     produce mana.  Applies only when the card's type_line contains "Land".
@@ -419,6 +445,42 @@ ROLE_PATTERNS: list[tuple[str, str, str]] = [
         "combat_trick",
         "evasion_grant",
     ),
+
+    # ── Aura / Equipment ──────────────────────────────────────────────────────
+
+    # Equipment: any card with an equip cost IS an equipment
+    (r"\bequip \{", "aura_equipment", "equipment"),
+    # Aura: targets a creature or permanent on the battlefield
+    (r"\benchant (creature|permanent)\b", "aura_equipment", "aura"),
+
+    # ── ETB trigger ───────────────────────────────────────────────────────────
+
+    (
+        r"whenever (a |one or more )?creatures? (enters?|enter) the battlefield"
+        r" (under your control|you control)",
+        "etb_trigger",
+        "etb_payoff",
+    ),
+    (r"whenever (a |one or more )?creatures? you control enters?", "etb_trigger", "etb_payoff"),
+
+    # ── Wide payoff ───────────────────────────────────────────────────────────
+
+    # Damage that scales with creature count (Impact Tremors, Warstorm Surge)
+    (r"deals? \w+ damage.{0,60}for each (creature|token)", "wide_payoff", "damage_per_creature"),
+    # Any value that scales with creature/token count (draw, life, etc.)
+    (r"for each (creature|token) (you control|on the battlefield)", "wide_payoff", "count_matters"),
+    (r"equal to (the number of|x, where x is the number of).{0,40}creature", "wide_payoff", "count_matters"),
+
+    # ── Sac outlet ────────────────────────────────────────────────────────────
+
+    # Activated ability with sacrifice as a cost (Goblin Bombardment, Viscera Seer)
+    (r"sacrifice (a |an )?(creature|token|goblin|elf|zombie)\s*[,:]", "sac_outlet", "sac_cost"),
+    (r"\{[^}]*\},?\s*sacrifice (a|an)? (creature|token)\b", "sac_outlet", "sac_cost"),
+
+    # ── Discard trigger ───────────────────────────────────────────────────────
+
+    (r"whenever you discard", "discard_trigger", "discard_payoff"),
+    (r"whenever (a card is discarded|a player discards)", "discard_trigger", "discard_payoff"),
 ]
 
 
