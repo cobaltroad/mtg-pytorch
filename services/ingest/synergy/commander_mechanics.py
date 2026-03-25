@@ -78,6 +78,11 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # wants the same counter consumer package.
     "counter_placement": _family_sql("counter_trigger"),
 
+    # ── PRODUCER: high-MV payoff commanders want high mana value spells ───────
+    # A commander that scales damage from revealed card MV (e.g. Yuriko) wants
+    # the deck stacked with the highest-CMC spells possible.
+    "high_mv_payoff": _spells["high_mv"],
+
     # ── PRODUCER: creature token generators want ETB payoff cards ─────────────
     # A commander that outputs creature tokens (e.g. Krenko, Mob Boss) wants
     # cards that fire when creatures enter: Purphoros, Impact Tremors, Anointed
@@ -103,6 +108,7 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # spells — anything that makes attacking creatures more dangerous or harder
     # to profitably block.
     "attack_trigger": _family_sql("combat_tricks"),
+    "combat_damage_to_player": _family_sql("combat_tricks"),
 
     # ── CONSUMER: creature token generators want sac outlets ─────────────────
     # A commander that floods the board with tokens (e.g. Krenko) wants sac
@@ -120,4 +126,13 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "cast_trigger_instant_sorcery": _spells["spell_instant_sorcery"],
     "cast_trigger_historic":        _spells["spell_historic"],
     "cast_trigger_aura_equipment":  _spells["spell_aura_equipment"],
+
+    # ── CONSUMER: color-based cast triggers want spells of that color ─────────
+    # A commander whose trigger fires on a specific color (e.g. K'rrik for black,
+    # Chandra for red, Aragorn for multicolor) wants the deck filled with spells
+    # of the relevant color.  Generated from the color map to stay DRY.
+    **{
+        f"cast_trigger_{color}": _spells[f"spell_{color}"]
+        for color in ("white", "blue", "black", "red", "green", "colorless")
+    },
 }

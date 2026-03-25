@@ -83,13 +83,13 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(r"when(?:ever)?\s+you cast (?:a |an )?(?:aura|equipment)")),
 
     # Spell cast — color-based
-    ("cast_trigger_colored", "Color-based cast trigger",
-     p(
-         r"when(?:ever)?\s+you cast (?:a |an )?"
-         r"(?:red|blue|green|white|black|colorless|multicolored|monocolored)"
-         r"(?:\s+or\s+(?:red|blue|green|white|black|colorless|multicolored|artifact|creature))?"
-         r"\s+spell",
-     )),
+    # Per-color cast triggers — one key per color so commander_mechanics can
+    # map each to the correct producer SQL (e.g. cast_trigger_white → white spells).
+    *[
+        (f"cast_trigger_{color}", f"{color.title()} spell cast trigger",
+         p(rf"when(?:ever)?\s+you cast (?:a |an )?{color}\s+spell"))
+        for color in ("white", "blue", "black", "red", "green", "colorless")
+    ],
 
     # Group hug
     ("group_hug", "Group hug",
@@ -148,6 +148,15 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     # Combat damage to player
     ("combat_damage_to_player", "Combat damage to player",
      p(r"deals? combat damage to (?:a |an )?(?:player|opponent)")),
+
+    # High-MV payoff — commander scales an effect from the mana value of a card
+    # (Yuriko: opponents lose life equal to the revealed card's mana value;
+    #  Zhulodok: grants cascade to colorless spells with mana value 7 or greater).
+    # Deck wants the highest-MV spells possible to maximise the trigger.
+    ("high_mv_payoff", "High mana value payoff",
+     p(r"(?:damage|lose life|loses? life).{0,40}mana value"
+       r"|mana value.{0,40}(?:damage|lose life|loses? life)"
+       r"|mana value \d+ or greater")),
 
     # Madness payoff
     ("madness_payoff", "Madness payoff",
