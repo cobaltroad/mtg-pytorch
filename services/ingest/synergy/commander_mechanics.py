@@ -83,6 +83,12 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # the deck stacked with the highest-CMC spells possible.
     "high_mv_payoff": _spells["high_mv"],
 
+    # ── PRODUCER: cascade commanders want cast-from-exile payoff cards ────────
+    # A commander with cascade (e.g. Yidris, Maelstrom Wanderer, Abaddon) or
+    # that otherwise exiles cards to cast them wants cards that trigger or scale
+    # off spells being cast from exile: Prosper, Faldorn, etc.
+    "cascade": _spells["cast_from_exile_payoff"],
+
     # ── PRODUCER: creature token generators want ETB payoff cards ─────────────
     # A commander that outputs creature tokens (e.g. Krenko, Mob Boss) wants
     # cards that fire when creatures enter: Purphoros, Impact Tremors, Anointed

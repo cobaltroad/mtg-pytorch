@@ -7,11 +7,13 @@
 from .type import PATTERNS as _type_patterns
 from .mana_value import PATTERNS as _mana_value_patterns
 from .color import PATTERNS as _color_patterns
+from .cast_from_exile import PATTERNS as _cast_from_exile_patterns
 
 PATTERNS: dict[str, str] = {
     **_type_patterns,
     **_mana_value_patterns,
     **_color_patterns,
+    **_cast_from_exile_patterns,
 }
 
 __all__ = ["PATTERNS"]
