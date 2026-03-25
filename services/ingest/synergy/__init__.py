@@ -54,10 +54,11 @@ Sub-modules, each covering one broad theme:
                             Also used by that script directly for gap analysis.
 
 ``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`,
-:data:`TRIBES`, :data:`ROLE_PATTERNS`, :data:`LAND_ROLE_PATTERNS`, and
-:data:`CARD_SYNERGY_MAP` from this package — no other changes to the pipeline
-are needed when a sub-module is extended.  Commander-specific maps
-(``commander_value``) are imported directly by ``stages/commander.py``.
+:data:`CONSUMER_MAP`, :data:`TRIBES`, :data:`ROLE_PATTERNS`,
+:data:`LAND_ROLE_PATTERNS`, and :data:`CARD_SYNERGY_MAP` from this package —
+no other changes to the pipeline are needed when a sub-module is extended.
+Commander-specific maps (``commander_value``) are imported directly by
+``stages/commander.py``.
 """
 
 from __future__ import annotations
@@ -68,6 +69,11 @@ PRODUCER_MAP: dict[str, str] = {
     **commander_mechanics.PATTERN_KEY_TO_PRODUCER_SQL,
 }
 
+CONSUMER_MAP: dict[str, str] = {
+    **commander_mechanics.PATTERN_KEY_TO_CONSUMER_SQL,
+}
+
 __all__ = [
-    "PRODUCER_MAP"
+    "PRODUCER_MAP",
+    "CONSUMER_MAP",
 ]
