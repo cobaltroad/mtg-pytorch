@@ -23,7 +23,7 @@ def oracle_mention_sql(pattern: str) -> str:
 
 # (tribe, oracle_regex) — tribe is the MTG subtype word (always singular in
 # type_line); oracle_regex handles irregular plurals for oracle text matching.
-_TRIBES: list[tuple[str, str]] = [
+TRIBES: list[tuple[str, str]] = [
     ("elf",       "elf|elves"),
     ("dragon",    "dragon|dragons"),
     ("zombie",    "zombie|zombies"),
@@ -43,7 +43,7 @@ _TRIBES: list[tuple[str, str]] = [
 ]
 
 TRIBAL_PATTERNS: list[tuple[str, str, str]] = []
-for _tribe, _oracle_pattern in _TRIBES:
+for _tribe, _oracle_pattern in TRIBES:
     _label = _tribe.title()
     TRIBAL_PATTERNS.append((f"tribal_{_tribe}", f"Tribal: {_label}",          tribal_sql(_tribe)))
     TRIBAL_PATTERNS.append((f"oracle_{_tribe}", f"Oracle mention: {_label}",  oracle_mention_sql(_oracle_pattern)))

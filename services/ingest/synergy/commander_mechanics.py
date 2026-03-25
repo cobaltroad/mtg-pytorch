@@ -28,7 +28,7 @@ from __future__ import annotations
 from synergy.triggered_ability import PATTERNS as _triggered_abilities
 from synergy.activated_ability import PATTERNS as _activated_abilities
 from synergy.spell import PATTERNS as _spells
-from synergy.tribal import tribal_sql
+from synergy.tribal import tribal_sql, TRIBES as _tribes
 
 
 # _spells values are raw SQL strings; _triggered_abilities / _activated_abilities
@@ -55,10 +55,10 @@ def _family_sql(family_key: str) -> str:
 
 PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
 
-    # ── PRODUCER: deck needs Elf creatures ────────────────────────────────────
-    # Tyvar's first ability requires Elves attacking — the deck produces the
-    # game state he needs by being full of Elf creatures (and changelings).
-    "tribal_elf": tribal_sql("elf"),
+    # ── PRODUCER: deck needs tribal creatures (all supported tribes) ──────────
+    # Any commander with a tribal payoff (e.g. Tyvar for Elves) wants the deck
+    # filled with creatures of that tribe (and changelings).
+    **{f"tribal_{_tribe}": tribal_sql(_tribe) for _tribe, _ in _tribes},
 
     # ── PRODUCER: deck needs mana-ability creatures ───────────────────────────
     # Tyvar's second ability triggers off mana abilities — the deck produces

@@ -35,6 +35,7 @@ from synergy.commander_mechanics import (
     PATTERN_KEY_TO_CONSUMER_SQL,
     PATTERN_KEY_TO_PRODUCER_SQL,
 )
+from synergy.tribal import TRIBES as _tribes
 
 DATABASE_URL = (
     os.environ.get("DATABASE_URL", "")
@@ -311,9 +312,11 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("mana_dork", "Mana ability matters",
      p(r"mana ability of this creature|mana ability")),
 
-    # Tribal — elf (type-line check handled separately; oracle fallback here)
-    ("tribal_elf", "Elf tribal",
-     p(r"\belves?\b")),
+    # Tribal — all supported tribes (oracle-text fallback; type-line handled in SQL)
+    *[
+        (f"tribal_{_tribe}", f"{_tribe.title()} tribal", p(f"\\b(?:{_oracle_regex})\\b"))
+        for _tribe, _oracle_regex in _tribes
+    ],
 
     # Counter trigger (Tyvar-style: puts counters equal to mana produced)
     ("counter_trigger", "Counter trigger (mana-based)",
