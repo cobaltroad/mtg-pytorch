@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 from land_tags import annotate_land_oracle  # noqa: E402
 
-from synergy.trigger_patterns import TRIGGER_PATTERNS as _trigger_patterns  # noqa: E402
+from synergy.triggered_ability import TRIGGER_PATTERNS as _trigger_patterns  # noqa: E402
 from synergy.activated_ability import ACTIVATED_PATTERNS as _activated_patterns  # noqa: E402
 from synergy.tribal import TRIBAL_PATTERNS  # noqa: E402
 

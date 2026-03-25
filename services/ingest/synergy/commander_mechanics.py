@@ -25,7 +25,7 @@ Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
 
 from __future__ import annotations
 
-from synergy.trigger_patterns import PATTERN_FAMILIES as _trigger_families
+from synergy.triggered_ability import PATTERN_FAMILIES as _trigger_families
 from synergy.activated_ability import PATTERN_FAMILIES as _activated_families
 from synergy.tribal import tribal_sql
 

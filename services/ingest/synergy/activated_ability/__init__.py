@@ -3,7 +3,7 @@ import re
 from .mana_producer import ACTIVATED_PATTERNS as _mana_patterns
 
 # Aggregated list of all activated-ability patterns.
-# Same tuple shape as trigger_patterns: (key, label, compiled re.Pattern)
+# Same tuple shape as triggered_ability: (key, label, compiled re.Pattern)
 ACTIVATED_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     *_mana_patterns,
 ]
