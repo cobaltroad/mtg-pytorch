@@ -42,7 +42,8 @@ param(
     [int]$Top = 20,
 
     [string]$Checkpoint = 'phase2_best',
-    [string]$Dataset    = ''
+    [string]$Dataset    = '',
+    [switch]$ShowBasis
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,9 +71,9 @@ if (-not (Test-Path $checkpointFile)) {
 $env:CHECKPOINT_DIR = Join-Path $RepoRoot 'checkpoints'
 
 Set-Location (Join-Path $RepoRoot 'services\trainer')
-& "$RepoRoot\.venv\Scripts\python.exe" -u eval_commander.py $Commander `
-    --checkpoint $Checkpoint `
-    --dataset    $Dataset `
-    --top        $Top
+$pyArgs = @($Commander, '--checkpoint', $Checkpoint, '--dataset', $Dataset, '--top', $Top)
+if ($ShowBasis) { $pyArgs += '--show-basis' }
+
+& "$RepoRoot\.venv\Scripts\python.exe" -u eval_commander.py @pyArgs
 
 exit $LASTEXITCODE
