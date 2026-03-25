@@ -2,7 +2,7 @@ import re
 
 from regex_utils import p
 
-TRIGGER_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("attack",          "Attack trigger",       p(r"whenever .{1,30} attacks?")),
     ("attack_phase",    "Attack phase trigger", p(r"at the beginning of (?:each )?combat(?: on your turn)?")),
     ("keyword_raid",    "Keyword: Raid",        p(r"(if|unless) you attacked (with a creature)? this turn")),

@@ -2,7 +2,7 @@ import re
 
 from regex_utils import p
 
-TRIGGER_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("proliferate",         "Keyword: Proliferate",             p(r"proliferate")),
     ("hardened_scales",     "Counter Replacement: Hardened Scales", p(r"if one or more .*counters would be put")),
     ("vorinclex",           "Counter Replacement: Vorinclex",    p(r"if you would put one or more .*counters")),

@@ -77,6 +77,10 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("cast_trigger_historic", "Historic spell cast trigger",
      p(r"when(?:ever)?\s+you cast (?:a |an )?historic")),
 
+    # Spell cast — aura or equipment (Sram, Galea, Danitha, Puresteel Paladin)
+    ("cast_trigger_aura_equipment", "Aura or equipment cast trigger",
+     p(r"when(?:ever)?\s+you cast (?:a |an )?(?:aura|equipment)")),
+
     # Spell cast — color-based
     ("cast_trigger_colored", "Color-based cast trigger",
      p(
@@ -168,11 +172,21 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("counter_placement", "Counter placement",
      p(r"put (?:a |one or more |an? )?\+1/\+1 counter")),
 
-    # Lifegain trigger
+    # Lifegain producer — commander outputs life gain (e.g. Sythis, Oloro)
+    # Matches "you gain N life" as a primary effect, not as a trigger condition.
+    ("lifegain_producer", "Lifegain producer",
+     p(r"you gain \d+ life|you gain (?:life equal|X life|that much life)")),
+
+    # Lifegain trigger — commander reacts to life being gained
     ("lifegain_trigger", "Life gain trigger",
      p(r"when(?:ever)?\s+you (?:gain|gained) life")),
 
-    # Draw trigger
+    # Draw producer — commander outputs card draw (e.g. Sythis, Edric)
+    # Matches "draw a card" / "draw X cards" as a primary effect.
+    ("draw_producer", "Draw producer",
+     p(r"draw (?:a card|cards?|X cards?|that many cards?|(?:one|two|three) cards?)")),
+
+    # Draw trigger — commander reacts to drawing cards
     ("draw_trigger", "Draw trigger",
      p(
          r"when(?:ever)?\s+you draw (?:a card|cards|your (?:first|second|third) card)",

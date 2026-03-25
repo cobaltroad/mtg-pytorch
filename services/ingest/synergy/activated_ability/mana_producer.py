@@ -12,7 +12,7 @@ from regex_utils import p
 #   mana_add      — "add … mana" phrasing without a tap symbol (Selvala, Priest of Titania)
 #   mana_ability  — oracle text uses the rules term "mana ability" (Tyvar the Bellicose)
 
-ACTIVATED_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("mana_tap",     "Mana ability: tap for mana",  p(r"\{t\}[^.]*add \{")),
     ("mana_add",     "Mana ability: add mana",       p(r"add (?:one |an amount of |that much )?mana")),
     ("mana_ability", "Mana ability: rules term",     p(r"\bmana ability\b")),
