@@ -59,168 +59,170 @@ class MechanicKey(StrEnum):
     # 1. ETB / enters-the-battlefield
     # =========================================================================
     # Primary oracle-text key (decompose_commanders.py ORACLE_PATTERNS)
-    ETB_TRIGGER            = "etb_trigger"
+    #TODO: ETB_TRIGGER            = "etb_trigger"
     # XMage alias — more specific (creature enters the battlefield)
-    CREATURE_ETB           = "creature_etb"
+    #TODO: CREATURE_ETB           = "creature_etb"
     # Generic catch-all (any permanent entering; commander_mechanics.py alias)
-    ENTERS_BATTLEFIELD     = "enters_battlefield"
+    #TODO: ENTERS_BATTLEFIELD     = "enters_battlefield"
     # events.py fine-grained: only non-token creatures
-    NONTOKEN_ETB           = "nontoken_etb"
+    #TODO: NONTOKEN_ETB           = "nontoken_etb"
     # events.py fine-grained: artifact entering
-    ARTIFACT_ETB           = "artifact_etb"
+    #TODO: ARTIFACT_ETB           = "artifact_etb"
 
     # =========================================================================
     # 2. Death / dies / graveyard
     # =========================================================================
-    DEATH_TRIGGER          = "death_trigger"
+    #TODO: DEATH_TRIGGER          = "death_trigger"
     # XMage alias
-    DIES                   = "dies"
+    #TODO: DIES                   = "dies"
     # events.py fine-grained: non-token only (common Aristocrats template)
-    NONTOKEN_DIES          = "nontoken_dies"
+    #TODO: NONTOKEN_DIES          = "nontoken_dies"
     # Permanent put into graveyard from the battlefield (broader than creature)
-    GRAVEYARD_FROM_PLAY    = "graveyard_from_play"
+    #TODO: GRAVEYARD_FROM_PLAY    = "graveyard_from_play"
     # Commander casts from / returns things from the graveyard
-    GRAVEYARD_PAYOFF       = "graveyard_payoff"
+    #TODO: GRAVEYARD_PAYOFF       = "graveyard_payoff"
     # Unearth / encore / Feldon-style temporary-reanimation commanders
-    UNEARTH_ENCORE         = "unearth_encore"
+    #TODO: UNEARTH_ENCORE         = "unearth_encore"
 
     # =========================================================================
     # 3. Attack / combat
     # =========================================================================
     ATTACK_TRIGGER         = "attack_trigger"
     # XMage alias
-    ATTACKS                = "attacks"
-    COMBAT_DAMAGE_TO_PLAYER = "combat_damage_to_player"
+    #TODO: ATTACKS                = "attacks"
+    #TODO: COMBAT_DAMAGE_TO_PLAYER = "combat_damage_to_player"
     # XMage alias
-    COMBAT_DAMAGE          = "combat_damage"
+    #TODO: COMBAT_DAMAGE          = "combat_damage"
     # Commander grants / rewards additional combat phases
-    EXTRA_COMBAT           = "extra_combat"
+    #TODO: EXTRA_COMBAT           = "extra_combat"
 
     # =========================================================================
     # 4. Spell-cast families
     # =========================================================================
     # ── Oracle / decompose keys ───────────────────────────────────────────────
-    CAST_TRIGGER_CREATURE        = "cast_trigger_creature"
-    CAST_TRIGGER_INSTANT_SORCERY = "cast_trigger_instant_sorcery"
-    CAST_TRIGGER_ENCHANTMENT     = "cast_trigger_enchantment"
-    CAST_TRIGGER_ARTIFACT        = "cast_trigger_artifact"
-    CAST_TRIGGER_HISTORIC        = "cast_trigger_historic"
+    #TODO: CAST_TRIGGER_CREATURE        = "cast_trigger_creature"
+    #TODO: CAST_TRIGGER_INSTANT_SORCERY = "cast_trigger_instant_sorcery"
+    #TODO: CAST_TRIGGER_ENCHANTMENT     = "cast_trigger_enchantment"
+    #TODO: CAST_TRIGGER_ARTIFACT        = "cast_trigger_artifact"
+    #TODO: CAST_TRIGGER_HISTORIC        = "cast_trigger_historic"
     # Color-word cast trigger ("whenever you cast a red spell")
-    CAST_TRIGGER_COLORED         = "cast_trigger_colored"
+    #TODO: CAST_TRIGGER_COLORED         = "cast_trigger_colored"
 
     # ── XMage / SPELLCAST_FILTER_MAP refined keys ─────────────────────────────
     # Exact equivalents of the oracle keys above; kept separate so
     # commander_mechanics.py can assign different SQL if needed.
-    CREATURE_CAST          = "creature_cast"
-    INSTANT_SORCERY_CAST   = "instant_sorcery_cast"
-    ENCHANTMENT_CAST       = "enchantment_cast"
-    ARTIFACT_CAST          = "artifact_cast"
-    HISTORIC_CAST          = "historic_cast"
-    NONCREATURE_CAST       = "noncreature_cast"
+    #TODO: CREATURE_CAST          = "creature_cast"
+    #TODO: INSTANT_SORCERY_CAST   = "instant_sorcery_cast"
+    #TODO: ENCHANTMENT_CAST       = "enchantment_cast"
+    #TODO: ARTIFACT_CAST          = "artifact_cast"
+    #TODO: HISTORIC_CAST          = "historic_cast"
+    #TODO: NONCREATURE_CAST       = "noncreature_cast"
     # Kamigawa-block Arcane spells + Spirits
-    SPIRIT_ARCANE_CAST     = "spirit_arcane_cast"
+    #TODO: SPIRIT_ARCANE_CAST     = "spirit_arcane_cast"
     # Generic fallback when no SPELLCAST_FILTER_MAP entry is found
-    SPELL_CAST             = "spell_cast"
+    #TODO: SPELL_CAST             = "spell_cast"
 
     # ── events.py alias ───────────────────────────────────────────────────────
     # "whenever you cast a creature spell" phrasing (Beast Whisperer template)
-    CAST_CREATURE_SPELL    = "cast_creature_spell"
+    #TODO: CAST_CREATURE_SPELL    = "cast_creature_spell"
 
     # Commander rewards casting a second (or later) spell per turn
-    SECOND_SPELL           = "second_spell"
+    #TODO: SECOND_SPELL           = "second_spell"
     # Cascade / discover keyword commanders
-    CASCADE                = "cascade"
+    #TODO: CASCADE                = "cascade"
 
     # =========================================================================
     # 5. Sacrifice
     # =========================================================================
-    SACRIFICE_PAYOFF       = "sacrifice_payoff"
+    #TODO: SACRIFICE_PAYOFF       = "sacrifice_payoff"
     # XMage alias
-    SACRIFICE              = "sacrifice"
+    #TODO: SACRIFICE              = "sacrifice"
 
     # =========================================================================
     # 6. Discard / cycling
     # =========================================================================
     # Commander has a discard outlet or payoff
-    DISCARD_OUTLET         = "discard_outlet"
+    #TODO: DISCARD_OUTLET         = "discard_outlet"
     # XMage alias
-    DISCARD                = "discard"
+    #TODO: DISCARD                = "discard"
     # Commander specifically rewards the Madness keyword
-    MADNESS_PAYOFF         = "madness_payoff"
+    #TODO: MADNESS_PAYOFF         = "madness_payoff"
     # Commander triggers on the Cycling keyword
-    CYCLING_TRIGGER        = "cycling_trigger"
+    #TODO: CYCLING_TRIGGER        = "cycling_trigger"
 
     # =========================================================================
     # 7. Landfall
     # =========================================================================
-    LANDFALL               = "landfall"
+    #TODO: LANDFALL               = "landfall"
     # commander_mechanics.py XMage-derived variant (identical SQL, kept for gap tracking)
-    LANDFALL_XMAGE         = "landfall_xmage"
+    #TODO: LANDFALL_XMAGE         = "landfall_xmage"
     # events.py fine-grained: landfall that specifically draws a card
-    LANDFALL_DRAW          = "landfall_draw"
+    #TODO: LANDFALL_DRAW          = "landfall_draw"
 
     # =========================================================================
     # 8. Counters
     # =========================================================================
     # Commander places +1/+1 counters
-    COUNTER_PLACEMENT      = "counter_placement"
+    #TODO: COUNTER_PLACEMENT      = "counter_placement"
+    # +1/+1 counter payoff / amplifier (Tyvar's second-ability output)
+    COUNTER_TRIGGER        = "counter_trigger"
     # XMage alias — "one or more counters added" trigger
-    COUNTER_ADDED          = "counter_added"
+    #TODO: COUNTER_ADDED          = "counter_added"
     # Commander doubles counter accumulation
-    COUNTER_DOUBLER        = "counter_doubler"
+    #TODO: COUNTER_DOUBLER        = "counter_doubler"
     # Proliferate-centric commanders (Atraxa, etc.)
-    PROLIFERATE_MATTERS    = "proliferate_matters"
+    #TODO: PROLIFERATE_MATTERS    = "proliferate_matters"
     # XMage keywords: evolve, adapt, graft, modular, riot
-    ADAPT_EVOLVE           = "adapt_evolve"
+    #TODO: ADAPT_EVOLVE           = "adapt_evolve"
 
     # =========================================================================
     # 9. Lifegain
     # =========================================================================
-    LIFEGAIN_TRIGGER       = "lifegain_trigger"
+    #TODO: LIFEGAIN_TRIGGER       = "lifegain_trigger"
     # XMage alias
-    LIFEGAIN               = "lifegain"
+    #TODO: LIFEGAIN               = "lifegain"
 
     # =========================================================================
     # 10. Draw / card advantage
     # =========================================================================
     # Commander triggers on drawing cards (Niv-Mizzet, etc.)
-    DRAW_TRIGGER           = "draw_trigger"
+    #TODO: DRAW_TRIGGER           = "draw_trigger"
     # Spell-cast / player-draw advantage payoffs (Rhystic Study, Smothering Tithe)
-    SPELL_DRAW             = "spell_draw"
+    #TODO: SPELL_DRAW             = "spell_draw"
     # Draw payoffs that fire on creature ETB, dies, or combat damage
-    CREATURE_DRAW          = "creature_draw"
+    #TODO: CREATURE_DRAW          = "creature_draw"
     # Mass draw / loot effects (Wheel of Fortune, Windfall, Jace's Archivist)
-    WHEEL                  = "wheel"
+    #TODO: WHEEL                  = "wheel"
 
     # =========================================================================
     # 11. Tokens
     # =========================================================================
     # Commander triggers on token creation
-    TOKEN_TRIGGER          = "token_trigger"
+    #TODO: TOKEN_TRIGGER          = "token_trigger"
     # events.py alias ("you create … token" wording)
-    TOKEN_CREATION         = "token_creation"
+    #TODO: TOKEN_CREATION         = "token_creation"
 
     # =========================================================================
     # 12. Trigger interaction / phase
     # =========================================================================
     # Commander doubles / copies triggered abilities
-    TRIGGER_DOUBLING       = "trigger_doubling"
+    #TODO: TRIGGER_DOUBLING       = "trigger_doubling"
     # events.py upkeep / end-step triggers
-    PHASE_BEGIN            = "phase_begin"
+    #TODO: PHASE_BEGIN            = "phase_begin"
 
     # =========================================================================
     # 13. Static / keyword-grant effects
     # =========================================================================
     # Commander grants a keyword to its team (Odric, Akroma, etc.)
-    KEYWORD_LORD           = "keyword_lord"
+    #TODO: KEYWORD_LORD           = "keyword_lord"
     # Infect / toxic / poison-counter commanders
-    POISON_INFECT          = "poison_infect"
+    #TODO: POISON_INFECT          = "poison_infect"
     # Commander gives resources to all players (Kami, Kwain, Kynaios)
-    GROUP_HUG              = "group_hug"
+    #TODO: GROUP_HUG              = "group_hug"
     # Commander cares about low-power creatures (Edric, etc.)
-    WEENIE_MATTERS         = "weenie_matters"
+    #TODO: WEENIE_MATTERS         = "weenie_matters"
     # Commander drains each opponent on trigger (Mogis, Nekusar)
-    PUNISHER               = "punisher"
+    #TODO: PUNISHER               = "punisher"
 
     # =========================================================================
     # 13b. Tribal
@@ -233,42 +235,40 @@ class MechanicKey(StrEnum):
     # =========================================================================
     # Creatures with a mana ability (tap for mana) — mana dorks
     MANA_DORK              = "mana_dork"
-    # +1/+1 counter payoff / amplifier (Tyvar's second-ability output)
-    COUNTER_TRIGGER        = "counter_trigger"
 
     # =========================================================================
     # 14. Equipment & artifacts
     # =========================================================================
     # Commander cares about Equipment being attached / equipped / cast
-    EQUIPMENT_MATTERS      = "equipment_matters"
+    #TODO: EQUIPMENT_MATTERS      = "equipment_matters"
     # Commander scales with the *number* of artifacts you control
-    ARTIFACT_COUNT         = "artifact_count"
+    #TODO: ARTIFACT_COUNT         = "artifact_count"
     # Commander buffs / triggers off artifact *creatures* specifically
-    ARTIFACT_CREATURES     = "artifact_creatures"
+    #TODO: ARTIFACT_CREATURES     = "artifact_creatures"
 
     # =========================================================================
     # 15. Forced combat / political mechanics
     # =========================================================================
     # Commander goads opponents' creatures
-    GOAD                   = "goad"
+    #TODO: GOAD                   = "goad"
     # Commander forces all / certain creatures to attack each combat
-    FORCED_ATTACK          = "forced_attack"
+    #TODO: FORCED_ATTACK          = "forced_attack"
     # Commander interacts with the Monarch mechanic
-    MONARCH                = "monarch"
+    #TODO: MONARCH                = "monarch"
     # Commander interacts with the Initiative / Undercity mechanic
-    INITIATIVE             = "initiative"
+    #TODO: INITIATIVE             = "initiative"
 
     # =========================================================================
     # 16. Stax / restriction
     # =========================================================================
     # "Opponents can't …" blanket restriction
-    OPPONENT_RESTRICTION   = "opponent_restriction"
+    #TODO: OPPONENT_RESTRICTION   = "opponent_restriction"
     # "Activated abilities … can't be activated" lock
-    ACTIVATED_RESTRICTION  = "activated_restriction"
+    #TODO: ACTIVATED_RESTRICTION  = "activated_restriction"
     # Opponents' spells cost more to cast
-    TAX_EFFECT             = "tax_effect"
+    #TODO: TAX_EFFECT             = "tax_effect"
     # Opponents' permanents / lands enter the battlefield tapped
-    ENTERS_TAPPED_OPPONENT = "enters_tapped_opponent"
+    #TODO: ENTERS_TAPPED_OPPONENT = "enters_tapped_opponent"
 
     # =========================================================================
     # 17. Utility roles — removal, tutors, interaction, combat tricks
@@ -277,34 +277,34 @@ class MechanicKey(StrEnum):
 
     # ── Removal ───────────────────────────────────────────────────────────────
     # Destroy or exile a single permanent
-    TARGETED_REMOVAL       = "targeted_removal"
+    #TODO: TARGETED_REMOVAL       = "targeted_removal"
     # Single-target direct damage (Lightning Bolt, etc.)
-    BURN                   = "burn"
+    #TODO: BURN                   = "burn"
     # -1/-1 counter application or -X/-X debuff
-    WITHER                 = "wither"
+    #TODO: WITHER                 = "wither"
     # Return a permanent to hand
-    BOUNCE                 = "bounce"
+    #TODO: BOUNCE                 = "bounce"
     # Destroy / exile all (or all of a type)
-    SWEEPER                = "sweeper"
+    #TODO: SWEEPER                = "sweeper"
 
     # ── Tutors ────────────────────────────────────────────────────────────────
-    TUTOR_CREATURE         = "tutor_creature"
-    TUTOR_ARTIFACT         = "tutor_artifact"
+    #TODO: TUTOR_CREATURE         = "tutor_creature"
+    #TODO: TUTOR_ARTIFACT         = "tutor_artifact"
     # Any-card generic tutor (Demonic Tutor, Vampiric Tutor)
-    TUTOR_ANY              = "tutor_any"
+    #TODO: TUTOR_ANY              = "tutor_any"
 
     # ── Interaction ───────────────────────────────────────────────────────────
     # Unconditional counter (Counterspell, Force of Will, Mana Drain)
-    COUNTERSPELL_HARD      = "counterspell_hard"
+    #TODO: COUNTERSPELL_HARD      = "counterspell_hard"
     # Type- or cost-conditioned counter (Negate, Swan Song, Spell Pierce)
-    COUNTERSPELL_CONDITIONAL = "counterspell_conditional"
+    #TODO: COUNTERSPELL_CONDITIONAL = "counterspell_conditional"
     # Target-change effect acting as a soft counter (Deflecting Swat)
-    COUNTERSPELL_REDIRECT  = "counterspell_redirect"
+    #TODO: COUNTERSPELL_REDIRECT  = "counterspell_redirect"
     # Instant-speed indestructible / hexproof / phasing protection
-    PROTECTION             = "protection"
+    #TODO: PROTECTION             = "protection"
 
     # ── Combat tricks ─────────────────────────────────────────────────────────
     # Temporary evasion keyword grant (flying, menace, shadow, can't-be-blocked)
-    EVASION_GRANT          = "evasion_grant"
+    #TODO: EVASION_GRANT          = "evasion_grant"
     # Pump (+X/+X) or damage-keyword grant (trample, deathtouch, double strike)
-    COMBAT_TRICKS          = "combat_tricks"
+    #TODO: COMBAT_TRICKS          = "combat_tricks"
