@@ -69,10 +69,6 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     "attack_trigger": (
         "lower(type_line) LIKE '%creature%'"
         " AND ("
-        "   lower(oracle_text) LIKE '%deals combat damage to a player%'"
-        "   OR lower(oracle_text) LIKE '%deals combat damage%'"
-        "   OR 'Trample' = ANY(keywords)"
-        "   OR lower(oracle_text) LIKE '%trample%'"
         "   OR lower(oracle_text) LIKE '%whenever%attacks%'"
         ")"
     ),
@@ -91,7 +87,6 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
         "   OR lower(oracle_text) LIKE '%an additional +1/+1 counter%'"
         "   OR lower(oracle_text) LIKE '%for each +1/+1 counter%'"
         "   OR lower(oracle_text) LIKE '%number of +1/+1 counters%'"
-        "   OR lower(oracle_text) LIKE '%put a +1/+1 counter%'"
         ")"
     ),
 }
