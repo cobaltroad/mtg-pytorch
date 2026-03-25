@@ -313,8 +313,7 @@ _QUERY = """
     FROM cards
     WHERE legalities->>'commander' = 'legal'
       AND (
-          type_line ILIKE '%%Legendary Creature%%'
-          OR type_line ILIKE '%%Legendary Planeswalker%%'
+          (type_line ILIKE '%%Legendary%%' AND (type_line ILIKE '%%Creature%%' OR type_line ILIKE '%%Planeswalker%%'))
           OR oracle_text ILIKE '%%can be your commander%%'
       )
       AND name ILIKE %s
