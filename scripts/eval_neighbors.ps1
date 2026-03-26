@@ -61,6 +61,8 @@ if (-not $Checkpoint) {
 
 if (-not $Dataset) {
     $Dataset = Join-Path $RepoRoot "ingest_cache\mtg_dataset.pt"
+} else {
+    $Dataset = Resolve-Path $Dataset
 }
 
 if (-not (Test-Path $Dataset)) {

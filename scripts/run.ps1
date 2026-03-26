@@ -21,7 +21,7 @@ param(
     [Nullable[int]]$BatchSize = $null,
 
     [Nullable[bool]]$Resume = $null,
-    [string]$FreezeEncoder = 'false',
+    [string]$FreezeEncoder = 'true',
     [double]$EncoderLrScale = 0.01,
     # Phase 2: scale factor applied to lr for all encoder parameters.
     # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.

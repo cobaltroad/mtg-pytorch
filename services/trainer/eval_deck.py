@@ -98,16 +98,33 @@ def _find_commander(query: str, data: dict, id_to_idx: dict) -> str | None:
     return None
 
 
+_ILLEGAL_TYPE_FRAGMENTS = frozenset({
+    "Stickers", "Conspiracy", "Vanguard", "Phenomenon", "Scheme",
+})
+
+
+def _is_commander_legal(type_line: str) -> bool:
+    """Return False for card types that are not legal in Commander."""
+    return not any(frag in type_line for frag in _ILLEGAL_TYPE_FRAGMENTS)
+
+
 def _legal_ids(
     commander_id: str,
     card_ids: list[str],
     color_ids: dict[str, frozenset],
+    card_meta: dict | None = None,
 ) -> list[str]:
     """Return all card_ids whose color identity is legal under the commander."""
     cmd_ci = color_ids.get(commander_id, frozenset())
     return [
         cid for cid in card_ids
-        if color_ids.get(cid, frozenset()) <= cmd_ci and cid != commander_id
+        if cid in color_ids
+        and color_ids[cid] <= cmd_ci
+        and cid != commander_id
+        and (
+            card_meta is None
+            or _is_commander_legal(card_meta.get(cid, {}).get("type_line", ""))
+        )
     ]
 
 
@@ -356,7 +373,7 @@ def _run_stats(
     for i, deck_entry in enumerate(sample, 1):
         commander_id  = card_ids[deck_entry["commander_idx"]]
         cmd_name      = card_meta.get(commander_id, {}).get("name", commander_id)
-        legal         = _legal_ids(commander_id, card_ids, color_ids)
+        legal         = _legal_ids(commander_id, card_ids, color_ids, card_meta)
         deck          = generate_deck(model, commander_id, legal, all_encoded, id_to_idx,
                                       device=device)
         known_pos     = {card_ids[i] for i in deck_entry["card_idxs"]}
@@ -484,7 +501,8 @@ def main() -> None:
         print("Tip: only commanders present in the artifact's deck entries are searchable.")
         sys.exit(1)
 
-    legal = _legal_ids(commander_id, card_ids, color_ids)
+    card_meta = data.get("card_meta", {})
+    legal = _legal_ids(commander_id, card_ids, color_ids, card_meta)
     print(f"Generating deck ({len(legal)} legal candidates)…")
     deck = generate_deck(model, commander_id, legal, all_encoded, id_to_idx, device=device)
     print()
