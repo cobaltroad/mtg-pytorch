@@ -5,14 +5,13 @@ Entrypoint:  python -m stages.tag [--rescan]
 Sub-stages:
   embed_cards   — compute sentence-transformer embeddings → card_embeddings
   tag_abilities — oracle-text pattern matching → card_abilities
-                  Pass 1:  keyword / triggered abilities
-                  Pass 1b: gap detection (backfill new trigger_events)
-                  Pass 2:  functional role tags
+                  Pass 1:  apply TRIGGER_PATTERNS to new cards
+                           (triggered abilities, activated abilities, combat patterns)
+                  Pass 1b: gap detection (backfill new trigger_events to all cards)
 """
 from __future__ import annotations
 
 import logging
-import re
 
 from sqlalchemy import text
 from tqdm import tqdm
@@ -25,22 +24,12 @@ log = logging.getLogger(__name__)
 
 from land_tags import annotate_land_oracle  # noqa: E402
 
-from synergy import (  # noqa: E402
-    ROLE_PATTERNS,
-    LAND_ROLE_PATTERNS,
-    TRIGGER_PATTERNS,
-    is_land_card,
-)
+from synergy.triggered_ability import TRIGGERED_ABILITY_PATTERNS as _trigger_patterns  # noqa: E402
+from synergy.activated_ability import ACTIVATED_ABILITY_PATTERNS as _activated_patterns  # noqa: E402
+from synergy.combat import COMBAT_PATTERNS as _combat_patterns  # noqa: E402
+from synergy.tribal import TRIBAL_PATTERNS  # noqa: E402
 
-KEYWORD_RE = re.compile(
-    r"\b(flying|trample|haste|vigilance|deathtouch|lifelink|reach|hexproof|"
-    r"indestructible|flash|first strike|double strike|menace|prowess|"
-    r"ward|protection|shroud|defender|annihilator|cascade|convoke|"
-    r"delve|exploit|fabricate|flashback|kicker|madness|miracle|"
-    r"morph|overload|persist|proliferate|rebound|replicate|retrace|"
-    r"scry|storm|suspend|threshold|undying|unearth|wither)\b",
-    re.IGNORECASE,
-)
+TRIGGER_PATTERNS = [*_trigger_patterns, *_activated_patterns, *_combat_patterns]
 
 
 def _card_text(row) -> str:
@@ -97,47 +86,6 @@ async def embed_cards() -> None:
 
 # ── Stage 4: Tag abilities ────────────────────────────────────────────────────
 
-def _tag_roles(oracle_text: str, type_line: str) -> list[dict]:
-    """Return a list of role-tag dicts for a single card.
-
-    Applies :data:`ROLE_PATTERNS` against *oracle_text* and, when the card is
-    a Land, also applies :data:`LAND_ROLE_PATTERNS`.  Each matching role is
-    emitted at most once per card (duplicates within a single card are dropped).
-
-    Args:
-        oracle_text: The card's oracle text (may contain newlines for MDFCs).
-        type_line:   The card's type line (e.g. "Legendary Creature — Zombie").
-
-    Returns:
-        A list of ``card_abilities``-shaped dicts with ``ability_type='role'``.
-    """
-    # Deduplication key is (role_name, effect_class) so a card can receive
-    # multiple rows for the same flat role if it has distinct effect subtypes
-    # (e.g. a card that both destroys creatures and exiles enchantments).
-    seen_role_classes: set[tuple[str, str]] = set()
-    rows: list[dict] = []
-
-    patterns = list(ROLE_PATTERNS)
-    if is_land_card(type_line):
-        patterns = patterns + list(LAND_ROLE_PATTERNS)
-
-    for pattern, role_name, effect_class in patterns:
-        if (role_name, effect_class) in seen_role_classes:
-            continue
-        m = re.search(pattern, oracle_text, re.IGNORECASE)
-        if m:
-            seen_role_classes.add((role_name, effect_class))
-            rows.append({
-                "ability_type": "role",
-                "ability_name": role_name,
-                "trigger_event": None,
-                "effect_class": effect_class,
-                "raw_text": m.group(0)[:200],
-            })
-
-    return rows
-
-
 async def tag_abilities(rescan: bool = False) -> None:
     log.info("Tagging abilities%s…", " (full rescan)" if rescan else "")
 
@@ -156,57 +104,35 @@ async def tag_abilities(rescan: bool = False) -> None:
             """))
             existing_events = {row[0] for row in existing_events_result.fetchall()}
 
-    # ── Pass 1: keyword / triggered / activated abilities ─────────────────────
+    # ── Pass 1: triggered abilities ───────────────────────────────────────────
     # Processes cards that have no ability rows yet (fresh cards).
     async with Session() as db:
         result = await db.execute(text("""
-            SELECT c.id, c.oracle_text, c.keywords
+            SELECT c.id, c.type_line, c.oracle_text
             FROM cards c
             WHERE NOT EXISTS (
                 SELECT 1 FROM card_abilities a WHERE a.card_id = c.id
             )
-            AND c.oracle_text IS NOT NULL
         """))
         rows = result.fetchall()
 
-    log.info("Tagging %d cards (keyword/triggered)…", len(rows))
+    log.info("Tagging %d new cards…", len(rows))
     async with Session() as db:
         for row in tqdm(rows):
-            card_id, oracle_text, kw_list = row[0], row[1] or "", row[2] or []
+            card_id = row[0]
+            search_text = f"{row[1] or ''}\n{row[2] or ''}"
             inserts = []
 
-            for kw in kw_list:
-                inserts.append({
-                    "card_id": str(card_id),
-                    "ability_type": "keyword",
-                    "ability_name": kw,
-                    "trigger_event": None,
-                    "effect_class": None,
-                    "raw_text": kw,
-                })
-
-            for pattern, name, event in TRIGGER_PATTERNS:
-                m = re.search(pattern, oracle_text, re.IGNORECASE)
+            for key, name, pattern in TRIGGER_PATTERNS:
+                m = pattern.search(search_text)
                 if m:
                     inserts.append({
                         "card_id": str(card_id),
                         "ability_type": "triggered" if "trigger" in name else ("static" if "lord" in name or "anthem" in name else "activated"),
                         "ability_name": name,
-                        "trigger_event": event,
+                        "trigger_event": key,
                         "effect_class": None,
                         "raw_text": m.group(0),
-                    })
-
-            for m in KEYWORD_RE.finditer(oracle_text):
-                kw = m.group(0).lower()
-                if kw not in [k.lower() for k in kw_list]:
-                    inserts.append({
-                        "card_id": str(card_id),
-                        "ability_type": "keyword",
-                        "ability_name": kw.title(),
-                        "trigger_event": None,
-                        "effect_class": None,
-                        "raw_text": kw,
                     })
 
             if inserts:
@@ -229,36 +155,46 @@ async def tag_abilities(rescan: bool = False) -> None:
     # newly ingested cards during Pass 1 are still detected as gaps (they won't
     # have rows on any *existing* cards).
     new_events = [
-        (pattern, name, event)
-        for pattern, name, event in TRIGGER_PATTERNS
-        if event and event not in existing_events
+        (key, name, pattern)
+        for key, name, pattern in TRIGGER_PATTERNS
+        if key not in existing_events
     ]
 
     if new_events:
         log.info(
             "%s: %d trigger event(s) — backfilling across all cards: %s",
             "Full rescan" if rescan else "Gap detection",
-            len(new_events), [e for _, _, e in new_events],
+            len(new_events), [k for k, _, _ in new_events],
         )
+        if rescan:
+            event_keys = [k for k, _, _ in new_events]
+            async with Session() as db:
+                await db.execute(
+                    text("DELETE FROM card_abilities WHERE trigger_event = ANY(:keys)"),
+                    {"keys": event_keys},
+                )
+                await db.commit()
+            log.info("  Rescan: deleted existing rows for %d event(s)", len(event_keys))
         async with Session() as db:
             all_cards_result = await db.execute(text("""
-                SELECT c.id, c.oracle_text FROM cards c WHERE c.oracle_text IS NOT NULL
+                SELECT c.id, c.type_line, c.oracle_text FROM cards c
             """))
             all_cards = all_cards_result.fetchall()
 
         log.info("  Scanning %d cards for %d new event(s)…", len(all_cards), len(new_events))
         backfill_count = 0
         async with Session() as db:
-            for card_id, oracle_text in tqdm(all_cards):
+            for card_id, type_line, oracle_text in tqdm(all_cards):
+                search_text = f"{type_line or ''}\n{oracle_text or ''}"
                 inserts = []
-                for pattern, name, event in new_events:
-                    m = re.search(pattern, oracle_text, re.IGNORECASE)
+                for key, name, pattern in new_events:
+                    m = pattern.search(search_text)
                     if m:
                         inserts.append({
                             "card_id": str(card_id),
                             "ability_type": "triggered" if "trigger" in name else ("static" if "lord" in name or "anthem" in name else "activated"),
                             "ability_name": name,
-                            "trigger_event": event,
+                            "trigger_event": key,
                             "effect_class": None,
                             "raw_text": m.group(0)[:200],
                         })
@@ -277,59 +213,26 @@ async def tag_abilities(rescan: bool = False) -> None:
     else:
         log.info("Gap detection: all trigger events already have consumer rows — nothing to backfill (use --rescan to force)")
 
-    # ── Pass 2: functional role tags ──────────────────────────────────────────
-    # Incremental: processes cards that have no 'role' ability rows yet.
-    # Rescan: deletes all ingest-written role rows (effect_class IS NULL —
-    # the old pre-structured-effect_class format) then re-processes every card,
-    # writing the new structured effect_class values.  API-written role rows
-    # (non-null effect_class in the old API naming convention) are left in place;
-    # they coexist harmlessly in card_abilities and are gradually superseded as
-    # backfill_roles re-runs against the updated tag_card_roles() in the API.
-    if rescan:
-        async with Session() as db:
-            deleted = await db.execute(text("""
-                DELETE FROM card_abilities
-                WHERE ability_type = 'role' AND effect_class IS NULL
-            """))
-            await db.commit()
-        log.info("Rescan: deleted %d stale role rows (effect_class IS NULL)", deleted.rowcount)
-
+    # ── Pass 2: tribal membership via SQL ─────────────────────────────────────
+    # Tribal tags are resolved by type_line / changeling SQL rather than
+    # oracle-text regex, so they run as a separate bulk INSERT pass.
+    log.info("Tagging tribal membership (%d pattern(s))…", len(TRIBAL_PATTERNS))
     async with Session() as db:
-        if rescan:
-            result = await db.execute(text("""
-                SELECT c.id, c.oracle_text, c.type_line
-                FROM cards c
-                WHERE c.oracle_text IS NOT NULL
-            """))
-        else:
-            result = await db.execute(text("""
-                SELECT c.id, c.oracle_text, c.type_line
-                FROM cards c
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM card_abilities a
-                    WHERE a.card_id = c.id AND a.ability_type = 'role'
+        for key, name, where_sql in TRIBAL_PATTERNS:
+            if rescan:
+                await db.execute(
+                    text("DELETE FROM card_abilities WHERE trigger_event = :key"),
+                    {"key": key},
                 )
-                AND c.oracle_text IS NOT NULL
-            """))
-        role_rows = result.fetchall()
-
-    log.info("Tagging roles for %d cards…", len(role_rows))
-    async with Session() as db:
-        for row in tqdm(role_rows):
-            card_id, oracle_text, type_line = row[0], row[1] or "", row[2] or ""
-            role_inserts = [
-                {**rd, "card_id": str(card_id)}
-                for rd in _tag_roles(oracle_text, type_line)
-            ]
-            if role_inserts:
-                await db.execute(text("""
-                    INSERT INTO card_abilities
-                        (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
-                    VALUES
-                        (:card_id, :ability_type, :ability_name, :trigger_event, :effect_class, :raw_text)
-                    ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, '')) DO NOTHING
-                """), role_inserts)
-
+            result = await db.execute(text(f"""
+                INSERT INTO card_abilities
+                    (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
+                SELECT id, 'tribal', :name, :key, NULL, NULL
+                FROM cards
+                WHERE {where_sql}
+                ON CONFLICT (card_id, ability_type, ability_name, COALESCE(effect_class, '')) DO NOTHING
+            """), {"name": name, "key": key})
+            log.info("  %s: %d rows", key, result.rowcount)
         await db.commit()
 
 

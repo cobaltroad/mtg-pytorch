@@ -21,7 +21,7 @@ Writes three distinct score_type buckets:
                             Requires tag_abilities_xmage to have been run first.
 
 Entrypoint:  python -m stages.dataset
-             [--stage compute_synergy|compute_synergy_xmage|compute_effect_peer_synergy]
+             [--stage compute_textmatch_synergy|compute_xmage_synergy|compute_xmage_effect_synergy]
 """
 from __future__ import annotations
 
@@ -38,16 +38,17 @@ log = logging.getLogger(__name__)
 EFFECT_PEER_LIMIT = int(os.environ.get("EFFECT_PEER_LIMIT", "500_000"))
 """Maximum effect_peer edges total (across all (trigger_event, effect_class) groups)."""
 
-from synergy import (  # noqa: E402
-    PRODUCER_MAP,
-    XMAGE_PRODUCER_MAP,
-    SPELLCAST_TRIGGER_PRODUCER_MAP,
-)
+from synergy import PRODUCER_MAP  # noqa: E402
+
+def _xmage_maps():
+    """Lazy import — only available once xmage sub-module is wired into synergy/__init__.py."""
+    from synergy import XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP
+    return XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP
 
 
 # ── Oracle-text synergy edges ─────────────────────────────────────────────────
 
-async def compute_synergy() -> None:
+async def compute_textmatch_synergy() -> None:
     """Build synergy edges in small chunked transactions.
 
     Fetches producer card IDs in Python, then drives INSERT...SELECT statements
@@ -230,7 +231,7 @@ async def _xmage_insert_edges(
     return total_inserted
 
 
-async def compute_synergy_xmage() -> None:
+async def compute_xmage_synergy() -> None:
     """Build XMage-class synergy edges for the compositional training path.
 
     Reads ``card_abilities`` rows where ``source='xmage'``, groups by
@@ -249,6 +250,7 @@ async def compute_synergy_xmage() -> None:
     by the co-occurrence training path.
     """
     log.info("Computing XMage-class synergy edges (compositional path)…")
+    XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP = _xmage_maps()
 
     for ability_class, default_producer_where in XMAGE_PRODUCER_MAP.items():
         if ability_class == "SpellCastControllerTriggeredAbility":
@@ -288,7 +290,7 @@ async def compute_synergy_xmage() -> None:
                 log.info("  %s → no producers found, skipping", ability_class)
 
 
-async def compute_effect_peer_synergy() -> None:
+async def compute_xmage_effect_synergy() -> None:
     """Build peer synergy edges between cards sharing the same (trigger_event, effect_class).
 
     Reads ``card_abilities`` rows where ``source='xmage'`` and groups cards by
@@ -395,21 +397,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute synergy edges for training datasets")
     parser.add_argument(
         "--stage",
-        choices=["compute_synergy", "compute_synergy_xmage", "compute_effect_peer_synergy"],
+        choices=["compute_textmatch_synergy", "compute_xmage_synergy", "compute_xmage_effect_synergy"],
         default=None,
         help="Run a single synergy stage (default: run all three)",
     )
     args = parser.parse_args()
 
-    if args.stage == "compute_synergy":
-        asyncio.run(compute_synergy())
-    elif args.stage == "compute_synergy_xmage":
-        asyncio.run(compute_synergy_xmage())
-    elif args.stage == "compute_effect_peer_synergy":
-        asyncio.run(compute_effect_peer_synergy())
+    if args.stage == "compute_textmatch_synergy":
+        asyncio.run(compute_textmatch_synergy())
+    elif args.stage == "compute_xmage_synergy":
+        asyncio.run(compute_xmage_synergy())
+    elif args.stage == "compute_xmage_effect_synergy":
+        asyncio.run(compute_xmage_effect_synergy())
     else:
         async def _run_all():
-            await compute_synergy()
-            await compute_synergy_xmage()
-            await compute_effect_peer_synergy()
+            await compute_textmatch_synergy()
+            await compute_xmage_synergy()
+            await compute_xmage_effect_synergy()
         asyncio.run(_run_all())

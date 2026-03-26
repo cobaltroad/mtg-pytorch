@@ -351,8 +351,8 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
 
         # All parsed ability classes are stored; ABILITY_CLASS_TO_EVENT provides
         # the trigger_event translation for the co-occurrence path.  Unmapped
-        # classes get trigger_event=None so compute_synergy (pattern-based) ignores
-        # them, while compute_synergy_xmage (compositional path) finds them via
+        # classes get trigger_event=None so compute_textmatch_synergy (pattern-based) ignores
+        # them, while compute_xmage_synergy (compositional path) finds them via
         # ability_name regardless of trigger_event.
         if not ability_classes:
             skipped_no_abilities += 1

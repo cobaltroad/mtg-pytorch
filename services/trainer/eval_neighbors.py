@@ -136,11 +136,11 @@ def main():
     ]
 
     # Print table
-    print(f"{'─' * 76}")
+    print(f"{'-' * 76}")
     print(f"  Top {args.top} nearest neighbours for: {qmeta['name']}")
-    print(f"{'─' * 76}")
+    print(f"{'-' * 76}")
     print(f"  {'#':>3}  {'Score':>6}  {'Name':<32}  Type")
-    print(f"  {'─'*3}  {'─'*6}  {'─'*32}  {'─'*28}")
+    print(f"  {'-'*3}  {'-'*6}  {'-'*32}  {'-'*28}")
     for rank, (score, card_id, meta) in enumerate(ranked[: args.top], 1):
         name  = (meta.get("name") or card_id)[:31]
         ttype = (meta.get("type_line") or "")[:28]
