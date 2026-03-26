@@ -64,6 +64,7 @@ Commander-specific maps (``commander_value``) are imported directly by
 from __future__ import annotations
 
 from . import commander_mechanics
+from .xmage import XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP  # noqa: F401
 
 PRODUCER_MAP: dict[str, str] = {
     **commander_mechanics.PATTERN_KEY_TO_PRODUCER_SQL,
@@ -88,4 +89,6 @@ CONSUMER_MAP: dict[str, str] = {
 __all__ = [
     "PRODUCER_MAP",
     "CONSUMER_MAP",
+    "XMAGE_PRODUCER_MAP",
+    "SPELLCAST_TRIGGER_PRODUCER_MAP",
 ]
