@@ -5,8 +5,12 @@ Each sub-module defines:
   RATE : float  — fraction of MAX_POSITIVES to sample per commander (caps
                   the staple contribution to prevent representation collapse)
 
-STAPLE_CATEGORIES aggregates all eight categories into a single mapping:
-  {category_name: (sql_where_body, inclusion_rate)}
+STAPLE_CATEGORIES aggregates the active categories into a single mapping:
+  {category_name: (sql_where_body, effective_inclusion_rate)}
+
+Effective rates are the base RATE for each module multiplied by
+INCLUSION_FACTOR — a global scalar for dialling down all shared signal at
+once if representation collapse is observed during training.
 
 Usage in export_dataset_commanders.py:
   from synergy.staples import STAPLE_CATEGORIES
@@ -21,9 +25,21 @@ The caller is responsible for:
   3. Not adding category names to the archetype/key_list (staples should
      not influence the archetype field in the training artifact)
 
-Inclusion rates are calibrated to broadly reflect a real 99-card Commander
-deck infrastructure split (72 cards total across all categories, leaving
-~28 slots for mechanic-specific signal):
+Environment variables
+---------------------
+  STAPLES_INCLUSION_FACTOR   float in (0, 1]  default 1.0
+      Global multiplier applied to every category's RATE.  Reduce below 1.0
+      to shrink the total staple footprint when collapse is observed.
+      Example: 0.5 halves every category cap, leaving more room for
+      mechanic-specific signal.
+
+  STAPLES_INCLUDE_LANDS      "true" | "false"  default "true"
+      When "false", manabase and utilityland are excluded entirely.
+      Useful if land-identity overlap across commanders proves to be the
+      primary driver of collapse.
+
+Inclusion rates (at INCLUSION_FACTOR=1.0, INCLUDE_LANDS=true) reflect a
+real 99-card Commander deck infrastructure split:
 
   ramp          0.12  → 36 cards  (mana rocks + land ramp + dorks)
   removal       0.12  → 36 cards  (targeted destroy/exile/bounce/-X/-X)
@@ -39,6 +55,8 @@ deck infrastructure split (72 cards total across all categories, leaving
 
 from __future__ import annotations
 
+import os
+
 from . import (
     ramp,
     removal,
@@ -50,7 +68,14 @@ from . import (
     utilityland,
 )
 
-STAPLE_CATEGORIES: dict[str, tuple[str, float]] = {
+# ── Levers ────────────────────────────────────────────────────────────────────
+
+INCLUSION_FACTOR: float = float(os.environ.get("STAPLES_INCLUSION_FACTOR", "1.0"))
+INCLUDE_LANDS: bool = os.environ.get("STAPLES_INCLUDE_LANDS", "true").lower() != "false"
+
+# ── Category registry ─────────────────────────────────────────────────────────
+
+_BASE: dict[str, tuple[str, float]] = {
     "ramp":        (ramp.SQL,        ramp.RATE),
     "removal":     (removal.SQL,     removal.RATE),
     "sweeper":     (sweeper.SQL,     sweeper.RATE),
@@ -61,4 +86,10 @@ STAPLE_CATEGORIES: dict[str, tuple[str, float]] = {
     "utilityland": (utilityland.SQL, utilityland.RATE),
 }
 
-__all__ = ["STAPLE_CATEGORIES"]
+STAPLE_CATEGORIES: dict[str, tuple[str, float]] = {
+    category: (where, rate * INCLUSION_FACTOR)
+    for category, (where, rate) in _BASE.items()
+    if INCLUDE_LANDS or category not in ("manabase", "utilityland")
+}
+
+__all__ = ["STAPLE_CATEGORIES", "INCLUSION_FACTOR", "INCLUDE_LANDS"]
