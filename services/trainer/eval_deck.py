@@ -1,9 +1,10 @@
 """
-Phase 4 deck quality evaluator.
+Phase 4 + Phase 5 deck evaluator.
 
-Autoregressively generates a 99-card Commander deck from a Phase 4 checkpoint
-and prints quality metrics.  Requires no database connection — loads entirely
-from the commanders training artifact and the checkpoint file.
+Scores all legal candidates against the commander with the trained CardEncoder,
+then assembles a legal 99-card deck via deck_builder.py (Phase 5).  When
+DATABASE_URL is set, deck_builder queries the DB for role cards and nonbasic
+lands; otherwise it falls back to the autoregressive Phase 4 output.
 
 Usage
 -----
@@ -41,6 +42,10 @@ NAME
 --n N
     Number of random commanders to sample for --stats (default: 30).
 
+--no-phase5
+    Skip Phase 5 assembly; print the raw Phase 4 autoregressive output
+    instead.  Useful when DATABASE_URL is unavailable.
+
 Quality metrics
 ---------------
   Recall        Fraction of the commander's artifact positives that appear
@@ -60,6 +65,7 @@ Quality metrics
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 from collections import Counter, defaultdict
@@ -69,6 +75,12 @@ import numpy as np
 import torch
 
 from train import CardEncoder, DeckConstructor, load_artifact, load_checkpoint, CHECKPOINT_DIR
+import deck_builder
+
+DATABASE_URL = (
+    os.environ.get("DATABASE_URL", "")
+    .replace("postgresql+asyncpg://", "postgresql://")
+)
 
 # ── Artifact helpers ──────────────────────────────────────────────────────────
 
@@ -154,6 +166,34 @@ def _encode_all(
             batch = torch.from_numpy(emb_matrix[i: i + batch_size]).to(device)
             out.append(model.card_encoder(batch).cpu())
     return torch.cat(out, dim=0)
+
+
+# ── Candidate scoring ─────────────────────────────────────────────────────────
+
+
+def score_candidates(
+    model: DeckConstructor,
+    commander_id: str,
+    legal_card_ids: list[str],
+    all_encoded: torch.Tensor,
+    id_to_idx: dict[str, int],
+    device: torch.device,
+) -> list[str]:
+    """Return legal_card_ids sorted by cosine similarity to the commander (descending).
+
+    This is a single-pass scoring without the autoregressive loop — it captures
+    what Phase 4 learned as a pure ranking function rather than sequential
+    composition.  The resulting ranked list is the input to Phase 5 assembly.
+    """
+    model.eval()
+    all_encoded = all_encoded.to(device)
+    with torch.no_grad():
+        z_cmd = all_encoded[id_to_idx[commander_id]]              # (D,)
+        indices = [id_to_idx[c] for c in legal_card_ids]
+        z_legal = all_encoded[torch.tensor(indices, device=device)]  # (C, D)
+        scores = (z_legal @ z_cmd).cpu()                          # (C,)
+    order = scores.argsort(descending=True).tolist()
+    return [legal_card_ids[i] for i in order]
 
 
 # ── Deck generation ───────────────────────────────────────────────────────────
@@ -349,6 +389,31 @@ def _print_deck(
     }
 
 
+def _print_breakdown(breakdown: dict, card_meta: dict) -> None:
+    """Print the Phase 5 assembly breakdown."""
+    def _names(cids: list[str], cap: int = 6) -> str:
+        ns = [card_meta.get(c, {}).get("name", c[:8]) for c in cids[:cap]]
+        suffix = f" +{len(cids) - cap} more" if len(cids) > cap else ""
+        return ", ".join(ns) + suffix if ns else "(none)"
+
+    print()
+    print("─" * WIDTH)
+    print("  Phase 5 assembly breakdown")
+    print("─" * WIDTH)
+    print(f"  Forced ramp  ({len(breakdown['forced_ramp'])}): {_names(breakdown['forced_ramp'])}")
+    print(f"  Forced lands ({len(breakdown['forced_lands'])}): {_names(breakdown['forced_lands'])}")
+    for role, cards in sorted(breakdown["role"].items()):
+        print(f"  Role {role:<14} ({len(cards)}): {_names(cards, 3)}")
+    curve_counts = {k: len(v) for k, v in breakdown["curve"].items()}
+    curve_str = "  ".join(f"CMC{k}×{curve_counts[k]}" for k in sorted(curve_counts, key=lambda x: int(x)))
+    print(f"  Curve fill: {curve_str}")
+    print(f"  Nonbasic lands ({len(breakdown['nonbasic_land'])})")
+    basics_str = "  ".join(f"{deck_builder.COLOR_TO_BASIC.get(c, c)}×{n}"
+                           for c, n in breakdown["basic_land"].items())
+    print(f"  Basics: {basics_str or '(none)'}")
+    print("─" * WIDTH)
+
+
 # ── Aggregate stats mode ──────────────────────────────────────────────────────
 
 
@@ -413,7 +478,7 @@ def main() -> None:
     default_dataset = str(_repo_root / "ingest_cache" / "mtg_commanders.pt")
 
     parser = argparse.ArgumentParser(
-        description="Phase 4 deck quality evaluator (no DB required)",
+        description="Phase 4 + Phase 5 deck evaluator",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -451,12 +516,33 @@ def main() -> None:
         metavar="N",
         help="Number of random commanders for --stats (default: 30).",
     )
+    parser.add_argument(
+        "--no-phase5",
+        action="store_true",
+        help="Skip Phase 5 assembly; show raw Phase 4 autoregressive output instead.",
+    )
     args = parser.parse_args()
 
     if not args.stats and not args.commander:
         parser.print_help()
         print("\nTip: pass --stats for an aggregate quality summary.")
         sys.exit(0)
+
+    # Phase 5 requires DB; check availability
+    use_phase5 = not args.no_phase5
+    db_conn = None
+    if use_phase5:
+        if DATABASE_URL:
+            try:
+                import psycopg2
+                db_conn = psycopg2.connect(DATABASE_URL)
+                print(f"DB         : connected (Phase 5 active)")
+            except Exception as e:
+                print(f"DB         : unavailable ({e}) — falling back to Phase 4 only")
+                use_phase5 = False
+        else:
+            print("DB         : DATABASE_URL not set — falling back to Phase 4 only")
+            use_phase5 = False
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device     : {device}")
@@ -492,6 +578,8 @@ def main() -> None:
 
     if args.stats:
         _run_stats(model, data, all_encoded, id_to_idx, color_ids, args.n, device)
+        if db_conn:
+            db_conn.close()
         return
 
     # Single commander
@@ -499,15 +587,50 @@ def main() -> None:
     if commander_id is None:
         print(f"ERROR: no commander found matching '{args.commander}'", file=sys.stderr)
         print("Tip: only commanders present in the artifact's deck entries are searchable.")
+        if db_conn:
+            db_conn.close()
         sys.exit(1)
 
     card_meta = data.get("card_meta", {})
     legal = _legal_ids(commander_id, card_ids, color_ids, card_meta)
-    print(f"Generating deck ({len(legal)} legal candidates)…")
-    deck = generate_deck(model, commander_id, legal, all_encoded, id_to_idx, device=device)
-    print()
 
-    _print_deck(commander_id, deck, data, all_encoded, id_to_idx, color_ids, top=args.top)
+    if use_phase5 and db_conn:
+        # Phase 5 path: score all candidates → deck_builder assembles 99 cards
+        print(f"Scoring {len(legal)} legal candidates (Phase 4)…")
+        ranked = score_candidates(model, commander_id, legal, all_encoded, id_to_idx, device)
+
+        print("Assembling deck (Phase 5)…")
+        color_identity = color_ids.get(commander_id, frozenset())
+        try:
+            result = deck_builder.build(
+                ranked_cards   = ranked,
+                commander_id   = commander_id,
+                color_identity = color_identity,
+                card_meta      = card_meta,
+                conn           = db_conn,
+            )
+            deck = result["deck"]
+            breakdown = result["breakdown"]
+        except Exception as e:
+            print(f"Phase 5 assembly failed: {e}", file=sys.stderr)
+            print("Falling back to Phase 4 autoregressive output…")
+            deck = generate_deck(model, commander_id, legal, all_encoded, id_to_idx, device=device)
+            breakdown = None
+        finally:
+            db_conn.close()
+
+        print()
+        _print_deck(commander_id, deck, data, all_encoded, id_to_idx, color_ids, top=args.top)
+        if breakdown:
+            _print_breakdown(breakdown, card_meta)
+    else:
+        # Phase 4 autoregressive fallback
+        print(f"Generating deck ({len(legal)} legal candidates, Phase 4 only)…")
+        deck = generate_deck(model, commander_id, legal, all_encoded, id_to_idx, device=device)
+        if db_conn:
+            db_conn.close()
+        print()
+        _print_deck(commander_id, deck, data, all_encoded, id_to_idx, color_ids, top=args.top)
 
 
 if __name__ == "__main__":

@@ -75,7 +75,7 @@ SPELL_SLOTS      = 99 - LAND_TARGET        # 63 model-scored non-land cards
 NONBASIC_LAND_CAP = 20
 RAMP_TARGET      = 10
 
-GUARANTEED_NONBASICS = ("Command Tower", "Exotic Orchard")
+GUARANTEED_NONBASICS = ("Command Tower", "Exotic Orchard", "Terramorphic Expanse", "Evolving Wilds")
 GUARANTEED_RAMP_NAMES = ("Sol Ring", "Arcane Signet")
 
 COLOR_TO_BASIC = {
