@@ -93,6 +93,7 @@ from synergy.commander_mechanics import (
     PATTERN_KEY_TO_PRODUCER_SQL,
     PATTERN_KEY_TO_CONSUMER_SQL,
 )
+from synergy.staples import STAPLE_CATEGORIES
 
 OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
 MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
@@ -134,6 +135,10 @@ def _load_commander_positives(
     2. For each matched key, look up PRODUCER or CONSUMER SQL from
        commander_mechanics.py and execute it once (results are cached by key).
     3. Apply color-identity filter: card_ci ⊆ commander_ci.
+    4. Execute each staple category SQL once (cached), then per-commander
+       sample min(eligible, round(rate * MAX_POSITIVES)) cards after color
+       filter.  Staple keys are NOT added to key_list so the archetype field
+       is unaffected.
     """
     result: dict[str, tuple[set[str], list[str]]] = {
         cid: (set(), []) for cid in commander_ids
@@ -187,12 +192,32 @@ def _load_commander_positives(
 
     log.info("Executed SQL for %d/%d unique pattern keys", len(key_cards), len(all_keys))
 
+    # ── Execute staple SQL once per category (results cached) ─────────────────
+    staple_cards: dict[str, set[str]] = {}
+    with get_conn() as conn:
+        for category, (where, _) in STAPLE_CATEGORIES.items():
+            cards_for_cat: set[str] = set()
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT id::text FROM cards WHERE {where}")
+                for (card_id,) in cur.fetchall():
+                    if card_id in id_to_idx:
+                        cards_for_cat.add(card_id)
+            staple_cards[category] = cards_for_cat
+            log.debug("  staple=%-20s  %d eligible", category, len(cards_for_cat))
+
+    log.info(
+        "Staple categories: %d categories, %d distinct eligible cards",
+        len(staple_cards),
+        len({c for s in staple_cards.values() for c in s}),
+    )
+
     # ── Assign positives per commander with color filter ─────────────────────
     for cid in commander_ids:
         keys = cmd_patterns.get(cid, [])
         pos_ids, key_list = result[cid]
         cmd_ci = color_ids.get(cid, frozenset())
 
+        # Mechanic-specific positives (drive archetype / key_list)
         for key in keys:
             if key not in key_cards:
                 continue
@@ -201,6 +226,18 @@ def _load_commander_positives(
                 if card_ci <= cmd_ci:
                     pos_ids.add(card_id)
             key_list.append(key)
+
+        # Staple positives — rate-capped, color-filtered, not added to key_list
+        for category, (_, rate) in STAPLE_CATEGORIES.items():
+            eligible = [
+                card_id for card_id in staple_cards[category]
+                if color_ids.get(card_id, frozenset()) <= cmd_ci
+            ]
+            n_take = round(rate * MAX_POSITIVES)
+            if len(eligible) > n_take:
+                random.shuffle(eligible)
+                eligible = eligible[:n_take]
+            pos_ids.update(eligible)
 
     total_pos = sum(len(v[0]) for v in result.values())
     covered   = sum(1 for v in result.values() if v[0])
@@ -322,7 +359,7 @@ def main() -> None:
         "avg_positives":  round(avg_pos, 1),
         "min_positives":  MIN_POSITIVES,
         "max_positives":  MAX_POSITIVES,
-        "source":         "decompose",
+        "source":         "decompose+staples",
         "created_at":     datetime.now(timezone.utc).isoformat(),
     }
 
