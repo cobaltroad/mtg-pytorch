@@ -67,6 +67,18 @@ from . import commander_mechanics
 
 PRODUCER_MAP: dict[str, str] = {
     **commander_mechanics.PATTERN_KEY_TO_PRODUCER_SQL,
+    # Mana rocks — peer edges between all artifact mana producers.
+    # Both producer and consumer are the mana_rock set; this creates
+    # every-mana-rock → every-other-mana-rock ability_trigger edges so
+    # Phase 2 NT-Xent sees them as positive pairs rather than orphans.
+    "mana_rock": (
+        "type_line ILIKE '%Artifact%' "
+        "AND type_line NOT ILIKE '%Land%' "
+        "AND EXISTS ("
+        "    SELECT 1 FROM card_abilities ca"
+        "    WHERE ca.card_id = id AND ca.trigger_event = 'mana_rock'"
+        ")"
+    ),
 }
 
 CONSUMER_MAP: dict[str, str] = {
