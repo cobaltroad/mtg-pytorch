@@ -122,22 +122,63 @@ should score higher than arbitrary color-legal cards.
 Training without human decklists is deliberate — see
 [Training data: two-artifact design](#training-data-two-artifact-design) below.
 
+#### What Phase 3 actually learns
+
+The artifact already encodes which cards belong with which commander as binary
+labels.  Phase 3 does not rediscover these relationships — it learns a
+continuous scoring function over them.  The quantitative output is a ranking
+model that can score any (commander, card) pair at inference without querying
+the artifact, and that generalises to:
+
+- **New cards** (new set releases) not yet decomposed into any positive set
+- **Commanders with thin coverage** — those whose oracle text matched few
+  patterns still benefit from embedding-space interpolation with similar commanders
+- **Smooth interpolation** — commanders with similar archetypes share geometry
+  even though their positive sets were built independently
+
+As artifact coverage approaches 100%, Phase 3 loss increasingly measures
+*memorisation fidelity* rather than generalisation.  A low BPR loss in that
+regime means the model faithfully reproduces the artifact's judgements; the
+true generalization test is recall on held-out commanders and `eval_deck.ps1`
+output on commanders with sparse decompose coverage.
+
 ### Phase 4 — Generative deck construction
 
 **Loss:** InfoNCE with 64 random negatives per position, temperature=0.1.
 **Architecture:** the DeckConstructor decoder with the Phase 3 CardEncoder
 weights loaded.  The encoder is **unfrozen** by default (controlled by
-`-FreezeEncoder` in `run.ps1`); `--encoder-lr-scale` (default 0.1×) keeps
+`-FreezeEncoder` in `run.ps1`); `--encoder-lr-scale` (default 0.01×) keeps
 the encoder's learning rate well below the decoder's to protect Phase 3
 representations.
 **Data:** the same `mtg_commanders.pt` synthetic decks.  For each position the
 model predicts the next card given the commander and the cards selected so far.
 Sampled freely at inference — not greedy.
 
-Keeping the encoder's learning rate low is important: aggressive encoder updates
-can destroy Phase 3 synergy geometry, causing score compression (all cosine
-similarities collapse toward 1.0).  Pass `-FreezeEncoder true` in `run.ps1`
-to freeze the encoder entirely if this becomes a problem.
+#### What Phase 4 actually learns
+
+The artifact's per-commander positive sets are flat: all included cards are
+equally weighted with no sense of order, priority, or diminishing returns.
+Phase 4 adds the one signal the artifact cannot provide — **sequential
+composition**.  Given a partial deck, the decoder learns:
+
+- **Conditional selection** — after picking ramp and draw, interaction becomes
+  more valuable; a second copy of a role already well-covered scores lower
+- **Type diversity** — the attention context over the partial deck discourages
+  piling on any single category
+- **Role completion** — early picks shape what the decoder considers "missing"
+  in subsequent positions
+
+The practical consequence is that the same card may score differently at
+position 10 versus position 60, depending on what the deck already contains.
+This is the generative capability the heuristic scoring pipeline in
+`services/api/ops/deck/generate.py` approximates with its iterative
+re-scoring loop.
+
+Keeping the encoder's learning rate low (1% of decoder lr) is important:
+aggressive encoder updates can destroy Phase 3 synergy geometry, causing
+score compression (all cosine similarities collapse toward 1.0).  Pass
+`-FreezeEncoder true` in `run.ps1` to freeze the encoder entirely if this
+becomes a problem.
 
 ---
 

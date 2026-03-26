@@ -277,7 +277,7 @@ if ($Mode -eq 'train') {
         if ($resolvedFreezeEncoder) {
             $cmd += '--freeze-encoder'
         } else {
-            $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
+            $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $Phase2EncoderLrScale)
         }
     }
 
