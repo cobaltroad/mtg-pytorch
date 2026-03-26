@@ -146,11 +146,11 @@ function Show-PostTrainingGuidance {
         1 {
             Write-Host ''
             Write-Host ' Nearest-neighbour spot-checks  (Phase 1 success criteria):' -ForegroundColor White
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Sol Ring"' + $dsArg)
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Sol Ring" -Phase 1' + $dsArg)
             Write-Host '     -> top-5 should be mana rocks (Arcane Signet, Mind Stone, ...)'
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares"' + $dsArg)
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -Phase 1' + $dsArg)
             Write-Host '     -> top-5 should be removal (Path to Exile, Generous Gift, ...)'
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves"' + $dsArg)
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 1' + $dsArg)
             Write-Host '     -> top-5 should be mana dorks (Elvish Mystic, Fyndhorn Elves, ...)'
             Write-Host ''
             Write-Host ' Regression check: if mana-dork neighbors diverge after staple-pair'
@@ -179,9 +179,9 @@ function Show-PostTrainingGuidance {
             Write-Host ' not just loss:'
             Write-Host ''
             Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves"' + $dsArg)
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 2' + $dsArg)
             Write-Host '     -> should still show mana dorks'
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares"' + $dsArg)
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -Phase 2' + $dsArg)
             Write-Host '     -> should still show removal spells'
             Write-Host ''
             Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
