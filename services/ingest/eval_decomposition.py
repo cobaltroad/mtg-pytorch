@@ -11,22 +11,22 @@ Usage
 Via Docker::
 
     # Single commander (partial match OK)
-    docker compose run --rm ingest python scripts/eval_commander.py "Anje"
+    docker compose run --rm ingest python eval_decomposition.py "Anje"
 
     # Exact name
-    docker compose run --rm ingest python scripts/eval_commander.py "Syr Konrad, the Grim"
+    docker compose run --rm ingest python eval_decomposition.py "Syr Konrad, the Grim"
 
     # Show all commanders with zero signals (gap analysis)
-    docker compose run --rm ingest python scripts/eval_commander.py --no-signals
+    docker compose run --rm ingest python eval_decomposition.py --no-signals
 
     # Coverage summary only
-    docker compose run --rm ingest python scripts/eval_commander.py --stats
+    docker compose run --rm ingest python eval_decomposition.py --stats
 
     # Show commanders matching a pattern key
-    docker compose run --rm ingest python scripts/eval_commander.py --pattern madness_payoff
+    docker compose run --rm ingest python eval_decomposition.py --pattern madness_payoff
 
     # Use a different input file
-    docker compose run --rm ingest python scripts/eval_commander.py "Atraxa" \\
+    docker compose run --rm ingest python eval_decomposition.py "Atraxa" \\
         --input /data/commander_decomposition.json
 
 Options
