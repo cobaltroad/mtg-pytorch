@@ -159,19 +159,24 @@ function Show-PostTrainingGuidance {
             Write-Host ' Next step — train Phase 2:'
             Write-Host ('   .\scripts\run.ps1 -Train 2' + $dsArg)
             Write-Host ''
-            Write-Host ' Phase 2 loss benchmarks (reference for after Phase 2 completes):'
-            Write-Host '   > 0.65      barely learning'
-            Write-Host '   0.55-0.60   good'
-            Write-Host '   0.45-0.50   excellent'
-            Write-Host '   < 0.45      overfit risk — reduce epochs or increase noise'
+            Write-Host ' Phase 2 NT-Xent loss benchmarks (batch_size=512, ceiling=6.93):'
+            Write-Host '   > 6.5       barely learning'
+            Write-Host '   5.0-6.2     good'
+            Write-Host '   3.5-5.0     excellent'
+            Write-Host '   < 3.5       overfit risk'
         }
         2 {
             Write-Host ''
-            Write-Host ' Loss benchmarks:' -ForegroundColor White
-            Write-Host '   > 0.65      barely learning — check synergy_edges row count'
-            Write-Host '   0.55-0.60   good'
-            Write-Host '   0.45-0.50   excellent'
-            Write-Host '   < 0.45      overfit risk — shorten training or increase neg-ratio'
+            Write-Host ' NT-Xent loss scale  (batch_size=512, random ceiling = ln(1024) = 6.93):' -ForegroundColor White
+            Write-Host '   > 6.5       barely learning — check synergy_edges row count'
+            Write-Host '   5.0-6.2     good'
+            Write-Host '   3.5-5.0     excellent'
+            Write-Host '   < 3.5       overfit risk — shorten training'
+            Write-Host ''
+            Write-Host ' Most learning happens in the second half of training as temperature'
+            Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
+            Write-Host ' epoch 30 in the 5.5-6.2 range is normal — evaluate geometry,'
+            Write-Host ' not just loss:'
             Write-Host ''
             Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
             Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves"' + $dsArg)
