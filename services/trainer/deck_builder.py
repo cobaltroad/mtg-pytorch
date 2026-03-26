@@ -429,13 +429,23 @@ def build(
         else:
             per_color = {"C": basics_needed}
 
-        # Look up basic land card IDs from artifact card_meta
+        # Look up basic land card IDs from DB (more reliable than card_meta,
+        # which may not include basic lands if they were filtered during export)
+        basic_names_needed = {
+            COLOR_TO_BASIC[c] for c in per_color if c in COLOR_TO_BASIC and per_color[c] > 0
+        }
         basic_name_to_id: dict[str, str] = {}
-        for cid, meta in card_meta.items():
-            if _is_basic(meta):
-                name = meta.get("name", "")
-                if name and name not in basic_name_to_id:
-                    basic_name_to_id[name] = cid
+        if basic_names_needed:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id::text, name FROM cards"
+                    " WHERE name = ANY(%s)"
+                    " AND type_line ILIKE '%%Basic%%Land%%'",
+                    (list(basic_names_needed),)
+                )
+                for cid, name in cur.fetchall():
+                    if name not in basic_name_to_id:
+                        basic_name_to_id[name] = cid
 
         for color, count in per_color.items():
             if count <= 0:

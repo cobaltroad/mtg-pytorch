@@ -283,7 +283,9 @@ if ($Mode -eq 'train') {
 
     if ($Phase -eq 4) {
         $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
-        if (-not $resolvedFreezeEncoder) {
+        if ($resolvedFreezeEncoder) {
+            $cmd += '--freeze-encoder'
+        } else {
             $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $EncoderLrScale)
         }
         $cmd += @('--patience', $Patience)
