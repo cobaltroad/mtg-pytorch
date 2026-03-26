@@ -26,6 +26,9 @@ param(
     # Phase 2: scale factor applied to lr for all encoder parameters.
     # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.
     [double]$Phase2EncoderLrScale = 0.1,
+    # Phase 1: weight applied to the staple role-pair NT-Xent loss term.
+    # 0 disables staple pairs; default 0.5 = half weight of noise-aug term.
+    [double]$StaplePairWeight = 0.5,
     # Phase 2: NT-Xent temperature annealing range.
     # Start high for soft gradients, end near Phase 1 value to sharpen clusters.
     [double]$Phase2TempStart = 0.3,
@@ -258,6 +261,10 @@ if ($Mode -eq 'train') {
 
     if ($Dataset) {
         $cmd += @('--dataset', $Dataset)
+    }
+
+    if ($Phase -eq 1) {
+        $cmd += @('--staple-pair-weight', $StaplePairWeight)
     }
 
     if ($Phase -eq 2) {
