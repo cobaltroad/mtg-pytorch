@@ -36,10 +36,7 @@ _ANY_ARTIFACT   = "type_line ILIKE '%Artifact%' AND type_line NOT ILIKE '%Land%'
 _MANA_ROCK      = (
     "type_line ILIKE '%Artifact%' "
     "AND type_line NOT ILIKE '%Land%' "
-    "AND EXISTS ("
-    "    SELECT 1 FROM card_abilities ca"
-    "    WHERE ca.card_id = id AND ca.trigger_event = 'mana_rock'"
-    ")"
+    "AND oracle_text ~* '\\{T\\}.*[Aa]dd(?: \\{| one mana| mana)'"
 )
 _LIFE_GAIN_PRODUCER = (
     "oracle_text ~* '(you gain|gains? [0-9]+ life|life equal|lifelink)'"

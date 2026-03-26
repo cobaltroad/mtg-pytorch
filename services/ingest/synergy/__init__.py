@@ -75,10 +75,7 @@ PRODUCER_MAP: dict[str, str] = {
     "mana_rock": (
         "type_line ILIKE '%Artifact%' "
         "AND type_line NOT ILIKE '%Land%' "
-        "AND EXISTS ("
-        "    SELECT 1 FROM card_abilities ca"
-        "    WHERE ca.card_id = id AND ca.trigger_event = 'mana_rock'"
-        ")"
+        "AND oracle_text ~* '\\{T\\}.*[Aa]dd(?: \\{| one mana| mana)'"
     ),
 }
 
