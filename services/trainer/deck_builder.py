@@ -429,31 +429,31 @@ def build(
         else:
             per_color = {"C": basics_needed}
 
-        # Look up basic land card IDs from DB (more reliable than card_meta,
-        # which may not include basic lands if they were filtered during export)
-        basic_names_needed = {
+        # Look up basic land card IDs from DB by land subtype.
+        # MTGJSON AtomicCards stores basics as "Forest // Forest" etc., so
+        # name lookup by "Forest" fails.  Match by type_line subtype instead:
+        # "Basic Land — Forest" → subtype "Forest" → color G.
+        subtype_to_color = {v: k for k, v in COLOR_TO_BASIC.items()}  # e.g. "Forest" → "G"
+        subtypes_needed = {
             COLOR_TO_BASIC[c] for c in per_color if c in COLOR_TO_BASIC and per_color[c] > 0
         }
-        basic_name_to_id: dict[str, str] = {}
-        if basic_names_needed:
+        basic_color_to_id: dict[str, str] = {}  # color letter → card_id
+        for subtype in subtypes_needed:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id::text, name FROM cards"
-                    " WHERE name = ANY(%s)"
-                    " AND type_line ILIKE '%%Basic%%Land%%'",
-                    (list(basic_names_needed),)
+                    "SELECT id::text FROM cards"
+                    " WHERE type_line ILIKE %s"
+                    " LIMIT 1",
+                    (f"Basic Land — {subtype}",)
                 )
-                for cid, name in cur.fetchall():
-                    if name not in basic_name_to_id:
-                        basic_name_to_id[name] = cid
+                row = cur.fetchone()
+                if row:
+                    basic_color_to_id[subtype_to_color[subtype]] = row[0]
 
         for color, count in per_color.items():
             if count <= 0:
                 continue
-            basic_name = COLOR_TO_BASIC.get(color)
-            if not basic_name:
-                continue
-            basic_cid = basic_name_to_id.get(basic_name)
+            basic_cid = basic_color_to_id.get(color)
             if not basic_cid:
                 continue
             breakdown["basic_land"][color] = count
