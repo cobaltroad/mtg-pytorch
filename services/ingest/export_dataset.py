@@ -81,7 +81,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 OUTPUT_PATH              = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
 MAX_PER_CLASS            = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
 STAPLE_MAX_PER_CATEGORY  = int(os.environ.get("STAPLE_MAX_PER_CATEGORY", "2000"))
-_MANA_ARTIFACTS_CSV      = Path(os.environ.get("MANA_ARTIFACTS_CSV", "/data/edhrec/mana_artifacts.csv"))
+_MANA_ARTIFACTS_CSV      = Path(os.environ.get("MANA_ARTIFACTS_CSV", "/app/edhrec/mana-artifacts.csv"))
 
 
 def _type_bucket(type_line: str) -> str:
@@ -254,6 +254,8 @@ def _build_staple_pairs(
             reader = csv.DictReader(fh)
             for row in reader:
                 name = row.get("Name", "").strip()
+                if not name or name.lower() == "undefined":
+                    continue
                 cid = name_to_id.get(name)
                 if cid and cid in embedded:
                     rock_ids.append(cid)
