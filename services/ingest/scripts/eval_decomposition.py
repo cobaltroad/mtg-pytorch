@@ -79,6 +79,47 @@ def _print_section(
             print(f"      {snippet[:100]}")
 
 
+def list_no_signals(limit: int) -> None:
+    """Print all legal commanders for which _detect() fires no patterns."""
+    if not DATABASE_URL:
+        sys.exit("DATABASE_URL environment variable is required.")
+
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                SELECT name,
+                       COALESCE(oracle_text, '')  AS oracle_text,
+                       COALESCE(type_line,   '')  AS type_line,
+                       COALESCE(color_identity, ARRAY[]::text[]) AS color_identity
+                FROM cards
+                WHERE legalities->>'commander' = 'legal'
+                  AND (
+                      type_line ILIKE '%Legendary Creature%'
+                      OR type_line ILIKE '%Legendary Planeswalker%'
+                      OR oracle_text ILIKE '%can be your commander%'
+                  )
+                ORDER BY name
+            """)
+            commanders = cur.fetchall()
+    finally:
+        conn.close()
+
+    gaps = [
+        cmd for cmd in commanders
+        if not _detect(cmd["oracle_text"], cmd["type_line"])
+    ]
+
+    total = len(commanders)
+    print(f"Commanders with zero signals: {len(gaps)} / {total}")
+    shown = gaps[:limit] if limit else gaps
+    for cmd in shown:
+        ci = "".join(cmd["color_identity"] or []) or "C"
+        print(f"  {cmd['name']:<50}  [{ci}]")
+    if limit and len(gaps) > limit:
+        print(f"  … (capped at {limit}; pass --limit 0 for all)")
+
+
 def eval_commander(name: str, limit: int, key_filter: str | None) -> None:
     if not DATABASE_URL:
         sys.exit("DATABASE_URL environment variable is required.")
@@ -136,17 +177,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Show cards matched by decompose+tag for a commander."
     )
-    parser.add_argument("name", help="Commander name (partial, case-insensitive)")
+    parser.add_argument(
+        "name", nargs="?", default=None,
+        help="Commander name (partial, case-insensitive). Required unless --no-signals.",
+    )
     parser.add_argument(
         "--limit", type=int, default=10,
-        help="Max cards to show per key (default: 10)",
+        help="Max cards to show per key, or commanders to show with --no-signals (default: 10; 0 = all)",
     )
     parser.add_argument(
         "--key", default=None,
         help="Only evaluate a specific pattern key (e.g. mana_dork)",
     )
+    parser.add_argument(
+        "--no-signals", action="store_true",
+        help="List all legal commanders that fire zero decompose patterns (gap analysis).",
+    )
     args = parser.parse_args()
-    eval_commander(args.name, args.limit, args.key)
+
+    if args.no_signals:
+        list_no_signals(args.limit)
+    elif args.name:
+        eval_commander(args.name, args.limit, args.key)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
