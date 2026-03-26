@@ -235,12 +235,21 @@ def _build_staple_pairs(
 
     embedded = set(id_to_idx.keys())
 
-    # name → card_id lookup from card_meta (first embedded match wins)
+    # name → card_id lookup from card_meta (first embedded match wins).
+    # Index both the full name and the front-face name so that cards stored
+    # with MTGJSON's "Name // Name" double-suffix (e.g. "Sol Ring // Sol Ring")
+    # are still matched by their plain CSV name ("Sol Ring").
     name_to_id: dict[str, str] = {}
     for cid, meta in card_meta.items():
         name = meta.get("name", "")
-        if name and name not in name_to_id:
+        if not name:
+            continue
+        if name not in name_to_id:
             name_to_id[name] = cid
+        if " // " in name:
+            front = name.split(" // ")[0].strip()
+            if front and front not in name_to_id:
+                name_to_id[front] = cid
 
     def _cmc(cid: str) -> float:
         return float(card_meta.get(cid, {}).get("cmc") or 0.0)
