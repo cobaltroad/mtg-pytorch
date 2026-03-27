@@ -23,6 +23,8 @@
 
 from __future__ import annotations
 
+from synergy.staples.mana_rocks import SQL as _MANA_ROCK_SQL
+
 # ── SQL fragments reused across multiple ability classes ───────────────────────
 
 _ANY_PERMANENT = (
@@ -33,11 +35,7 @@ _ANY_CREATURE   = "type_line ILIKE '%Creature%'"
 _ANY_LAND       = "type_line ILIKE '%Land%'"
 _ANY_SPELL      = "type_line NOT ILIKE '%Land%'"
 _ANY_ARTIFACT   = "type_line ILIKE '%Artifact%' AND type_line NOT ILIKE '%Land%'"
-_MANA_ROCK      = (
-    "type_line ILIKE '%Artifact%' "
-    "AND type_line NOT ILIKE '%Land%' "
-    "AND oracle_text ~* '\\{T\\}.*[Aa]dd(?: \\{| one mana| mana)'"
-)
+_MANA_ROCK      = _MANA_ROCK_SQL
 _LIFE_GAIN_PRODUCER = (
     "oracle_text ~* '(you gain|gains? [0-9]+ life|life equal|lifelink)'"
 )

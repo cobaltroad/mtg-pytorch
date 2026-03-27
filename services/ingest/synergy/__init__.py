@@ -64,6 +64,7 @@ Commander-specific maps (``commander_value``) are imported directly by
 from __future__ import annotations
 
 from . import commander_mechanics
+from .staples.mana_rocks import SQL as _MANA_ROCK_SQL
 from .xmage import XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP  # noqa: F401
 
 PRODUCER_MAP: dict[str, str] = {
@@ -72,11 +73,7 @@ PRODUCER_MAP: dict[str, str] = {
     # Both producer and consumer are the mana_rock set; this creates
     # every-mana-rock → every-other-mana-rock ability_trigger edges so
     # Phase 2 NT-Xent sees them as positive pairs rather than orphans.
-    "mana_rock": (
-        "type_line ILIKE '%Artifact%' "
-        "AND type_line NOT ILIKE '%Land%' "
-        "AND oracle_text ~* '\\{T\\}.*[Aa]dd(?: \\{| one mana| mana)'"
-    ),
+    "mana_rock": _MANA_ROCK_SQL,
 }
 
 CONSUMER_MAP: dict[str, str] = {
