@@ -297,12 +297,21 @@ docker compose run --rm \
 
 ### Phase 2 — loss benchmarks
 
-| Outcome | Final loss |
-|---------|-----------|
-| Barely learning | > 0.65 |
-| Good | 0.55 – 0.60 |
-| Excellent | 0.45 – 0.50 |
-| Overfit risk | < 0.45 |
+Phase 2 uses **NT-Xent (InfoNCE)** loss, not BCE.  The loss scale depends on
+batch size: the random (no-learning) ceiling is `ln(2 × batch_size)`.
+
+| batch_size | Random ceiling | Barely learning | Good | Excellent | Overfit risk |
+|-----------|---------------|-----------------|------|-----------|--------------|
+| 256 | ln(512) ≈ 6.24 | > 5.8 | 4.5 – 5.5 | 3.0 – 4.5 | < 3.0 |
+| 512 | ln(1024) ≈ 6.93 | > 6.5 | 5.0 – 6.2 | 3.5 – 5.0 | < 3.5 |
+
+The default run.ps1 batch size for Phase 2 is 512.  A final loss of ~6.1 at the
+midpoint of training (epoch 30/60, temperature still at 0.15) is normal — most
+learning happens in the second half as temperature anneals toward `--temp-end`
+(default 0.07).  Evaluate geometry with `eval_neighbors.ps1`, not raw loss alone.
+
+> **Note:** benchmarks prior to this entry were calibrated for the old BCE
+> formulation (loss in [0, 1]).  They are no longer applicable.
 
 The trainer uses `TABLESAMPLE SYSTEM(10) LIMIT 500_000` to sample positives from
 `synergy_edges` — never `ORDER BY random()` on the full table.  The `--sample`

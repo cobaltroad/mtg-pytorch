@@ -26,6 +26,9 @@ param(
     # Phase 2: scale factor applied to lr for all encoder parameters.
     # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.
     [double]$Phase2EncoderLrScale = 0.1,
+    # Phase 1: weight applied to the staple role-pair NT-Xent loss term.
+    # 0 disables staple pairs; default 0.5 = half weight of noise-aug term.
+    [double]$StaplePairWeight = 0.5,
     # Phase 2: NT-Xent temperature annealing range.
     # Start high for soft gradients, end near Phase 1 value to sharpen clusters.
     [double]$Phase2TempStart = 0.3,
@@ -122,6 +125,114 @@ $checkpointsDir = Join-Path $RepoRoot 'checkpoints'
 $cacheDir = Join-Path $RepoRoot 'ingest_cache'
 New-Item -ItemType Directory -Force -Path $checkpointsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+
+function Show-PostTrainingGuidance {
+    param(
+        [int]$Phase,
+        [string]$Dataset,
+        [string]$CheckpointsDir
+    )
+
+    $dsArg   = if ($Dataset) { ' -Dataset "' + $Dataset + '"' } else { '' }
+    $ckpt    = $CheckpointsDir
+    $sep     = '─────────────────────────────────────────────────────────────'
+
+    Write-Host ''
+    Write-Host $sep -ForegroundColor DarkGray
+    Write-Host (' Phase ' + $Phase + ' complete — evaluation guidance') -ForegroundColor Cyan
+    Write-Host $sep -ForegroundColor DarkGray
+
+    switch ($Phase) {
+        1 {
+            Write-Host ''
+            Write-Host ' Nearest-neighbour spot-checks  (Phase 1 success criteria):' -ForegroundColor White
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Sol Ring" -Phase 1' + $dsArg)
+            Write-Host '     -> top-5 should be mana rocks (Arcane Signet, Mind Stone, ...)'
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -Phase 1' + $dsArg)
+            Write-Host '     -> top-5 should be removal (Path to Exile, Generous Gift, ...)'
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 1' + $dsArg)
+            Write-Host '     -> top-5 should be mana dorks (Elvish Mystic, Fyndhorn Elves, ...)'
+            Write-Host ''
+            Write-Host ' Regression check: if mana-dork neighbors diverge after staple-pair'
+            Write-Host ' training, reduce -StaplePairWeight (default 0.5) and re-run Phase 1.'
+            Write-Host ''
+            Write-Host ' Next step — train Phase 2:'
+            Write-Host ('   .\scripts\run.ps1 -Train 2' + $dsArg)
+            Write-Host ''
+            Write-Host ' Phase 2 NT-Xent loss benchmarks (batch_size=512, ceiling=6.93):'
+            Write-Host '   > 6.5       barely learning'
+            Write-Host '   5.0-6.2     good'
+            Write-Host '   3.5-5.0     excellent'
+            Write-Host '   < 3.5       overfit risk'
+        }
+        2 {
+            Write-Host ''
+            Write-Host ' NT-Xent loss scale  (batch_size=512, random ceiling = ln(1024) = 6.93):' -ForegroundColor White
+            Write-Host '   > 6.5       barely learning — check synergy_edges row count'
+            Write-Host '   5.0-6.2     good'
+            Write-Host '   3.5-5.0     excellent'
+            Write-Host '   < 3.5       overfit risk — shorten training'
+            Write-Host ''
+            Write-Host ' Most learning happens in the second half of training as temperature'
+            Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
+            Write-Host ' epoch 30 in the 5.5-6.2 range is normal — evaluate geometry,'
+            Write-Host ' not just loss:'
+            Write-Host ''
+            Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 2' + $dsArg)
+            Write-Host '     -> should still show mana dorks'
+            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -Phase 2' + $dsArg)
+            Write-Host '     -> should still show removal spells'
+            Write-Host ''
+            Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
+            Write-Host ''
+            Write-Host ' Next step — download commanders artifact then train Phase 3:'
+            Write-Host '   .\scripts\download_commanders.ps1'
+            Write-Host '   .\scripts\run.ps1 -Train 3'
+        }
+        3 {
+            Write-Host ''
+            Write-Host ('   Checkpoint: ' + $ckpt + '\phase3_best.pt') -ForegroundColor White
+            Write-Host ''
+            Write-Host ' Upload to API and run a test deck generation:'
+            Write-Host '   curl -X POST $API_HOST/admin/checkpoint'
+            Write-Host '        -H "x-admin-token: $ADMIN_TOKEN"'
+            Write-Host ('        -F "file=@' + $ckpt + '\phase3_best.pt"')
+            Write-Host '        -F "name=phase3_best"'
+            Write-Host '   # Then open the UI or POST /decks/generate to verify output.'
+            Write-Host ''
+            Write-Host ' Watch for score compression: if all cosine similarities converge'
+            Write-Host ' toward 1.0, the encoder over-updated.  Re-run with -FreezeEncoder'
+            Write-Host ' true, or lower -Phase2EncoderLrScale.'
+            Write-Host ''
+            Write-Host ' Next step — train Phase 4:'
+            Write-Host '   .\scripts\run.ps1 -Train 4'
+        }
+        4 {
+            Write-Host ''
+            Write-Host ('   Checkpoint: ' + $ckpt + '\phase4_best.pt') -ForegroundColor White
+            Write-Host ''
+            Write-Host ' Evaluate deck quality:'
+            Write-Host '   cd services\trainer'
+            Write-Host ('   ..\..\. venv\Scripts\python.exe eval_deck.py' +
+                        ' --checkpoint "' + $ckpt + '\phase4_best.pt"' +
+                        ' --dataset "' + $Dataset + '"')
+            Write-Host ''
+            Write-Host ' Upload and hot-swap the model (no restart needed):'
+            Write-Host '   curl -X POST $API_HOST/admin/checkpoint'
+            Write-Host '        -H "x-admin-token: $ADMIN_TOKEN"'
+            Write-Host ('        -F "file=@' + $ckpt + '\phase4_best.pt"')
+            Write-Host '        -F "name=phase4_best"'
+            Write-Host ''
+            Write-Host ' If early-stopping fired before the epoch limit and loss was still'
+            Write-Host ' falling, resume training:'
+            Write-Host ('   .\scripts\run.ps1 -Train 4' + $dsArg + ' -Resume:$true')
+        }
+    }
+
+    Write-Host $sep -ForegroundColor DarkGray
+    Write-Host ''
+}
 
 function Assert-Prerequisites {
     param(
@@ -260,6 +371,10 @@ if ($Mode -eq 'train') {
         $cmd += @('--dataset', $Dataset)
     }
 
+    if ($Phase -eq 1) {
+        $cmd += @('--staple-pair-weight', $StaplePairWeight)
+    }
+
     if ($Phase -eq 2) {
         $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
         $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
@@ -306,7 +421,12 @@ if ($Mode -eq 'train') {
     Write-Host "Running trainer with args: $($cmd -join ' ')"
     Set-Location (Join-Path $RepoRoot 'services\trainer')
     & "$RepoRoot\\.venv\\Scripts\\python.exe" -u @cmd
-    exit $LASTEXITCODE
+    $trainExit = $LASTEXITCODE
+
+    if ($trainExit -eq 0) {
+        Show-PostTrainingGuidance -Phase $Phase -Dataset $Dataset -CheckpointsDir $checkpointsDir
+    }
+    exit $trainExit
 }
 
 $env:DATABASE_URL = Ensure-AsyncDbUrl

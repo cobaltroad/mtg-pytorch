@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 # ── Stage 3: Embed ────────────────────────────────────────────────────────────
 
-from land_tags import annotate_land_oracle  # noqa: E402
+from synergy.staples.land_tags import annotate_land_oracle  # noqa: E402
 
 from synergy.triggered_ability import TRIGGERED_ABILITY_PATTERNS as _trigger_patterns  # noqa: E402
 from synergy.activated_ability import ACTIVATED_ABILITY_PATTERNS as _activated_patterns  # noqa: E402

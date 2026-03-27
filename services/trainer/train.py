@@ -45,7 +45,7 @@ import psycopg2.extras
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -524,6 +524,47 @@ class AllCardsDataset(Dataset):
         return torch.from_numpy(self.embs[idx])
 
 
+class ColorBucketBatchSampler(Sampler):
+    """Batch sampler yielding batches with ~50% same-color-identity cards.
+
+    Harder in-batch negatives for NT-Xent: by packing same-color cards into
+    each batch the model must distinguish role-similar cards (e.g. two {W}
+    removal spells) rather than trivially separating a Forest from a Lightning
+    Bolt.  The other 50% is random to maintain coverage of the full card pool.
+    """
+
+    def __init__(
+        self,
+        n: int,
+        color_buckets: dict[str, list[int]],
+        batch_size: int,
+    ):
+        self.n = n
+        self.batch_size = batch_size
+        self.all_indices = list(range(n))
+        # Only keep buckets large enough to sample a half-batch from
+        self.buckets = [idxs for idxs in color_buckets.values() if len(idxs) >= 4]
+
+    def __len__(self) -> int:
+        return self.n // self.batch_size
+
+    def __iter__(self):
+        half = self.batch_size // 2
+        all_shuffled = self.all_indices[:]
+        random.shuffle(all_shuffled)
+        for start in range(0, len(all_shuffled) - half + 1, half):
+            rand_half = all_shuffled[start : start + half]
+            if len(rand_half) < half:
+                break
+            if self.buckets:
+                bucket = random.choice(self.buckets)
+                color_half = random.choices(bucket, k=half)
+            else:
+                color_half = random.sample(self.all_indices, half)
+            batch = rand_half + color_half
+            random.shuffle(batch)
+            yield batch
+
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -684,16 +725,51 @@ def train_contrastive_phase(
     noise_std: float = 0.05,
     temperature: float = 0.07,
     checkpoint_prefix: str = "phase",
+    staple_pairs: list[tuple[int, int, float]] | None = None,
+    staple_pair_weight: float = 0.5,
+    color_buckets: dict[str, list[int]] | None = None,
 ):
-    """Phase 1: SimCLR-style contrastive pre-training.
+    """Phase 1: SimCLR-style contrastive pre-training with optional role-pair augmentation.
 
-    Two Gaussian-noised views of each card embedding form the positive pair.
-    NT-Xent loss over in-batch negatives.  Large batches help significantly
+    Core loss: two Gaussian-noised views of each card embedding form the positive
+    pair; NT-Xent over in-batch negatives.  Large batches help significantly
     (more in-batch negatives); default 512 gives 511 negatives per anchor.
+
+    Optional extensions (activated when artifact supplies the data):
+
+    staple_pairs — list of (a_idx, b_idx, cmc_weight) from EDHREC staple
+        categories (mana_rocks, removal, sweeper, …).  Each training step adds
+        a second NT-Xent term on a randomly sampled batch of these pairs, scaled
+        by ``staple_pair_weight`` (default 0.5) and the per-pair CMC weight.
+        This bootstraps role geometry before Phase 2 so that Sol Ring and
+        Arcane Signet are already neighbours when synergy training begins.
+
+    color_buckets — {color_identity_key: [card_indices]}.  When provided,
+        the DataLoader uses ColorBucketBatchSampler: ~50% of each batch comes
+        from the same color identity, making in-batch negatives harder (the
+        model must distinguish within-color role differences, not just
+        color differences).
     """
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
-    )
+    if color_buckets is not None:
+        sampler = ColorBucketBatchSampler(len(dataset), color_buckets, batch_size)
+        loader = DataLoader(dataset, batch_sampler=sampler, num_workers=0)
+        log.info(
+            "Phase 1: color-scoped batch sampler active (%d color buckets)",
+            len([b for b in color_buckets.values() if len(b) >= 4]),
+        )
+    else:
+        loader = DataLoader(
+            dataset, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True
+        )
+
+    if staple_pairs:
+        staple_arr = np.array([(a, b) for a, b, _ in staple_pairs], dtype=np.int32)
+        staple_weights = np.array([w for _, _, w in staple_pairs], dtype=np.float32)
+        log.info(
+            "Phase 1: %d staple pairs loaded (weight=%.2f × CMC weight per pair)",
+            len(staple_pairs), staple_pair_weight,
+        )
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     device = next(model.parameters()).device
@@ -711,6 +787,20 @@ def train_contrastive_phase(
             z1 = model(view1)
             z2 = model(view2)
             loss = nt_xent_loss(z1, z2, temperature)
+
+            # Staple role-pair step: interleave NT-Xent on explicit same-role
+            # pairs.  Each pair has a CMC-based weight (same CMC=1.0,
+            # 3+-apart=0.5).  The batch mean weight scales the staple term
+            # so high-CMC-variance pairs contribute proportionally less.
+            if staple_pairs:
+                batch_n = emb.size(0)
+                chosen = np.random.choice(len(staple_pairs), size=batch_n, replace=True)
+                ea = torch.from_numpy(dataset.embs[staple_arr[chosen, 0]]).to(device)
+                eb = torch.from_numpy(dataset.embs[staple_arr[chosen, 1]]).to(device)
+                za = model(ea)
+                zb = model(eb)
+                mean_cmc_w = float(staple_weights[chosen].mean())
+                loss = loss + staple_pair_weight * mean_cmc_w * nt_xent_loss(za, zb, temperature)
 
             optimizer.zero_grad()
             loss.backward()
@@ -1552,6 +1642,52 @@ def load_embeddings_from_artifact(data: dict) -> dict[str, np.ndarray]:
     return {cid: emb_matrix[i] for i, cid in enumerate(card_ids)}
 
 
+def load_staple_pairs_from_artifact(
+    data: dict,
+) -> list[tuple[int, int, float]]:
+    """Extract staple role pairs from artifact for Phase 1 training.
+
+    Returns [(a_idx, b_idx, cmc_weight), …] where indices are into card_ids.
+    Returns [] if the artifact was built before staple_pairs were added
+    (re-export to include them).
+    """
+    sp = data.get("staple_pairs")
+    if sp is None:
+        log.info("load_staple_pairs_from_artifact: no staple_pairs key — re-export artifact to include")
+        return []
+    a = sp["a_idx"].tolist()
+    b = sp["b_idx"].tolist()
+    w = sp["weights"].tolist()
+    log.info("load_staple_pairs_from_artifact: %d staple pairs loaded", len(a))
+    return list(zip(a, b, w))
+
+
+def _build_color_buckets_from_artifact(data: dict) -> dict[str, list[int]]:
+    """Group card indices by color identity for ColorBucketBatchSampler.
+
+    Returns {color_key: [idx, …]} where color_key is the sorted color letters
+    joined as a string (e.g. "WU", "BRG") or "C" for colorless cards.
+    """
+    from collections import defaultdict as _defaultdict
+    card_ids = data["card_ids"]
+    card_meta = data.get("card_meta", {})
+    buckets: dict[str, list[int]] = _defaultdict(list)
+    for i, cid in enumerate(card_ids):
+        meta = card_meta.get(cid, {})
+        ci = meta.get("color_identity") or []
+        if isinstance(ci, (list, tuple)):
+            key = "".join(sorted(ci)) or "C"
+        else:
+            key = "C"
+        buckets[key].append(i)
+    log.info(
+        "_build_color_buckets_from_artifact: %d color buckets (largest: %d cards)",
+        len(buckets),
+        max(len(v) for v in buckets.values()) if buckets else 0,
+    )
+    return dict(buckets)
+
+
 def load_synergy_pairs_from_artifact(
     data: dict,
     sample: int = 500_000,
@@ -1744,6 +1880,16 @@ def main():
         help="Label smoothing epsilon (0=off); pos→1-ε/2, neg→ε/2",
     )
     parser.add_argument(
+        "--staple-pair-weight",
+        type=float,
+        default=0.5,
+        dest="staple_pair_weight",
+        help="Phase 1: loss weight applied to the staple role-pair NT-Xent term "
+        "(0=disabled; default 0.5 — half the weight of the noise-augmentation term). "
+        "Per-pair CMC weights further scale this: same-CMC pairs → full weight, "
+        "3+-CMC-apart pairs → 0.5× weight.",
+    )
+    parser.add_argument(
         "--noise",
         type=float,
         default=0.05,
@@ -1898,6 +2044,10 @@ def main():
 
         dataset = AllCardsDataset(embeddings)
         log.info("Dataset: %d cards", len(dataset))
+
+        staple_pairs = load_staple_pairs_from_artifact(_artifact) if _artifact else []
+        color_buckets = _build_color_buckets_from_artifact(_artifact) if _artifact else None
+
         train_contrastive_phase(
             model,
             dataset,
@@ -1907,6 +2057,9 @@ def main():
             noise_std=args.noise,
             temperature=args.temperature,
             checkpoint_prefix=pfx,
+            staple_pairs=staple_pairs or None,
+            staple_pair_weight=args.staple_pair_weight,
+            color_buckets=color_buckets,
         )
 
     elif args.phase == 2:

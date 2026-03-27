@@ -140,7 +140,40 @@ ABILITY_CLASS_TO_EVENT: dict[str, str] = {
     "GraftAbility":                                   "adapt_evolve",
     "ModularAbility":                                 "adapt_evolve",
     "RiotAbility":                                    "adapt_evolve",
+
+    # ── Mana abilities (mage.abilities.mana.*) ────────────────────────────────
+    # These classes appear on both artifacts and lands.  Non-artifact cards are
+    # filtered out in tag_abilities_xmage before the row is written to the DB.
+    # effect_class is hardcoded to 'produce_mana' so compute_xmage_effect_synergy
+    # groups all mana-rock cards into (mana_rock, produce_mana) peer edges.
+    "SimpleManaAbility":                              "mana_rock",
+    "ColorlessManaAbility":                           "mana_rock",
+    "CommanderColorIdentityManaAbility":              "mana_rock",
+    "AnyColorManaAbility":                            "mana_rock",
+    "AnyColorLandsProduceManaAbility":                "mana_rock",
+    "BlackManaAbility":                               "mana_rock",
+    "BlueManaAbility":                                "mana_rock",
+    "RedManaAbility":                                 "mana_rock",
+    "WhiteManaAbility":                               "mana_rock",
+    "GreenManaAbility":                               "mana_rock",
 }
+
+# Mana ability classes that should only be written for artifact (non-land) cards.
+# tag_abilities_xmage filters these by card_id against the artifact set loaded
+# at startup, and overrides effect_class to 'produce_mana' so effect_peer
+# grouping works in compute_xmage_effect_synergy.
+MANA_ABILITY_CLASSES: frozenset[str] = frozenset({
+    "SimpleManaAbility",
+    "ColorlessManaAbility",
+    "CommanderColorIdentityManaAbility",
+    "AnyColorManaAbility",
+    "AnyColorLandsProduceManaAbility",
+    "BlackManaAbility",
+    "BlueManaAbility",
+    "RedManaAbility",
+    "WhiteManaAbility",
+    "GreenManaAbility",
+})
 
 # ── SpellCastControllerTriggeredAbility filter → refined trigger_event ────────
 #
@@ -267,11 +300,11 @@ def _camel_to_words(filename_stem: str) -> str:
 # ── Java file parsing ─────────────────────────────────────────────────────────
 
 _IMPORT_RE = re.compile(
-    r"import\s+mage\.abilities\.(common|keyword|effects\.common[^;]*)\."
+    r"import\s+mage\.abilities\.(common|keyword|mana|effects\.common[^;]*)\."
     r"([A-Za-z][A-Za-z0-9_]+)\s*;"
 )
 
-_ABILITY_PKGS = {"common", "keyword"}
+_ABILITY_PKGS = {"common", "keyword", "mana"}
 
 
 def parse_java_file(path: Path) -> tuple[list[str], list[str], dict[str, str]]:
@@ -343,6 +376,18 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
         name_map = await _load_name_map(db)
     log.info("Loaded %d card names from DB", len(name_map))
 
+    # Artifact (non-land) card IDs — used to filter mana ability classes so
+    # that basic lands (Forest → GreenManaAbility) and fetch lands are not
+    # incorrectly tagged as mana_rock.
+    async with Session() as db:
+        artifact_ids: set[str] = {
+            str(r[0]) for r in (await db.execute(text(
+                "SELECT id FROM cards "
+                "WHERE type_line ILIKE '%Artifact%' AND type_line NOT ILIKE '%Land%'"
+            ))).fetchall()
+        }
+    log.info("Loaded %d artifact (non-land) card IDs for mana_rock filtering", len(artifact_ids))
+
     inserted = skipped_no_match = skipped_no_abilities = 0
     batch: list[dict] = []
 
@@ -376,6 +421,14 @@ async def tag_abilities_xmage(xmage_dir: Path) -> None:
             continue
 
         for trigger_event, ability_class, effect_cls in events:
+            if ability_class in MANA_ABILITY_CLASSES:
+                # Skip non-artifact cards (lands, creatures) — mana ability
+                # classes appear broadly but mana_rock tagging is artifact-only.
+                if card_id not in artifact_ids:
+                    continue
+                # Override effect_class so compute_xmage_effect_synergy groups
+                # all mana rocks into (mana_rock, produce_mana) peer edges.
+                effect_cls = "produce_mana"
             batch.append({
                 "card_id":      card_id,
                 "ability_type": "triggered",

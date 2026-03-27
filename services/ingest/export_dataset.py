@@ -50,6 +50,7 @@ Environment variables
 
 from __future__ import annotations
 
+import csv
 import itertools
 import json
 import logging
@@ -77,8 +78,10 @@ from export_db_helpers import (
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-OUTPUT_PATH   = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
-MAX_PER_CLASS = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
+OUTPUT_PATH              = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_dataset.pt"))
+MAX_PER_CLASS            = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
+STAPLE_MAX_PER_CATEGORY  = int(os.environ.get("STAPLE_MAX_PER_CATEGORY", "2000"))
+_MANA_ARTIFACTS_CSV      = Path(os.environ.get("MANA_ARTIFACTS_CSV", "/app/edhrec/mana-artifacts.csv"))
 
 
 def _type_bucket(type_line: str) -> str:
@@ -191,6 +194,129 @@ def _build_functional_pairs(
     )
 
 
+def _cmc_weight(cmc_a: float, cmc_b: float) -> float:
+    """Pair weight based on CMC proximity.
+
+    Same CMC → 1.0 (full signal).  3+ CMC apart → 0.5 (soft signal; cards
+    probably occupy different deck slots even if they share a role).
+    """
+    delta = abs(cmc_a - cmc_b)
+    if delta == 0:
+        return 1.0
+    elif delta <= 1:
+        return 0.85
+    elif delta <= 2:
+        return 0.70
+    return 0.50
+
+
+def _build_staple_pairs(
+    card_ids: list[str],
+    id_to_idx: dict[str, int],
+    card_meta: dict,
+    max_per_category: int = STAPLE_MAX_PER_CATEGORY,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build Phase 1 soft-positive pairs from EDHREC staple categories.
+
+    Two sources contribute:
+    1. mana_rocks — curated list from ingest_cache/edhrec/mana_artifacts.csv
+       (EDHREC-vetted mana artifacts; more precise than the SQL ramp bucket)
+    2. STAPLE_CATEGORIES SQL — non-land categories (removal, sweeper,
+       draw_engine, draw_spell, interaction, ramp)
+
+    Pairs within each category are weighted by CMC proximity via _cmc_weight:
+    same-CMC pairs → 1.0, 3+-CMC-apart pairs → 0.5.  This prevents the model
+    from treating a Sol Ring (CMC 1) and a Gilded Lotus (CMC 5) as perfectly
+    interchangeable while still anchoring them in the same role cluster.
+
+    Returns (a_idx, b_idx, weights) as int32/float32 arrays.
+    """
+    from synergy.staples import STAPLE_CATEGORIES
+
+    embedded = set(id_to_idx.keys())
+
+    # name → card_id lookup from card_meta (first embedded match wins).
+    # Index both the full name and the front-face name so that cards stored
+    # with MTGJSON's "Name // Name" double-suffix (e.g. "Sol Ring // Sol Ring")
+    # are still matched by their plain CSV name ("Sol Ring").
+    name_to_id: dict[str, str] = {}
+    for cid, meta in card_meta.items():
+        name = meta.get("name", "")
+        if not name:
+            continue
+        if name not in name_to_id:
+            name_to_id[name] = cid
+        if " // " in name:
+            front = name.split(" // ")[0].strip()
+            if front and front not in name_to_id:
+                name_to_id[front] = cid
+
+    def _cmc(cid: str) -> float:
+        return float(card_meta.get(cid, {}).get("cmc") or 0.0)
+
+    categories: dict[str, list[str]] = {}
+
+    # 1. mana_rocks from EDHREC CSV (high-precision mana-artifact category)
+    if _MANA_ARTIFACTS_CSV.exists():
+        rock_ids: list[str] = []
+        with open(_MANA_ARTIFACTS_CSV, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                name = row.get("Name", "").strip()
+                if not name or name.lower() == "undefined":
+                    continue
+                cid = name_to_id.get(name)
+                if cid and cid in embedded:
+                    rock_ids.append(cid)
+        if rock_ids:
+            categories["mana_rocks"] = rock_ids
+            log.info("Staple pairs: mana_rocks from CSV → %d cards", len(rock_ids))
+    else:
+        log.warning("mana_artifacts CSV not found at %s — skipping mana_rocks category", _MANA_ARTIFACTS_CSV)
+
+    # 2. STAPLE_CATEGORIES SQL — skip land categories (too universal)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for category, (where, _rate) in STAPLE_CATEGORIES.items():
+                if category in ("manabase", "utilityland"):
+                    continue
+                cur.execute(f"SELECT id::text FROM cards WHERE {where}")
+                ids = [r[0] for r in cur.fetchall() if r[0] in embedded]
+                if ids:
+                    categories[category] = ids
+                    log.info("Staple pairs: %s → %d cards", category, len(ids))
+
+    # Generate CMC-weighted pairs with a proportional cap per category
+    a_list: list[int] = []
+    b_list: list[int] = []
+    w_list: list[float] = []
+    rng = random.Random(42)
+
+    for cat_name, members in categories.items():
+        if len(members) < 2:
+            continue
+        n = len(members)
+        cap = min(max_per_category, max(1, int(n * math.log2(max(n, 2)))))
+        all_pairs = list(itertools.combinations(members, 2))
+        if len(all_pairs) > cap:
+            rng.shuffle(all_pairs)
+            all_pairs = all_pairs[:cap]
+        for a, b in all_pairs:
+            a_list.append(id_to_idx[a])
+            b_list.append(id_to_idx[b])
+            w_list.append(_cmc_weight(_cmc(a), _cmc(b)))
+
+    log.info(
+        "Staple pairs: %d total across %d categories",
+        len(a_list), len(categories),
+    )
+    return (
+        np.array(a_list, dtype=np.int32),
+        np.array(b_list, dtype=np.int32),
+        np.array(w_list, dtype=np.float32),
+    )
+
+
 def main() -> None:
     # 1. Embeddings
     card_ids, emb_matrix = _load_embeddings()
@@ -204,6 +330,11 @@ def main() -> None:
 
     # 2b. Card metadata (name/type for offline eval on GPU machine)
     card_meta = _load_card_meta(id_to_idx)
+
+    # 2c. Staple role pairs (Phase 1 soft positives) — CMC-weighted pairs within
+    #     each EDHREC staple category (mana_rocks, removal, sweeper, etc.).
+    #     Lower weight than oracle-identity pairs; used to bootstrap role geometry.
+    sp_a, sp_b, sp_w = _build_staple_pairs(card_ids, id_to_idx, card_meta)
 
     # 3. Synergy pairs (Phase 2) — XMage class-name edges + role_demand + combo.
     #    effect_peer is stored separately (see step 3b) so the trainer can use
@@ -229,6 +360,7 @@ def main() -> None:
         "dim":                    int(emb_matrix.shape[1]),
         "card_count":             n,
         "functional_pair_count":  int(len(fp_a)),
+        "staple_pair_count":      int(len(sp_a)),
         "synergy_count":          int(len(a_idx)),
         "effect_peer_count":      int(len(ep_a)),
         "training_path":          "compositional",
@@ -242,6 +374,11 @@ def main() -> None:
         "functional_pairs": {
             "a_idx": torch.from_numpy(fp_a),
             "b_idx": torch.from_numpy(fp_b),
+        },
+        "staple_pairs": {
+            "a_idx":   torch.from_numpy(sp_a),
+            "b_idx":   torch.from_numpy(sp_b),
+            "weights": torch.from_numpy(sp_w),
         },
         "synergy": {
             "a_idx":  torch.from_numpy(a_idx),
@@ -265,8 +402,9 @@ def main() -> None:
 
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
-        "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d synergy pairs  |  %d effect_peer pairs",
-        size_mb, n, len(fp_a), len(a_idx), len(ep_a),
+        "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d staple pairs  "
+        "|  %d synergy pairs  |  %d effect_peer pairs",
+        size_mb, n, len(fp_a), len(sp_a), len(a_idx), len(ep_a),
     )
 
 
