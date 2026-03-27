@@ -15,6 +15,8 @@ RATE reflects the approximate share of a 99-card Commander deck devoted to ramp.
 
 from __future__ import annotations
 
+from .mana_rocks import SQL as _MANA_ROCK_SQL
+
 RATE: float = 0.12
 
 # Land ramp regex covers all five basic land types so that Farseek
@@ -23,10 +25,7 @@ RATE: float = 0.12
 # ("basic land card").
 SQL: str = (
     "("
-    # mana rocks: artifacts with {T}: Add ...
-    "  (type_line ILIKE '%%Artifact%%'"
-    "   AND oracle_text ~* '\\{T\\}.*[Aa]dd'"
-    "   AND type_line NOT ILIKE '%%Land%%')"
+    "  (" + _MANA_ROCK_SQL + ")"
     "  OR"
     # land ramp: non-creature spells that search the library for a land
     "  (oracle_text ILIKE '%%search your library%%'"
