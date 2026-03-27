@@ -42,6 +42,7 @@ import re
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
+from mtg_sql.staples import draw_engine, draw_spell, interaction, removal, sweeper
 from mtg_sql.staples.ramp import SQL as _RAMP_SQL
 
 if TYPE_CHECKING:
@@ -150,69 +151,13 @@ COLOR_TO_BASIC: dict[str, str] = {
     "C": "Wastes",
 }
 
-# ── Staple SQL (mirrors services/ingest/synergy/staples/*.py) ─────────────────
-# Duplicated here to keep the trainer service self-contained; must stay in sync
-# with the ingest SQL when patterns change.
-
 _ROLE_SQL: dict[str, str] = {
-    "ramp": _RAMP_SQL,
-    "removal": (
-        "("
-        "  oracle_text ILIKE '%%destroy target%%'"
-        "  OR oracle_text ILIKE '%%exile target%%'"
-        "  OR"
-        "  (oracle_text ILIKE '%%return target%%'"
-        "   AND oracle_text ILIKE '%%owner%%s hand%%')"
-        "  OR"
-        "  oracle_text ~* 'gets? -[0-9]+/-[0-9]+ until end of turn'"
-        ")"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
-    "sweeper": (
-        "("
-        "  oracle_text ILIKE '%%destroy all%%'"
-        "  OR oracle_text ILIKE '%%exile all%%'"
-        "  OR oracle_text ~* 'deals? [0-9]+ damage to each creature'"
-        "  OR oracle_text ~* 'each creature gets -[0-9]+/-[0-9]+'"
-        "  OR oracle_text ILIKE '%%return all nonland%%'"
-        ")"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
-    "draw_engine": (
-        "type_line NOT ILIKE '%%Instant%%'"
-        " AND type_line NOT ILIKE '%%Sorcery%%'"
-        " AND type_line NOT ILIKE '%%Land%%'"
-        " AND oracle_text ILIKE '%%draw%%'"
-        " AND oracle_text ILIKE '%%card%%'"
-        " AND ("
-        "   oracle_text ILIKE '%%whenever%%'"
-        "   OR oracle_text ILIKE '%%at the beginning%%'"
-        " )"
-    ),
-    "draw_spell": (
-        "("
-        "  type_line ILIKE '%%Instant%%'"
-        "  OR type_line ILIKE '%%Sorcery%%'"
-        ")"
-        " AND oracle_text ILIKE '%%draw%%'"
-        " AND oracle_text ILIKE '%%card%%'"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
-    "interaction": (
-        "("
-        "  oracle_text ILIKE '%%counter target%%'"
-        "  OR oracle_text ILIKE '%%gain hexproof%%'"
-        "  OR oracle_text ILIKE '%%gains hexproof%%'"
-        "  OR oracle_text ILIKE '%%have hexproof%%'"
-        "  OR oracle_text ILIKE '%%has hexproof%%'"
-        "  OR oracle_text ILIKE '%%gain indestructible%%'"
-        "  OR oracle_text ILIKE '%%gains indestructible%%'"
-        "  OR oracle_text ILIKE '%%have indestructible%%'"
-        "  OR oracle_text ILIKE '%%has indestructible%%'"
-        "  OR oracle_text ILIKE '%%shroud%%'"
-        ")"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
+    "ramp":        _RAMP_SQL,
+    "removal":     removal.SQL,
+    "sweeper":     sweeper.SQL,
+    "draw_engine": draw_engine.SQL,
+    "draw_spell":  draw_spell.SQL,
+    "interaction": interaction.SQL,
 }
 
 # SQL for nonbasic land selection — ordered by quality tier within the query

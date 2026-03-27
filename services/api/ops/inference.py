@@ -20,6 +20,7 @@ import psycopg2
 import psycopg2.extras
 import torch
 
+from mtg_sql.staples.ramp import SQL as _RAMP_SQL
 from ops.model import CardEncoder, DeckConstructor
 
 log = logging.getLogger(__name__)
@@ -237,20 +238,9 @@ def get_ramp_info(db_url: str) -> tuple[frozenset, dict[str, str]]:
     with _get_conn(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT id::text, name
-                FROM cards
-                WHERE type_line NOT ILIKE '%Land%'
-                  AND legalities->>'commander' = 'legal'
-                  AND (
-                    -- Permanent mana sources: rocks, mana dorks, etc.
-                    oracle_text ILIKE '%{T}: Add%'
-                    -- Land tutors: "search ... land ... battlefield"
-                    OR oracle_text ~* 'search[^\n]*land[^\n]*battlefield'
-                    -- Basic land-type tutors (Nature''s Lore, Farseek, Skyshroud Claim, etc.)
-                    OR oracle_text ~* 'search[^\n]*(forest|plains|island|swamp|mountain|wastes)[^\n]*battlefield'
-                  )
-                """
+                f"SELECT id::text, name FROM cards"
+                f" WHERE ({_RAMP_SQL})"
+                f" AND legalities->>'commander' = 'legal'"
             )
             rows = cur.fetchall()
 

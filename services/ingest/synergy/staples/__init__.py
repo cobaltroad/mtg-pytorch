@@ -57,17 +57,9 @@ from __future__ import annotations
 
 import os
 
-from mtg_sql.staples import ramp
+from mtg_sql.staples import ramp, removal, sweeper, draw_engine, draw_spell, interaction
 
-from . import (
-    removal,
-    sweeper,
-    draw_engine,
-    draw_spell,
-    interaction,
-    manabase,
-    utilityland,
-)
+from . import manabase, utilityland
 
 # ── Levers ────────────────────────────────────────────────────────────────────
 
