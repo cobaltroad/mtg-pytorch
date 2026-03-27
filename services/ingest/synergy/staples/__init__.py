@@ -57,8 +57,9 @@ from __future__ import annotations
 
 import os
 
+from mtg_sql.staples import ramp
+
 from . import (
-    ramp,
     removal,
     sweeper,
     draw_engine,

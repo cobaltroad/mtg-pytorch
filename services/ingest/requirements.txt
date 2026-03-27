@@ -1,3 +1,4 @@
+-e ../../shared
 asyncpg>=0.29
 psycopg2-binary>=2.9
 sqlalchemy[asyncio]>=2.0

@@ -64,7 +64,7 @@ Commander-specific maps (``commander_value``) are imported directly by
 from __future__ import annotations
 
 from . import commander_mechanics
-from .staples.mana_rocks import SQL as _MANA_ROCK_SQL
+from mtg_sql.staples.mana_rocks import SQL as _MANA_ROCK_SQL
 from .xmage import XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP  # noqa: F401
 
 PRODUCER_MAP: dict[str, str] = {
