@@ -94,6 +94,7 @@ from synergy.commander_mechanics import (
     PATTERN_KEY_TO_CONSUMER_SQL,
 )
 from synergy.staples import STAPLE_CATEGORIES
+from mtg_sql import commanders
 
 OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
 MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
@@ -106,15 +107,7 @@ def _load_commander_ids(id_to_idx: dict[str, int]) -> set[str]:
     """Return all embedded cards that are legal commanders."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id::text FROM cards
-                WHERE legalities->>'commander' = 'legal'
-                  AND (
-                      type_line ILIKE '%Legendary Creature%'
-                      OR type_line ILIKE '%Legendary Planeswalker%'
-                      OR oracle_text ILIKE '%can be your commander%'
-                  )
-            """)
+            cur.execute(f"SELECT id::text FROM cards WHERE {commanders.WHERE}")
             all_ids = {row[0] for row in cur.fetchall()}
     embedded = all_ids & id_to_idx.keys()
     log.info("Legal commanders: %d total, %d embedded", len(all_ids), len(embedded))

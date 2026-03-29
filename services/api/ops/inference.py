@@ -20,6 +20,7 @@ import psycopg2
 import psycopg2.extras
 import torch
 
+from mtg_sql import commanders
 from mtg_sql.staples.ramp import SQL as _RAMP_SQL
 from ops.model import CardEncoder, DeckConstructor
 
@@ -158,7 +159,7 @@ def get_legal_ids(db_url: str) -> frozenset[str]:
     with _get_conn(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id::text FROM cards WHERE legalities->>'commander' = 'legal'"
+                f"SELECT id::text FROM cards WHERE {commanders.LEGAL_SQL}"
             )
             rows = cur.fetchall()
 
@@ -240,7 +241,7 @@ def get_ramp_info(db_url: str) -> tuple[frozenset, dict[str, str]]:
             cur.execute(
                 f"SELECT id::text, name FROM cards"
                 f" WHERE ({_RAMP_SQL})"
-                f" AND legalities->>'commander' = 'legal'"
+                f" AND {commanders.LEGAL_SQL}"
             )
             rows = cur.fetchall()
 
