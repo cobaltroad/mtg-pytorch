@@ -72,7 +72,7 @@ class MechanicKey(StrEnum):
     # =========================================================================
     # 2. Death / dies / graveyard
     # =========================================================================
-    #TODO: DEATH_TRIGGER          = "death_trigger"
+    DEATH_TRIGGER          = "death_trigger"
     # XMage alias
     #TODO: DIES                   = "dies"
     # events.py fine-grained: non-token only (common Aristocrats template)
@@ -134,7 +134,7 @@ class MechanicKey(StrEnum):
     # =========================================================================
     # 5. Sacrifice
     # =========================================================================
-    #TODO: SACRIFICE_PAYOFF       = "sacrifice_payoff"
+    SACRIFICE_PAYOFF       = "sacrifice_payoff"
     # XMage alias
     #TODO: SACRIFICE              = "sacrifice"
 

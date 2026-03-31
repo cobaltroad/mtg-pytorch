@@ -5,6 +5,7 @@ from .counter import PATTERNS as _counter_patterns
 from .lifegain import PATTERNS as _lifegain_patterns
 from .draw import PATTERNS as _draw_patterns
 from .creature_etb import PATTERNS as _creature_etb_patterns
+from .sacrifice import PATTERNS as _sacrifice_patterns
 
 # Aggregated list of all trigger patterns.
 # Tuple shape: (key, label, pattern)
@@ -17,6 +18,7 @@ TRIGGERED_ABILITY_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     *_lifegain_patterns,
     *_draw_patterns,
     *_creature_etb_patterns,
+    *_sacrifice_patterns,
 ]
 
 # Maps a commander-level mechanic family key to all trigger_event keys that
@@ -31,6 +33,7 @@ PATTERNS: dict[str, list[str]] = {
     "lifegain_trigger": [key for key, _, _ in _lifegain_patterns],
     "draw_trigger":     [key for key, _, _ in _draw_patterns],
     "creature_etb":     [key for key, _, _ in _creature_etb_patterns],
+    "sacrifice_fodder": [key for key, _, _ in _sacrifice_patterns],
 }
 
 __all__ = ["TRIGGERED_ABILITY_PATTERNS", "PATTERNS"]
