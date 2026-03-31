@@ -845,6 +845,8 @@ def train_synergy_phase(
     temp_end: float = 0.07,
     encoder_lr_scale: float = 1.0,
     checkpoint_prefix: str = "phase",
+    staple_pairs: list[tuple[int, int, float]] | None = None,
+    staple_pair_weight: float = 0.5,
 ):
     """Phase 2: NT-Xent (InfoNCE) on positive ability-trigger synergy pairs.
 
@@ -894,6 +896,17 @@ def train_synergy_phase(
             effective_lr,
             lr,
         )
+
+    staple_arr: np.ndarray | None = None
+    staple_weights_arr: np.ndarray | None = None
+    if staple_pairs:
+        staple_arr = np.array([(a, b) for a, b, _ in staple_pairs], dtype=np.int32)
+        staple_weights_arr = np.array([w for _, _, w in staple_pairs], dtype=np.float32)
+        log.info(
+            "Phase 2: %d staple role-anchor pairs loaded (weight=%.2f × CMC weight per pair)",
+            len(staple_pairs), staple_pair_weight,
+        )
+
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=effective_lr, weight_decay=1e-4
     )
@@ -913,6 +926,16 @@ def train_synergy_phase(
             z_a = model(emb_a)
             z_b = model(emb_b)
             loss = nt_xent_loss(z_a, z_b, temperature)
+
+            if staple_arr is not None:
+                batch_n = emb_a.size(0)
+                chosen = np.random.choice(len(staple_pairs), size=batch_n, replace=True)
+                ea = torch.from_numpy(pos_dataset.embs[staple_arr[chosen, 0]]).to(device)
+                eb = torch.from_numpy(pos_dataset.embs[staple_arr[chosen, 1]]).to(device)
+                za = model(ea)
+                zb = model(eb)
+                mean_cmc_w = float(staple_weights_arr[chosen].mean())
+                loss = loss + staple_pair_weight * mean_cmc_w * nt_xent_loss(za, zb, temperature)
 
             optimizer.zero_grad()
             loss.backward()
@@ -2122,6 +2145,8 @@ def main():
                 log.info("No %s found -- loading %s as warm start", warm, fallback)
                 load_checkpoint(model, fallback, device)
 
+        staple_pairs_p2 = load_staple_pairs_from_artifact(_artifact) if _artifact else []
+
         summary = train_synergy_phase(
             model,
             dataset,
@@ -2132,6 +2157,8 @@ def main():
             temp_end=args.temp_end,
             encoder_lr_scale=args.encoder_lr_scale,
             checkpoint_prefix=pfx,
+            staple_pairs=staple_pairs_p2 or None,
+            staple_pair_weight=args.staple_pair_weight,
         )
         _wandb_summary(summary)
 
