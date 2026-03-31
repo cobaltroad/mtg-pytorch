@@ -37,6 +37,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+import sys
+
+# Make scripts/ importable (export_dataset, import_*, etc. live there)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
