@@ -31,6 +31,7 @@ Phase 4 – Generative deck construction
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -1640,17 +1641,25 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
 def load_artifact(path: str) -> dict:
     """Load the training artifact produced by export_dataset*.py."""
     log.info("Loading training artifact: %s", path)
+    file_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     data = torch.load(path, map_location="cpu", weights_only=False)
     meta = data.get("meta", {})
+    stored_sha = meta.get("sha256", "(none)")
+    if stored_sha != "(none)" and stored_sha != file_sha:
+        log.warning(
+            "SHA256 MISMATCH — stored=%s  file=%s  (artifact may be corrupted)",
+            stored_sha, file_sha,
+        )
     log.info(
         "Artifact: %d cards, %d functional pairs, %d synergy pairs, "
-        "%d decks, %d positions (created %s)",
+        "%d decks, %d positions (created %s)  sha256=%s",
         meta.get("card_count", 0),
         meta.get("functional_pair_count", 0),
         meta.get("synergy_count", 0),
         meta.get("deck_count", 0),
         meta.get("position_count", 0),
         meta.get("created_at", "?")[:19],
+        file_sha[:16],
     )
     return data
 
