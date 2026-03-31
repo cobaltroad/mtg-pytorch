@@ -127,6 +127,19 @@ try {
     Write-Host ""
 } catch {
     $sw.Stop()
-    Write-Error "Upload failed: $_"
+    # Try to extract the response body for the actual server error message
+    $detail = $null
+    if ($_.Exception.Response) {
+        try {
+            $stream = $_.Exception.Response.GetResponseStream()
+            $reader = New-Object System.IO.StreamReader($stream)
+            $detail = $reader.ReadToEnd()
+        } catch {}
+    }
+    if ($detail) {
+        Write-Error "Upload failed: $_`nServer response: $detail"
+    } else {
+        Write-Error "Upload failed: $_"
+    }
     exit 1
 }
