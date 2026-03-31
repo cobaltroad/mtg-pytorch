@@ -51,6 +51,14 @@ Artifact keys
                          color_identity    list[str]
                          legal_neg_indices Tensor[int64]
                          archetype         str  (distinct trigger_event values)
+  synergy_positions  – list[dict], one per (commander, positive-card) pair:
+                         commander_idx     int
+                         context_card_idxs list[int]   (empty — pairwise signal)
+                         target_card_idx   int
+                         weight            float        (2.0 = ability_weight)
+                         legal_neg_indices Tensor[int64]
+                       Required by Phase 4 train_deck_constructor_phase for
+                       synergy-guided scoring steps (--syn-per-epoch).
 
 Usage
 -----
@@ -341,7 +349,26 @@ def main() -> None:
             "Ensure commander_mechanics.py has SQL entries for the detected pattern keys."
         )
 
-    # 6. Assemble and save
+    # 6. Build synergy_positions for Phase 4 decoder training.
+    #    Each positive card in each synthetic deck becomes one training position.
+    #    context_card_idxs is empty (pairwise signal, not sequential).
+    #    legal_neg_indices is inherited from the deck (same color-identity pool).
+    ABILITY_WEIGHT = 2.0
+    synergy_positions = []
+    for deck in decks:
+        cmd_idx = deck["commander_idx"]
+        legal   = deck["legal_neg_indices"]
+        for card_idx in deck["card_idxs"]:
+            synergy_positions.append({
+                "commander_idx":    cmd_idx,
+                "context_card_idxs": [],
+                "target_card_idx":  card_idx,
+                "weight":           ABILITY_WEIGHT,
+                "legal_neg_indices": legal,
+            })
+    log.info("Built %d synergy_positions from %d decks", len(synergy_positions), len(decks))
+
+    # 7. Assemble and save
     commander_count = len(decks)
     avg_pos = sum(len(d["card_idxs"]) for d in decks) / max(commander_count, 1)
     meta = {
@@ -352,17 +379,19 @@ def main() -> None:
         "avg_positives":  round(avg_pos, 1),
         "min_positives":  MIN_POSITIVES,
         "max_positives":  MAX_POSITIVES,
-        "source":         "decompose+staples",
-        "created_at":     datetime.now(timezone.utc).isoformat(),
+        "source":             "decompose+staples",
+        "synergy_pos_count":  len(synergy_positions),
+        "created_at":         datetime.now(timezone.utc).isoformat(),
     }
 
     artifact = {
-        "meta":             meta,
-        "card_ids":         card_ids,
-        "embeddings":       torch.from_numpy(emb_matrix),
-        "card_meta":        card_meta,
-        "color_identities": {cid: sorted(ci) for cid, ci in color_ids.items()},
-        "decks":            decks,
+        "meta":              meta,
+        "card_ids":          card_ids,
+        "embeddings":        torch.from_numpy(emb_matrix),
+        "card_meta":         card_meta,
+        "color_identities":  {cid: sorted(ci) for cid, ci in color_ids.items()},
+        "decks":             decks,
+        "synergy_positions": synergy_positions,
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

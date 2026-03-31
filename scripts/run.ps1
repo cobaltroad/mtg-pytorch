@@ -376,7 +376,7 @@ if ($Mode -eq 'train') {
     }
 
     if ($Phase -eq 2) {
-        $cmd += @('--sample', $Sample, '--role-demand-sample', $RoleDemandSample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
+        $cmd += @('--sample', $Sample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
         $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
         $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
     }
