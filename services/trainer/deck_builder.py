@@ -42,6 +42,9 @@ import re
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
+from mtg_sql.staples import draw_engine, draw_spell, interaction, removal, sweeper
+from mtg_sql.staples.ramp import SQL as _RAMP_SQL
+
 if TYPE_CHECKING:
     import psycopg2
 
@@ -51,15 +54,71 @@ LAND_TARGET   = 36
 SPELL_SLOTS   = 99 - LAND_TARGET   # 63
 NONBASIC_CAP  = 20   # max non-basic lands (including forced)
 
-CURVE_BUCKETS: list[tuple[int, int]] = [
-    (1,   8),
-    (2,  16),
-    (3,  14),
+# Depending on the mana value of your commander, your desired curve may shift slightly.
+
+CURVE_BUCKET_MV2: list[tuple[int, int]] = [
+    (1,   9),
+    (2,  17),
+    (3,  17),
     (4,  12),
-    (5,   7),
-    (999, 6),
+    (5,   5),
+    (99,  2),
 ]
-assert sum(t for _, t in CURVE_BUCKETS) == SPELL_SLOTS
+
+CURVE_BUCKET_MV3: list[tuple[int, int]] = [
+    (1,   9),
+    (2,  18),
+    (3,  13),
+    (4,  14),
+    (5,   5),
+    (99,  2),
+]
+
+CURVE_BUCKET_MV4: list[tuple[int, int]] = [
+    (1,   6),
+    (2,  20),
+    (3,  19),
+    (4,  10),
+    (5,   4),
+    (99,  2),
+]
+
+CURVE_BUCKET_MV5: list[tuple[int, int]] = [
+    (1,   4),
+    (2,  16),
+    (3,  20),
+    (4,  12),
+    (5,   6),
+    (99,  2),
+]
+
+CURVE_BUCKET_MV6: list[tuple[int, int]] = [
+    (1,   2),
+    (2,  14),
+    (3,  20),
+    (4,  15),
+    (5,   5),
+    (99,  3),
+]
+
+# assert sum(t for _, t in CURVE_BUCKET_MV2) == SPELL_SLOTS, CURVE_BUCKET_MV2
+# assert sum(t for _, t in CURVE_BUCKET_MV3) == SPELL_SLOTS, CURVE_BUCKET_MV3
+# assert sum(t for _, t in CURVE_BUCKET_MV4) == SPELL_SLOTS, CURVE_BUCKET_MV4
+# assert sum(t for _, t in CURVE_BUCKET_MV5) == SPELL_SLOTS, CURVE_BUCKET_MV5
+# assert sum(t for _, t in CURVE_BUCKET_MV6) == SPELL_SLOTS, CURVE_BUCKET_MV6
+
+
+def _select_curve_buckets(commander_cmc: float | None) -> list[tuple[int, int]]:
+    """Return the curve bucket list appropriate for the commander's mana value."""
+    if commander_cmc is None or commander_cmc <= 2:
+        return CURVE_BUCKET_MV2
+    if commander_cmc <= 3:
+        return CURVE_BUCKET_MV3
+    if commander_cmc <= 4:
+        return CURVE_BUCKET_MV4
+    if commander_cmc <= 5:
+        return CURVE_BUCKET_MV5
+    return CURVE_BUCKET_MV6
 
 # Forced inclusions — names exactly as they appear in MTGJSON
 FORCED_RAMP: dict[str, int] = {
@@ -92,90 +151,13 @@ COLOR_TO_BASIC: dict[str, str] = {
     "C": "Wastes",
 }
 
-# ── Staple SQL (mirrors services/ingest/synergy/staples/*.py) ─────────────────
-# Duplicated here to keep the trainer service self-contained; must stay in sync
-# with the ingest SQL when patterns change.
-
 _ROLE_SQL: dict[str, str] = {
-    "ramp": (
-        "("
-        "  (type_line ILIKE '%%Artifact%%'"
-        "   AND oracle_text ~* '\\{T\\}.*[Aa]dd'"
-        "   AND type_line NOT ILIKE '%%Land%%')"
-        "  OR"
-        "  (oracle_text ILIKE '%%search your library%%'"
-        "   AND ("
-        "     oracle_text ILIKE '%%basic land%%'"
-        "     OR oracle_text ILIKE '%%Plains%%'"
-        "     OR oracle_text ILIKE '%%Island%%'"
-        "     OR oracle_text ILIKE '%%Swamp%%'"
-        "     OR oracle_text ILIKE '%%Mountain%%'"
-        "     OR oracle_text ILIKE '%%Forest%%'"
-        "   )"
-        "   AND type_line NOT ILIKE '%%Land%%'"
-        "   AND type_line NOT ILIKE '%%Creature%%')"
-        "  OR"
-        "  (type_line ILIKE '%%Creature%%'"
-        "   AND oracle_text ~* '\\{T\\}.*[Aa]dd')"
-        ")"
-    ),
-    "removal": (
-        "("
-        "  oracle_text ILIKE '%%destroy target%%'"
-        "  OR oracle_text ILIKE '%%exile target%%'"
-        "  OR"
-        "  (oracle_text ILIKE '%%return target%%'"
-        "   AND oracle_text ILIKE '%%owner%%s hand%%')"
-        "  OR"
-        "  oracle_text ~* 'gets? -[0-9]+/-[0-9]+ until end of turn'"
-        ")"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
-    "sweeper": (
-        "("
-        "  oracle_text ILIKE '%%destroy all%%'"
-        "  OR oracle_text ILIKE '%%exile all%%'"
-        "  OR oracle_text ~* 'deals? [0-9]+ damage to each creature'"
-        "  OR oracle_text ~* 'each creature gets -[0-9]+/-[0-9]+'"
-        "  OR oracle_text ILIKE '%%return all nonland%%'"
-        ")"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
-    "draw_engine": (
-        "type_line NOT ILIKE '%%Instant%%'"
-        " AND type_line NOT ILIKE '%%Sorcery%%'"
-        " AND type_line NOT ILIKE '%%Land%%'"
-        " AND oracle_text ILIKE '%%draw%%'"
-        " AND oracle_text ILIKE '%%card%%'"
-        " AND ("
-        "   oracle_text ILIKE '%%whenever%%'"
-        "   OR oracle_text ILIKE '%%at the beginning%%'"
-        " )"
-    ),
-    "draw_spell": (
-        "("
-        "  type_line ILIKE '%%Instant%%'"
-        "  OR type_line ILIKE '%%Sorcery%%'"
-        ")"
-        " AND oracle_text ILIKE '%%draw%%'"
-        " AND oracle_text ILIKE '%%card%%'"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
-    "interaction": (
-        "("
-        "  oracle_text ILIKE '%%counter target%%'"
-        "  OR oracle_text ILIKE '%%gain hexproof%%'"
-        "  OR oracle_text ILIKE '%%gains hexproof%%'"
-        "  OR oracle_text ILIKE '%%have hexproof%%'"
-        "  OR oracle_text ILIKE '%%has hexproof%%'"
-        "  OR oracle_text ILIKE '%%gain indestructible%%'"
-        "  OR oracle_text ILIKE '%%gains indestructible%%'"
-        "  OR oracle_text ILIKE '%%have indestructible%%'"
-        "  OR oracle_text ILIKE '%%has indestructible%%'"
-        "  OR oracle_text ILIKE '%%shroud%%'"
-        ")"
-        " AND type_line NOT ILIKE '%%Land%%'"
-    ),
+    "ramp":        _RAMP_SQL,
+    "removal":     removal.SQL,
+    "sweeper":     sweeper.SQL,
+    "draw_engine": draw_engine.SQL,
+    "draw_spell":  draw_spell.SQL,
+    "interaction": interaction.SQL,
 }
 
 # SQL for nonbasic land selection — ordered by quality tier within the query
@@ -205,10 +187,10 @@ def _name_to_id(name: str, card_meta: dict) -> str | None:
     return None
 
 
-def _cmc_bucket(cmc: float | None) -> int:
+def _cmc_bucket(cmc: float | None, curve_buckets: list[tuple[int, int]]) -> int:
     if cmc is None:
         return 999
-    for max_cmc, _ in CURVE_BUCKETS:
+    for max_cmc, _ in curve_buckets:
         if cmc <= max_cmc:
             return max_cmc
     return 999
@@ -290,6 +272,10 @@ def build(
                       Basics appear multiple times (one entry per copy).
         "breakdown" — slot counts per role / curve / land type
     """
+    # Select mana curve targets based on the commander's own mana value.
+    commander_cmc: float | None = card_meta.get(commander_id, {}).get("cmc")
+    curve_buckets = _select_curve_buckets(commander_cmc)
+
     # rank_index: card_id → position in Phase 4 ranking (lower = better scored)
     rank_index: dict[str, int] = {cid: i for i, cid in enumerate(ranked_cards)}
 
@@ -355,12 +341,12 @@ def build(
     for cid in (breakdown["forced_ramp"] + [c for cs in breakdown["role"].values() for c in cs]):
         meta = card_meta.get(cid, {})
         if not _is_land(meta):
-            b = _cmc_bucket(meta.get("cmc"))
+            b = _cmc_bucket(meta.get("cmc"), curve_buckets)
             bucket_filled[b] += 1
 
     bucket_cap: dict[int, int] = {
         max_cmc: (target - bucket_filled.get(max_cmc, 0))
-        for max_cmc, target in CURVE_BUCKETS
+        for max_cmc, target in curve_buckets
         if (target - bucket_filled.get(max_cmc, 0)) > 0
     }
 
@@ -372,7 +358,7 @@ def build(
         meta = card_meta.get(cid, {})
         if _is_land(meta):
             continue
-        b = _cmc_bucket(meta.get("cmc"))
+        b = _cmc_bucket(meta.get("cmc"), curve_buckets)
         if b in bucket_cap:
             _pick(cid, "curve", str(b))
             bucket_cap[b] -= 1

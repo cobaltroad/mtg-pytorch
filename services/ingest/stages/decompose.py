@@ -30,6 +30,7 @@ import psycopg2.extras
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from mtg_sql import commanders
 from regex_utils import p  # noqa: E402
 from synergy.commander_mechanics import (
     PATTERN_KEY_TO_CONSUMER_SQL,
@@ -343,18 +344,13 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-_QUERY = """
-    SELECT id::text, name, oracle_text, type_line, color_identity, cmc, keywords
-    FROM cards
-    WHERE legalities->>'commander' = 'legal'
-      AND (
-          (type_line ILIKE '%%Legendary%%' AND (type_line ILIKE '%%Creature%%' OR type_line ILIKE '%%Planeswalker%%'))
-          OR oracle_text ILIKE '%%can be your commander%%'
-      )
-      AND name ILIKE %s
-    ORDER BY name
-    LIMIT 10
-"""
+_QUERY = (
+    "SELECT id::text, name, oracle_text, type_line, color_identity, cmc, keywords"
+    " FROM cards"
+    f" WHERE {commanders.WHERE}"
+    " AND name ILIKE %s"
+    " ORDER BY name LIMIT 10"
+)
 
 
 def _fetch(name: str) -> list[dict]:

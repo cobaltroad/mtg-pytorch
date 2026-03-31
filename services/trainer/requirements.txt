@@ -1,3 +1,4 @@
+-e ../../shared
 torch>=2.3
 sentence-transformers>=3.0
 transformers>=4.40

@@ -16,6 +16,8 @@ RATE reflects the approximate share of a 99-card Commander deck devoted to ramp.
 from __future__ import annotations
 
 from .mana_rocks import SQL as _MANA_ROCK_SQL
+from .land_ramp import SQL as _LAND_RAMP_SQL
+from .mana_dorks import SQL as _MANA_DORK_SQL
 
 RATE: float = 0.12
 
@@ -27,21 +29,8 @@ SQL: str = (
     "("
     "  (" + _MANA_ROCK_SQL + ")"
     "  OR"
-    # land ramp: non-creature spells that search the library for a land
-    "  (oracle_text ILIKE '%%search your library%%'"
-    "   AND ("
-    "     oracle_text ILIKE '%%basic land%%'"
-    "     OR oracle_text ILIKE '%%Plains%%'"
-    "     OR oracle_text ILIKE '%%Island%%'"
-    "     OR oracle_text ILIKE '%%Swamp%%'"
-    "     OR oracle_text ILIKE '%%Mountain%%'"
-    "     OR oracle_text ILIKE '%%Forest%%'"
-    "   )"
-    "   AND type_line NOT ILIKE '%%Land%%'"
-    "   AND type_line NOT ILIKE '%%Creature%%')"
+    "  (" + _LAND_RAMP_SQL + ")"
     "  OR"
-    # mana dorks: creatures with {T}: Add ...
-    "  (type_line ILIKE '%%Creature%%'"
-    "   AND oracle_text ~* '\\{T\\}.*[Aa]dd')"
+    "  (" + _MANA_DORK_SQL + ")"
     ")"
 )

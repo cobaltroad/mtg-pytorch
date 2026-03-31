@@ -31,8 +31,10 @@ services:
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       DATASET_PATH: /data/mtg_dataset.pt
       DATASET_META_PATH: /data/mtg_dataset.json
+      PYTHONPATH: /shared
     volumes:
       - ./services/api:/app:cached
+      - ./shared:/shared:ro
       - model_checkpoints:/app/checkpoints
       - ingest_cache:/data:ro
       - ./services/ingest/card_name_aliases.csv:/app/card_name_aliases.csv:ro
@@ -95,8 +97,10 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-mpnet-base-v2}
       BATCH_SIZE: ${INGEST_BATCH_SIZE:-256}
       HF_HOME: /data/hf_cache
+      PYTHONPATH: /shared
     volumes:
       - ./services/ingest:/app:cached
+      - ./shared:/shared:ro
       - ingest_cache:/data
       - ./mage:/mage:ro
     depends_on:

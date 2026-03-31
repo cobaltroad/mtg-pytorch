@@ -27,6 +27,7 @@ import psycopg2.extras
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from stages.decompose import ORACLE_PATTERNS, _detect, _fetch
+from mtg_sql import commanders
 from synergy.commander_mechanics import (
     PATTERN_KEY_TO_CONSUMER_SQL,
     PATTERN_KEY_TO_PRODUCER_SQL,
@@ -87,20 +88,15 @@ def list_no_signals(limit: int) -> None:
     conn = psycopg2.connect(DATABASE_URL)
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
-                SELECT name,
-                       COALESCE(oracle_text, '')  AS oracle_text,
-                       COALESCE(type_line,   '')  AS type_line,
-                       COALESCE(color_identity, ARRAY[]::text[]) AS color_identity
-                FROM cards
-                WHERE legalities->>'commander' = 'legal'
-                  AND (
-                      type_line ILIKE '%Legendary Creature%'
-                      OR type_line ILIKE '%Legendary Planeswalker%'
-                      OR oracle_text ILIKE '%can be your commander%'
-                  )
-                ORDER BY name
-            """)
+            cur.execute(
+                "SELECT name,"
+                "       COALESCE(oracle_text, '')  AS oracle_text,"
+                "       COALESCE(type_line,   '')  AS type_line,"
+                "       COALESCE(color_identity, ARRAY[]::text[]) AS color_identity"
+                " FROM cards"
+                f" WHERE {commanders.WHERE}"
+                " ORDER BY name"
+            )
             commanders = cur.fetchall()
     finally:
         conn.close()

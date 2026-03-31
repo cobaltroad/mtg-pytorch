@@ -23,7 +23,7 @@
 
 from __future__ import annotations
 
-from synergy.staples.mana_rocks import SQL as _MANA_ROCK_SQL
+from mtg_sql.staples.mana_rocks import SQL as _MANA_ROCK_SQL
 
 # ── SQL fragments reused across multiple ability classes ───────────────────────
 
