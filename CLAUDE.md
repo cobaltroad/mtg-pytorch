@@ -27,7 +27,7 @@ mtg-pytorch/
 │   │       ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
 │   │       ├── tag.py          #   embed_cards + tag_abilities (3 passes)
 │   │       ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
-│   │       ├── commander.py    #   compute_commander_value_synergy + compute_tribal_typeline_synergy
+│   │       ├── commander.py    #   compute_commander_value_synergy
 │   │       └── export.py       #   Thin wrappers for all export sub-stages
 │   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
 │   └── ui/                     # Streamlit interface
@@ -85,9 +85,9 @@ docker compose run --rm ingest python pipeline.py --stage export_dataset
 #   Must run BEFORE compute_textmatch_synergy when building the commander artifact.
 docker compose run --rm ingest python scripts/decompose_commanders.py
 
-# Step 2: commander-value and tribal synergy edges
+# Step 2: commander-value synergy edges
+# (tribal edges are built by compute_textmatch_synergy via commander_mechanics.py)
 docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
-docker compose run --rm ingest python pipeline.py --stage compute_tribal_typeline_synergy
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
 # Spot-check the decomposition output with eval_commander.py:

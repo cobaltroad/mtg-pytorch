@@ -28,8 +28,8 @@ def export_dataset_commanders_stage() -> None:
     """Build the commander-decomposition artifact /data/mtg_commanders.pt.
 
     Prerequisites (must be run first):
-      stages.dataset   — compute_synergy (ability_trigger edges)
-      stages.commander — compute_commander_value_synergy + compute_tribal_typeline_synergy
+      stages.dataset   — compute_textmatch_synergy (ability_trigger edges, tribal edges)
+      stages.commander — compute_commander_value_synergy
     """
     import export_dataset_commanders
     export_dataset_commanders.main()
