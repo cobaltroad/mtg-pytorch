@@ -3,8 +3,8 @@ Card role detection — Issue #31.
 
 Derives functional role tags from oracle text / type line and writes them to
 `card_abilities` (ability_type='role').  Tags are intentionally machine-readable
-coefficients, not prose.  They feed into synergy_edges as role_demand score type,
-closing the training feedback loop.
+coefficients, not prose.  They are used by the deck builder to classify cards
+and by the deck browser to annotate card lists.
 
 Roles
 -----
@@ -204,7 +204,7 @@ async def get_card_roles(db: AsyncSession, card_id: str) -> list[dict]:
 # ── Commander archetype detection ─────────────────────────────────────────────
 # Archetypes capture the commander's *deckbuilding intent*, not just card roles.
 # These are stored in card_abilities as ability_type='archetype' on the commander.
-# They drive role_demand weighting: e.g. an aristocrats commander values sacrifice
+# They inform deck-builder role weighting: e.g. an aristocrats commander values sacrifice
 # and death-trigger cards more than a generic midrange commander.
 
 _ARCHETYPE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -356,51 +356,3 @@ async def tag_commander_archetypes(
     await db.commit()
     return archetypes
 
-
-async def write_role_demand_edges(
-    db: AsyncSession,
-    commander_id: str,          # UUID as string (cards.id)
-    role_counts: dict[str, int],
-    total_deck_cards: int,
-    archetypes: list[str] | None = None,
-) -> None:
-    """Write role_demand synergy edges from commander → cards of each role.
-
-    Base score = count_of_role / total_deck_cards   (0..1 normalised frequency)
-
-    Archetype multipliers (ARCHETYPE_ROLE_WEIGHTS) adjust scores so that, e.g.,
-    a Voltron commander's protection cards score 2× their raw frequency.
-    Existing edges take the GREATEST score so repeated imports only improve signal.
-    """
-    archetypes = archetypes or []
-
-    # Aggregate multipliers from all detected archetypes
-    multipliers: dict[str, float] = {}
-    for arch in archetypes:
-        for role, mult in ARCHETYPE_ROLE_WEIGHTS.get(arch, {}).items():
-            multipliers[role] = max(multipliers.get(role, 1.0), mult)
-
-    for role, count in role_counts.items():
-        base_score  = count / max(total_deck_cards, 1)
-        role_score  = min(base_score * multipliers.get(role, 1.0), 1.0)
-
-        await db.execute(text("""
-            INSERT INTO synergy_edges (card_a, card_b, score_type, score)
-            SELECT DISTINCT ON (ca.card_id)
-                CAST(:commander_id AS uuid),
-                ca.card_id,
-                'role_demand',
-                CAST(:score AS float)
-            FROM card_abilities ca
-            WHERE ca.ability_type = 'role'
-              AND ca.ability_name = :role
-              AND ca.card_id != CAST(:commander_id AS uuid)
-            ON CONFLICT (card_a, card_b, score_type)
-                DO UPDATE SET score = GREATEST(synergy_edges.score, EXCLUDED.score)
-        """), {
-            "commander_id": commander_id,
-            "role":         role,
-            "score":        role_score,
-        })
-
-    await db.commit()

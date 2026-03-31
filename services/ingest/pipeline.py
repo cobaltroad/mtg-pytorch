@@ -10,7 +10,6 @@ process    -- Embed cards, tag abilities, compute synergy edges, export training
 
 Commander artifact pipeline (run after process):
   python pipeline.py --stage compute_commander_value_synergy
-  python pipeline.py --stage compute_tribal_typeline_synergy
   python pipeline.py --stage export_dataset_commanders
 
 Run both:           python pipeline.py
@@ -20,7 +19,7 @@ Run process only:   python pipeline.py --stage process
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan],
   compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy,
-  compute_commander_value_synergy, compute_tribal_typeline_synergy,
+  compute_commander_value_synergy,
   export_dataset, export_dataset_commanders
 
 Data sources
@@ -71,9 +70,8 @@ async def process() -> None:
 
     Requires the download step to have been run first.
 
-    Note: commander-specific synergy edges (compute_commander_value_synergy,
-    compute_tribal_typeline_synergy) are NOT included here -- they are
-    prerequisites for export_dataset_commanders only and should be run
+    Note: compute_commander_value_synergy is NOT included here -- it is a
+    prerequisite for export_dataset_commanders only and should be run
     explicitly before building the commander artifact.
     """
     await embed_cards()

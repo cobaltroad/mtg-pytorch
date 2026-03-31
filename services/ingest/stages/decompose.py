@@ -128,10 +128,16 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(r"artifact creatures? you control")),
 
     # Death trigger
+    # Standard: "whenever a/another creature dies"
+    # Teysa Karlov: "if a creature dying causes a triggered ability … to trigger,
+    #   that ability triggers an additional time" — she amplifies death triggers
+    #   rather than having one, but her deck plan is identical: fill with sac
+    #   outlets, death payoffs, and self-sacrifice fodder.
     ("death_trigger", "Death trigger",
      p(
          r"when(?:ever)?\s+(?:a |an |another |one or more )?(?:nontoken )?creature"
-         r".{0,40}dies",
+         r".{0,40}dies"
+         r"|creature dying causes",
      )),
 
     # Graveyard from play

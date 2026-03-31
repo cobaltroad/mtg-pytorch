@@ -79,6 +79,20 @@ def _wandb_log(data: dict) -> None:
         log.warning("wandb.log failed (network error?) — skipping: %s", exc)
 
 
+def _wandb_summary(data: dict) -> None:
+    """Write end-of-run summary metrics to wandb.run.summary.
+
+    Summary values appear prominently in the W&B runs table and are not
+    tied to a step — suitable for best_loss, best_epoch, stopped_early, etc.
+    """
+    if not WANDB_ENABLED:
+        return
+    try:
+        wandb.run.summary.update(data)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("wandb.summary failed: %s", exc)
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 
@@ -162,19 +176,17 @@ def load_synergy_pairs(
     neg_ratio: int = 3,
     sample: int = 500_000,
     hard_neg_frac: float = 0.5,
-    role_demand_sample: int = 100_000,
     combo_sample: int = 200_000,
     commander_value_sample: int = 200_000,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
-    Positives: ability_trigger, role_demand, commander_value, and combo_package
-    edges from synergy_edges.  Negatives: hard (nearest-neighbour) + random.
+    Positives: ability_trigger, commander_value, and combo_package edges from
+    synergy_edges.  Negatives: hard (nearest-neighbour) + random.
     """
     log.info(
-        "Loading synergy pairs (ability_trigger=%d, role_demand=%d, combo=%d, "
-        "commander_value=%d)…",
-        sample, role_demand_sample, combo_sample, commander_value_sample,
+        "Loading synergy pairs (ability_trigger=%d, combo=%d, commander_value=%d)…",
+        sample, combo_sample, commander_value_sample,
     )
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -188,23 +200,6 @@ def load_synergy_pairs(
                 (r[0], r[1], 1.0) for r in cur.fetchall()
                 if r[0] in embeddings and r[1] in embeddings
             ]
-
-            if role_demand_sample > 0:
-                cur.execute("""
-                    SELECT card_a::text, card_b::text, score
-                    FROM synergy_edges
-                    WHERE score_type = 'role_demand'
-                    LIMIT %s
-                """, (role_demand_sample,))
-                role_pairs = [
-                    (r[0], r[1], float(r[2])) for r in cur.fetchall()
-                    if r[0] in embeddings and r[1] in embeddings
-                ]
-                log.info("  %d ability_trigger + %d role_demand pairs",
-                         len(positives), len(role_pairs))
-                positives = positives + role_pairs
-            else:
-                log.info("  %d ability_trigger pairs (role_demand disabled)", len(positives))
 
             if combo_sample > 0:
                 cur.execute("""
@@ -775,6 +770,7 @@ def train_contrastive_phase(
     device = next(model.parameters()).device
 
     best_loss = float("inf")
+    best_epoch = 0
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
@@ -830,9 +826,12 @@ def train_contrastive_phase(
 
         if avg < best_loss:
             best_loss = avg
+            best_epoch = epoch + 1
             save_checkpoint(model, checkpoint_prefix + "1_best")
 
     save_checkpoint(model, f"{checkpoint_prefix}1_epoch{epochs}")
+    return {"phase": 1, "best_loss": best_loss, "best_epoch": best_epoch,
+            "final_epoch": epochs, "stopped_early": False}
 
 
 def train_synergy_phase(
@@ -901,6 +900,7 @@ def train_synergy_phase(
     device = next(model.parameters()).device
 
     best_loss = float("inf")
+    best_epoch = 0
     for epoch in range(epochs):
         temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
         model.train()
@@ -943,9 +943,12 @@ def train_synergy_phase(
 
         if avg < best_loss:
             best_loss = avg
+            best_epoch = epoch + 1
             save_checkpoint(model, checkpoint_prefix + "2_best")
 
     save_checkpoint(model, f"{checkpoint_prefix}2_epoch{epochs}")
+    return {"phase": 2, "best_loss": best_loss, "best_epoch": best_epoch,
+            "final_epoch": epochs, "stopped_early": False}
 
 
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
@@ -995,7 +998,8 @@ def train_deck_phase(
             checkpoint_prefix,
         )
         save_checkpoint(model, checkpoint_prefix + "3_best")
-        return
+        return {"phase": 3, "best_loss": None, "best_epoch": None,
+                "final_epoch": 0, "stopped_early": False, "frozen": True}
 
     all_ids = list(embeddings.keys())
     all_embs = torch.from_numpy(np.stack([embeddings[k] for k in all_ids]))  # (N, D)
@@ -1011,6 +1015,7 @@ def train_deck_phase(
     all_embs = all_embs.to(device)
 
     best_loss = float("inf")
+    best_epoch = 0
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
@@ -1086,9 +1091,12 @@ def train_deck_phase(
 
         if avg < best_loss:
             best_loss = avg
+            best_epoch = epoch + 1
             save_checkpoint(model, checkpoint_prefix + "3_best")
 
     save_checkpoint(model, f"{checkpoint_prefix}3_epoch{epochs}")
+    return {"phase": 3, "best_loss": best_loss, "best_epoch": best_epoch,
+            "final_epoch": epochs, "stopped_early": False, "frozen": False}
 
 
 # ── Phase 4: Synergy-guided synthetic positions ───────────────────────────────
@@ -1180,8 +1188,10 @@ def train_synergy_positions_phase(
         log.info("Phase 4: early stopping patience=%d epochs", patience)
 
     best_loss = float("inf")
+    best_epoch = 0
     no_improve = 0
     final_epoch = 0
+    stopped_early = False
 
     for epoch in range(epochs):
         temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
@@ -1290,11 +1300,13 @@ def train_synergy_positions_phase(
         final_epoch = epoch + 1
         if avg < best_loss:
             best_loss = avg
+            best_epoch = epoch + 1
             no_improve = 0
             save_checkpoint(model, checkpoint_prefix + "4_best")
         else:
             no_improve += 1
             if patience > 0 and no_improve >= patience:
+                stopped_early = True
                 log.info(
                     "Phase 4: early stopping at epoch %d/%d "
                     "(no improvement for %d consecutive epochs, best=%.4f)",
@@ -1306,6 +1318,8 @@ def train_synergy_positions_phase(
                 break
 
     save_checkpoint(model, f"{checkpoint_prefix}4_epoch{final_epoch}")
+    return {"phase": 4, "best_loss": best_loss, "best_epoch": best_epoch,
+            "final_epoch": final_epoch, "stopped_early": stopped_early}
 
 
 # ── Phase 4: Autoregressive deck construction (legacy) ────────────────────────
@@ -1407,8 +1421,10 @@ def train_deck_constructor_phase(
         log.info("Phase 4: early stopping patience=%d epochs", patience)
 
     best_loss = float("inf")
+    best_epoch = 0
     no_improve = 0
     final_epoch = 0
+    stopped_early = False
     for epoch in range(epochs):
         temperature = cosine_temperature(epoch, epochs, temp_start, temp_end)
 
@@ -1554,11 +1570,13 @@ def train_deck_constructor_phase(
         final_epoch = epoch + 1
         if avg < best_loss:
             best_loss = avg
+            best_epoch = epoch + 1
             no_improve = 0
             save_checkpoint(model, checkpoint_prefix + "4_best")
         else:
             no_improve += 1
             if patience > 0 and no_improve >= patience:
+                stopped_early = True
                 log.info(
                     "Phase 4: early stopping at epoch %d/%d "
                     "(no improvement for %d consecutive epochs, best=%.4f)",
@@ -1570,6 +1588,8 @@ def train_deck_constructor_phase(
                 break
 
     save_checkpoint(model, f"{checkpoint_prefix}4_epoch{final_epoch}")
+    return {"phase": 4, "best_loss": best_loss, "best_epoch": best_epoch,
+            "final_epoch": final_epoch, "stopped_early": stopped_early}
 
 
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
@@ -1853,13 +1873,6 @@ def main():
         help="Max positive pairs to sample from synergy_edges",
     )
     parser.add_argument(
-        "--role-demand-sample",
-        type=int,
-        default=100_000,
-        help="Max role_demand edges to include as soft-label positives "
-        "(0 to disable; uses stored score as label)",
-    )
-    parser.add_argument(
         "--combo-sample",
         type=int,
         default=200_000,
@@ -2048,7 +2061,7 @@ def main():
         staple_pairs = load_staple_pairs_from_artifact(_artifact) if _artifact else []
         color_buckets = _build_color_buckets_from_artifact(_artifact) if _artifact else None
 
-        train_contrastive_phase(
+        summary = train_contrastive_phase(
             model,
             dataset,
             args.epochs,
@@ -2061,6 +2074,7 @@ def main():
             staple_pair_weight=args.staple_pair_weight,
             color_buckets=color_buckets,
         )
+        _wandb_summary(summary)
 
     elif args.phase == 2:
         embeddings = (
@@ -2078,7 +2092,6 @@ def main():
                 neg_ratio=args.neg_ratio,
                 sample=args.sample,
                 hard_neg_frac=args.hard_neg_frac,
-                role_demand_sample=args.role_demand_sample,
                 combo_sample=args.combo_sample,
                 commander_value_sample=args.commander_value_sample,
             )
@@ -2100,7 +2113,7 @@ def main():
                 log.info("No %s found -- loading %s as warm start", warm, fallback)
                 load_checkpoint(model, fallback, device)
 
-        train_synergy_phase(
+        summary = train_synergy_phase(
             model,
             dataset,
             args.epochs,
@@ -2111,6 +2124,7 @@ def main():
             encoder_lr_scale=args.encoder_lr_scale,
             checkpoint_prefix=pfx,
         )
+        _wandb_summary(summary)
 
     elif args.phase == 3:
         embeddings = (
@@ -2161,7 +2175,7 @@ def main():
             if archetype_weight:
                 log.info("Archetype weights: %s", archetype_weight)
 
-        train_deck_phase(
+        summary = train_deck_phase(
             model,
             dataset,
             embeddings,
@@ -2173,6 +2187,7 @@ def main():
             encoder_lr_scale=args.encoder_lr_scale,
             freeze_encoder=args.freeze_encoder,
         )
+        _wandb_summary(summary)
 
     elif args.phase == 4:
         embeddings = (
@@ -2218,7 +2233,7 @@ def main():
                     synergy_limit_per_commander=args.synergy_limit,
                 )
 
-            train_synergy_positions_phase(
+            summary = train_synergy_positions_phase(
                 model,
                 syn_positions,
                 embeddings,
@@ -2233,6 +2248,7 @@ def main():
                 patience=args.patience,
                 checkpoint_prefix=pfx,
             )
+            _wandb_summary(summary)
         else:
             decks = (
                 load_decks_from_artifact(_artifact)
@@ -2258,7 +2274,7 @@ def main():
                     synergy_limit_per_commander=args.synergy_limit,
                 )
 
-            train_deck_constructor_phase(
+            summary = train_deck_constructor_phase(
                 model,
                 dataset,
                 embeddings,
@@ -2275,6 +2291,7 @@ def main():
                 patience=args.patience,
                 checkpoint_prefix=pfx,
             )
+            _wandb_summary(summary)
 
     else:
         log.warning("Phase %d not yet implemented.", args.phase)

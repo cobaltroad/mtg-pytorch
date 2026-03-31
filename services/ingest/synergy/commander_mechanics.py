@@ -37,6 +37,9 @@ from synergy.activated_ability import PATTERNS as _activated_abilities
 from synergy.spell import PATTERNS as _spells
 from synergy.combat import PATTERNS as _combat_tricks
 from synergy.tribal import tribal_sql, TRIBES as _tribes
+from synergy.staples.treasure import SQL as _TREASURE_SQL
+from synergy.staples.token import SQL as _TOKEN_SQL
+from mtg_sql.staples.removal import DESTROY as _REMOVAL_DESTROY, DAMAGE as _REMOVAL_DAMAGE
 
 
 # _spells values are raw SQL strings; _triggered_abilities / _activated_abilities
@@ -121,6 +124,33 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # outlets to convert that board presence into damage, draw, or mana:
     # Ashnod's Altar, Goblin Bombardment, Viscera Seer, etc.
     "creature_token_generator": _family_sql("sac_outlet"),
+
+    # ── CONSUMER: death-trigger commanders want sac outlets + self-sac fodder ───
+    # A commander that triggers on creature death (e.g. Syr Konrad: "whenever
+    # another creature dies, each opponent loses 1 life"; Teysa Karlov: "whenever
+    # another nontoken creature you control dies, that creature's abilities
+    # trigger an additional time") needs two things:
+    #   1. Sac outlets to control when deaths happen (Viscera Seer, Ashnod's Altar)
+    #   2. Creatures that self-sacrifice on a schedule — so death triggers fire
+    #      without spending a sac outlet (Feldon tokens via sacrifice_eot;
+    #      Decayed zombie tokens via keyword_decayed)
+    "death_trigger": (
+        f"({_family_sql('sac_outlet')}"
+        f" OR {_family_sql('sacrifice_fodder')}"
+        f" OR {_spells['toughness_1']}"
+        f" OR {_REMOVAL_DESTROY}"
+        f" OR {_REMOVAL_DAMAGE})"
+    ),
+
+    # ── CONSUMER: sacrifice-payoff commanders want sac outlets + fodder ──────────
+    # A commander that scales off sacrificing permanents (e.g. Korvold: "whenever
+    # you sacrifice a permanent, draw a card and put a +1/+1 counter on Korvold";
+    # Prossh: "whenever you cast Prossh, create X 0/1 Kobold tokens, sacrifice
+    # a creature to give Prossh +1/+1") needs two things: outlets to sacrifice
+    # into (Viscera Seer, Ashnod's Altar) AND a supply of cheap sacrifice fodder.
+    # Treasure generators (Dockside Extortionist, Smothering Tithe, Pitiless
+    # Plunderer) are ideal fodder — they also produce mana when sacrificed.
+    "sacrifice_payoff": f"({_family_sql('sac_outlet')} OR {_TREASURE_SQL} OR {_TOKEN_SQL})",
 
     # ── CONSUMER: deck needs spells of the type the commander cares about ─────
     # A commander with a cast trigger (e.g. Sythis) wants the deck filled with

@@ -21,7 +21,9 @@ services:
 
   # ── API ─────────────────────────────────────────────────────────────────────
   api:
-    build: ./services/api
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
     image: mtg-pytorch-api:latest
     restart: unless-stopped
     environment:
@@ -87,7 +89,9 @@ services:
   # ── Ingest ──────────────────────────────────────────────────────────────────
   # One-shot / scheduled pipeline: Scryfall bulk data → pgvector embeddings
   ingest:
-    build: ./services/ingest
+    build:
+      context: .
+      dockerfile: services/ingest/Dockerfile
     image: mtg-pytorch-ingest:latest
     restart: "no"
     environment:

@@ -63,7 +63,6 @@ def start_training(
     temp_start: float = 0.5,
     temp_end: float = 0.05,
     sample: int = 500_000,
-    role_demand_sample: int = 100_000,
 ) -> dict[str, Any]:
     """
     Launch a trainer container in detached mode.
@@ -80,8 +79,7 @@ def start_training(
         cmd.append("--resume")
 
     if phase == 2:
-        cmd += ["--sample", str(sample),
-                "--role-demand-sample", str(role_demand_sample)]
+        cmd += ["--sample", str(sample)]
 
     if phase == 4:
         if not freeze_encoder:
