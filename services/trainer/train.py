@@ -162,19 +162,17 @@ def load_synergy_pairs(
     neg_ratio: int = 3,
     sample: int = 500_000,
     hard_neg_frac: float = 0.5,
-    role_demand_sample: int = 100_000,
     combo_sample: int = 200_000,
     commander_value_sample: int = 200_000,
 ) -> list[tuple[str, str, float]]:
     """Return [(card_a_id, card_b_id, label)] with balanced pos/neg pairs.
 
-    Positives: ability_trigger, role_demand, commander_value, and combo_package
-    edges from synergy_edges.  Negatives: hard (nearest-neighbour) + random.
+    Positives: ability_trigger, commander_value, and combo_package edges from
+    synergy_edges.  Negatives: hard (nearest-neighbour) + random.
     """
     log.info(
-        "Loading synergy pairs (ability_trigger=%d, role_demand=%d, combo=%d, "
-        "commander_value=%d)…",
-        sample, role_demand_sample, combo_sample, commander_value_sample,
+        "Loading synergy pairs (ability_trigger=%d, combo=%d, commander_value=%d)…",
+        sample, combo_sample, commander_value_sample,
     )
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -188,23 +186,6 @@ def load_synergy_pairs(
                 (r[0], r[1], 1.0) for r in cur.fetchall()
                 if r[0] in embeddings and r[1] in embeddings
             ]
-
-            if role_demand_sample > 0:
-                cur.execute("""
-                    SELECT card_a::text, card_b::text, score
-                    FROM synergy_edges
-                    WHERE score_type = 'role_demand'
-                    LIMIT %s
-                """, (role_demand_sample,))
-                role_pairs = [
-                    (r[0], r[1], float(r[2])) for r in cur.fetchall()
-                    if r[0] in embeddings and r[1] in embeddings
-                ]
-                log.info("  %d ability_trigger + %d role_demand pairs",
-                         len(positives), len(role_pairs))
-                positives = positives + role_pairs
-            else:
-                log.info("  %d ability_trigger pairs (role_demand disabled)", len(positives))
 
             if combo_sample > 0:
                 cur.execute("""
@@ -1853,13 +1834,6 @@ def main():
         help="Max positive pairs to sample from synergy_edges",
     )
     parser.add_argument(
-        "--role-demand-sample",
-        type=int,
-        default=100_000,
-        help="Max role_demand edges to include as soft-label positives "
-        "(0 to disable; uses stored score as label)",
-    )
-    parser.add_argument(
         "--combo-sample",
         type=int,
         default=200_000,
@@ -2078,7 +2052,6 @@ def main():
                 neg_ratio=args.neg_ratio,
                 sample=args.sample,
                 hard_neg_frac=args.hard_neg_frac,
-                role_demand_sample=args.role_demand_sample,
                 combo_sample=args.combo_sample,
                 commander_value_sample=args.commander_value_sample,
             )

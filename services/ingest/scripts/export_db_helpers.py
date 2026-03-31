@@ -28,7 +28,6 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-m
 
 SAMPLE_PER_EVENT  = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
                          os.environ.get("DATASET_SAMPLE", "100000")))
-ROLE_SAMPLE       = int(os.environ.get("DATASET_ROLE_SAMPLE",       "100000"))
 COMBO_SAMPLE      = int(os.environ.get("DATASET_COMBO_SAMPLE",      "200000"))
 CV_SAMPLE         = int(os.environ.get("DATASET_CV_SAMPLE",         "200000"))
 EFFECT_PEER_SAMPLE = int(os.environ.get("DATASET_EFFECT_PEER_SAMPLE", "200000"))
@@ -207,8 +206,8 @@ def _load_synergy_pairs(
     """Return (a_idx, b_idx, labels) int32/float32 arrays.
 
     Covers ability edges (score_type controlled by *ability_score_type*),
-    role_demand, combo, and optionally commander_value or effect_peer, plus
-    pre-mined hard negatives and random negatives.
+    combo, and optionally commander_value or effect_peer, plus pre-mined
+    hard negatives and random negatives.
 
     Args:
         ability_score_type: ``'ability_trigger'`` for the co-occurrence path
@@ -224,8 +223,8 @@ def _load_synergy_pairs(
             to separate Beast Whisperer from Impact Tremors in Phase 2.
     """
     log.info(
-        "Loading synergy pairs (ability_score_type=%s, per_event=%d, role=%d, combo=%d%s%s)…",
-        ability_score_type, SAMPLE_PER_EVENT, ROLE_SAMPLE, COMBO_SAMPLE,
+        "Loading synergy pairs (ability_score_type=%s, per_event=%d, combo=%d%s%s)…",
+        ability_score_type, SAMPLE_PER_EVENT, COMBO_SAMPLE,
         f", cv={CV_SAMPLE}" if include_commander_value else "",
         f", ep={EFFECT_PEER_SAMPLE}" if include_effect_peer else "",
     )
@@ -272,22 +271,6 @@ def _load_synergy_pairs(
             total_ability = len(positives) - ability_start
             log.info("  %d ability_trigger pairs across %d events",
                      total_ability, len(rows_by_event))
-
-            # role_demand (stored score as soft label)
-            if ROLE_SAMPLE > 0:
-                cur.execute("""
-                    SELECT card_a::text, card_b::text, score
-                    FROM synergy_edges
-                    WHERE score_type = 'role_demand'
-                    LIMIT %s
-                """, (ROLE_SAMPLE,))
-                role_pairs = [
-                    (id_to_idx[r[0]], id_to_idx[r[1]], float(r[2]))
-                    for r in cur.fetchall()
-                    if r[0] in id_to_idx and r[1] in id_to_idx
-                ]
-                positives += role_pairs
-                log.info("  + %d role_demand pairs", len(role_pairs))
 
             # combo_package pairs — all cards sharing a package are strong positives
             if COMBO_SAMPLE > 0:

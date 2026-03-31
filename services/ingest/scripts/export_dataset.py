@@ -11,7 +11,7 @@ Artifact contents
   card_ids                – list[str], N card UUIDs in index order
   embeddings              – Tensor(N, D) float32
   functional_pairs        – dict with a_idx / b_idx int32 tensors (Phase 1)
-  synergy                 – a_idx / b_idx / labels (Phase 2; xmage_ability_trigger + role_demand + combo + negatives)
+  synergy                 – a_idx / b_idx / labels (Phase 2; xmage_ability_trigger + combo + negatives)
   effect_peer             – a_idx / b_idx int32 tensors (Phase 2; direct peer pairs by trigger_event/effect_class)
   card_meta               – {card_id: {name, mana_cost, type_line, cmc, color_identity}} for offline eval
 
@@ -41,7 +41,6 @@ Environment variables
                          Actual pairs per class = min(cap, n*log2(n)) where n
                          is the number of class members.
   DATASET_SAMPLE         Max ability_trigger positives     (default 500 000)
-  DATASET_ROLE_SAMPLE    Max role_demand positives         (default 100 000)
   DATASET_COMBO_SAMPLE   Max combo pair positives          (default 200 000)
   DATASET_NEG_RATIO      Negatives per positive            (default 3)
   DATASET_HARD_NEG_FRAC  Fraction of negs that are hard   (default 0.5)
@@ -336,7 +335,7 @@ def main() -> None:
     #     Lower weight than oracle-identity pairs; used to bootstrap role geometry.
     sp_a, sp_b, sp_w = _build_staple_pairs(card_ids, id_to_idx, card_meta)
 
-    # 3. Synergy pairs (Phase 2) — XMage class-name edges + role_demand + combo.
+    # 3. Synergy pairs (Phase 2) — XMage class-name edges + combo.
     #    effect_peer is stored separately (see step 3b) so the trainer can use
     #    those pairs directly rather than routing them through producer-grouping.
     #    commander_value edges are excluded here; they belong in the commanders

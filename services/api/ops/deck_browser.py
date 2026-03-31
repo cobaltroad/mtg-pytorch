@@ -3,8 +3,7 @@ Decklist browser operations.
 
 Exposes human-imported decks for browsing and drives the role-annotation
 feedback loop: fetching a deck triggers role-tagging of its cards (writing
-to card_abilities) and writes role_demand synergy edges from the commander
-to role-matching cards.
+to card_abilities).
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from collections import Counter
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ops.card_roles import tag_card_roles, get_card_roles, write_role_demand_edges, tag_commander_archetypes
+from ops.card_roles import tag_card_roles, get_card_roles, tag_commander_archetypes
 from ops.import_utils import detect_archetype
 
 log = logging.getLogger(__name__)
@@ -91,11 +90,10 @@ async def list_decks(db: AsyncSession) -> list[dict]:
 
 
 async def get_deck_with_roles(db: AsyncSession, deck_id: str) -> dict | None:
-    """Fetch a single deck, annotate each card with role tags, and write feedback edges.
+    """Fetch a single deck and annotate each card with role tags.
 
     Side effects on first call (idempotent thereafter):
     1. Writes role tags to card_abilities for any untagged card.
-    2. Writes role_demand synergy_edges from the commander to role cards.
     """
     deck_row = (await db.execute(text(_DECK_BY_ID_SQL), {"deck_id": deck_id})).fetchone()
     if deck_row is None:
@@ -172,19 +170,6 @@ async def get_deck_with_roles(db: AsyncSession, deck_id: str) -> dict | None:
     # user votes stored in metadata['archetype_overrides'].
     arch_meta = detect_archetype(card_details_for_archetype)
 
-    # ── Write role_demand edges (feedback loop) ───────────────────────────────
-    if role_counts:
-        try:
-            await write_role_demand_edges(
-                db,
-                commander_id=deck_row.commander_id,
-                role_counts=dict(role_counts),
-                total_deck_cards=len(card_ids),
-                archetypes=archetypes,
-            )
-        except Exception as exc:
-            log.warning("role_demand edge write failed for deck %s: %s", deck_id, exc)
-
     # ── Update deck metadata with role counts + archetypes ────────────────────
     try:
         m = dict(deck_row.metadata or {})
@@ -248,10 +233,10 @@ async def apply_votes(db: AsyncSession, deck_id: str, votes: list) -> dict:
 
 
 async def amend_with_votes(db: AsyncSession, deck_id: str) -> dict | None:
-    """Re-run analysis and adjust role_demand edges using stored votes.
+    """Re-run analysis and apply stored votes to card_abilities and archetypes.
 
-    Promoted roles  (+1) → multiply edge score by _VOTE_PROMOTE
-    Dissuaded roles (-1) → delete the edge (score → 0)
+    Promoted roles  (+1) → confirm role tag in card_abilities
+    Dissuaded roles (-1) → remove role tag from card_abilities
     Promoted archetypes  → add archetype to commander's archetype tags
     Dissuaded archetypes → remove archetype from commander's archetype tags
 
@@ -269,23 +254,12 @@ async def amend_with_votes(db: AsyncSession, deck_id: str) -> dict | None:
     commander_id = row[1]
     vote_store: dict[str, int] = m.get("votes", {})
 
-    # Apply card-role votes to synergy_edges
+    # Apply card-role votes to card_abilities
     for key, vote_val in vote_store.items():
         if key.startswith("card_role:"):
             _, card_id, role = key.split(":", 2)
             if vote_val > 0:
-                # Promote: boost any existing edge between this commander and card
-                await db.execute(text("""
-                    UPDATE synergy_edges
-                    SET score = LEAST(score * :mult, 1.0)
-                    WHERE card_a = CAST(:commander_id AS uuid)
-                      AND card_b = CAST(:card_id AS uuid)
-                      AND score_type = 'role_demand'
-                """), {"mult": _VOTE_PROMOTE, "commander_id": commander_id, "card_id": card_id})
-                # Also ensure the role tag is confirmed in card_abilities
-                from ops.card_roles import tag_card_roles, get_card_roles
-                if not await get_card_roles(db, card_id):
-                    pass  # role was user-asserted; insert manually
+                # Promote: confirm the role tag in card_abilities
                 await db.execute(text("""
                     INSERT INTO card_abilities
                         (card_id, ability_type, ability_name, trigger_event, effect_class, raw_text)
@@ -294,13 +268,7 @@ async def amend_with_votes(db: AsyncSession, deck_id: str) -> dict | None:
                     ON CONFLICT (card_id, ability_type, ability_name, effect_class) DO NOTHING
                 """), {"card_id": card_id, "role": role})
             else:
-                # Dissuade: remove the role tag and the edge
-                await db.execute(text("""
-                    DELETE FROM synergy_edges
-                    WHERE card_a = CAST(:commander_id AS uuid)
-                      AND card_b = CAST(:card_id AS uuid)
-                      AND score_type = 'role_demand'
-                """), {"commander_id": commander_id, "card_id": card_id})
+                # Dissuade: remove the role tag
                 await db.execute(text("""
                     DELETE FROM card_abilities
                     WHERE card_id = CAST(:card_id AS uuid)

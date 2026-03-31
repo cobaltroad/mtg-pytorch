@@ -423,7 +423,6 @@ class TrainRequest(BaseModel):
     temp_start: float = 0.5
     temp_end: float = 0.05
     sample: int = 500_000
-    role_demand_sample: int = 100_000
 
 
 @app.post("/train/start")
@@ -442,7 +441,6 @@ async def start_training(req: TrainRequest):
             temp_start=req.temp_start,
             temp_end=req.temp_end,
             sample=req.sample,
-            role_demand_sample=req.role_demand_sample,
         ),
     )
     if "error" in result:
