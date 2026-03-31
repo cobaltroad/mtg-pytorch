@@ -336,14 +336,18 @@ def main() -> None:
     #     Lower weight than oracle-identity pairs; used to bootstrap role geometry.
     sp_a, sp_b, sp_w = _build_staple_pairs(card_ids, id_to_idx, card_meta)
 
-    # 3. Synergy pairs (Phase 2) — XMage class-name edges + combo.
+    # 3. Synergy pairs (Phase 2) — combo_package only.
+    #    ability_trigger / xmage_ability_trigger edges are excluded: their broad
+    #    producer SQL creates ~89M edges where nearly every card pair matches some
+    #    trigger, causing NT-Xent encoder collapse (mean pairwise sim > 0.70).
     #    effect_peer is stored separately (see step 3b) so the trainer can use
     #    those pairs directly rather than routing them through producer-grouping.
     #    commander_value edges are excluded here; they belong in the commanders
     #    artifact produced by export_dataset_commanders.py.
     a_idx, b_idx, labels = _load_synergy_pairs(
         id_to_idx, normed,
-        ability_score_type="xmage_ability_trigger",
+        ability_score_type="xmage_ability_trigger",   # no-op when include_ability_trigger=False
+        include_ability_trigger=False,
         include_effect_peer=False,
     )
 

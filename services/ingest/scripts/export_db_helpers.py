@@ -202,17 +202,23 @@ def _load_synergy_pairs(
     ability_score_type: str = "ability_trigger",
     include_commander_value: bool = False,
     include_effect_peer: bool = False,
+    include_ability_trigger: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (a_idx, b_idx, labels) int32/float32 arrays.
 
-    Covers ability edges (score_type controlled by *ability_score_type*),
-    combo, and optionally commander_value or effect_peer, plus pre-mined
-    hard negatives and random negatives.
+    Covers combo pairs and optionally ability edges, commander_value, or
+    effect_peer, plus pre-mined hard negatives and random negatives.
 
     Args:
         ability_score_type: ``'ability_trigger'`` for the co-occurrence path
             (oracle-text pattern edges); ``'xmage_ability_trigger'`` for the
             compositional path (raw XMage class-name edges, no translation).
+            Ignored when ``include_ability_trigger=False``.
+        include_ability_trigger: Whether to load ability_trigger / xmage_ability_trigger
+            edges.  Defaults to ``True`` for backward compatibility.  Set to
+            ``False`` for the compositional artifact — these 89M broad-producer
+            edges cause Phase 2 NT-Xent encoder collapse.  Combo + effect_peer
+            alone are sufficient and higher precision.
         include_commander_value: Whether to include ``commander_value`` synergy
             edges.  Defaults to ``False`` — those edges are covered by
             ``export_dataset_commanders.py``.  Pass ``True`` for the
@@ -223,8 +229,9 @@ def _load_synergy_pairs(
             to separate Beast Whisperer from Impact Tremors in Phase 2.
     """
     log.info(
-        "Loading synergy pairs (ability_score_type=%s, per_event=%d, combo=%d%s%s)…",
-        ability_score_type, SAMPLE_PER_EVENT, COMBO_SAMPLE,
+        "Loading synergy pairs (ability_trigger=%s, combo=%d%s%s)…",
+        ability_score_type if include_ability_trigger else "disabled",
+        COMBO_SAMPLE,
         f", cv={CV_SAMPLE}" if include_commander_value else "",
         f", ep={EFFECT_PEER_SAMPLE}" if include_effect_peer else "",
     )
@@ -232,45 +239,46 @@ def _load_synergy_pairs(
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # ability_trigger — stratified per trigger_event.
-            #
-            # A flat TABLESAMPLE SYSTEM(10) LIMIT N starves rare events (e.g.
-            # adapt_evolve, sac_outlet) when high-volume events like creature_etb
-            # dominate the table.  Instead we:
-            #   1. Fetch a 10 % random sample of all ability_trigger rows once.
-            #   2. Group by trigger_event in Python, shuffle each group, cap at
-            #      SAMPLE_PER_EVENT.
-            # This gives every event proportional representation without N
-            # round-trips to the database.
-            event_key_expr = (
-                "COALESCE(metadata->>'ability_class', 'unknown')"
-                if ability_score_type == "xmage_ability_trigger"
-                else "COALESCE(metadata->>'trigger_event', 'unknown')"
-            )
-            log.info("  Fetching ~10%% sample of %s edges…", ability_score_type)
-            cur.execute(f"""
-                SELECT card_a::text, card_b::text,
-                       {event_key_expr} AS te
-                FROM synergy_edges TABLESAMPLE SYSTEM(10)
-                WHERE score_type = %s
-            """, (ability_score_type,))
-            rows_by_event: dict[str, list[tuple[str, str]]] = defaultdict(list)
-            for card_a, card_b, te in cur.fetchall():
-                rows_by_event[te].append((card_a, card_b))
+            if include_ability_trigger:
+                # ability_trigger — stratified per trigger_event.
+                #
+                # A flat TABLESAMPLE SYSTEM(10) LIMIT N starves rare events (e.g.
+                # adapt_evolve, sac_outlet) when high-volume events like creature_etb
+                # dominate the table.  Instead we:
+                #   1. Fetch a 10 % random sample of all ability_trigger rows once.
+                #   2. Group by trigger_event in Python, shuffle each group, cap at
+                #      SAMPLE_PER_EVENT.
+                # This gives every event proportional representation without N
+                # round-trips to the database.
+                event_key_expr = (
+                    "COALESCE(metadata->>'ability_class', 'unknown')"
+                    if ability_score_type == "xmage_ability_trigger"
+                    else "COALESCE(metadata->>'trigger_event', 'unknown')"
+                )
+                log.info("  Fetching ~10%% sample of %s edges…", ability_score_type)
+                cur.execute(f"""
+                    SELECT card_a::text, card_b::text,
+                           {event_key_expr} AS te
+                    FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                    WHERE score_type = %s
+                """, (ability_score_type,))
+                rows_by_event: dict[str, list[tuple[str, str]]] = defaultdict(list)
+                for card_a, card_b, te in cur.fetchall():
+                    rows_by_event[te].append((card_a, card_b))
 
-            ability_start = len(positives)
-            for te, event_rows in sorted(rows_by_event.items()):
-                random.shuffle(event_rows)
-                n_added = 0
-                for card_a, card_b in event_rows[:SAMPLE_PER_EVENT]:
-                    if card_a in id_to_idx and card_b in id_to_idx:
-                        positives.append((id_to_idx[card_a], id_to_idx[card_b], 1.0))
-                        n_added += 1
-                log.info("    %-45s  %6d pairs  (pool %d)", te, n_added, len(event_rows))
+                ability_start = len(positives)
+                for te, event_rows in sorted(rows_by_event.items()):
+                    random.shuffle(event_rows)
+                    n_added = 0
+                    for card_a, card_b in event_rows[:SAMPLE_PER_EVENT]:
+                        if card_a in id_to_idx and card_b in id_to_idx:
+                            positives.append((id_to_idx[card_a], id_to_idx[card_b], 1.0))
+                            n_added += 1
+                    log.info("    %-45s  %6d pairs  (pool %d)", te, n_added, len(event_rows))
 
-            total_ability = len(positives) - ability_start
-            log.info("  %d ability_trigger pairs across %d events",
-                     total_ability, len(rows_by_event))
+                total_ability = len(positives) - ability_start
+                log.info("  %d ability_trigger pairs across %d events",
+                         total_ability, len(rows_by_event))
 
             # combo_package pairs — all cards sharing a package are strong positives
             if COMBO_SAMPLE > 0:
