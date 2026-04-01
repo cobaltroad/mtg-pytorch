@@ -24,7 +24,7 @@ param(
     [string]$FreezeEncoder = 'true',
     [double]$EncoderLrScale = 0.01,
     # Phase 2: scale factor applied to lr for all encoder parameters.
-    # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.
+    # Default 0.1 protects Phase 1 geometry - encoder drifts 10x slower.
     [double]$Phase2EncoderLrScale = 0.1,
     # Phase 1: weight applied to the staple role-pair NT-Xent loss term.
     # 0 disables staple pairs; default 0.5 = half weight of noise-aug term.
@@ -37,7 +37,7 @@ param(
     [double]$TempStart = 0.1,
     [double]$TempEnd = 0.05,
     # Phase 4: use artifact deck positions (default $false).
-    # Set -SynergyOnly $true to load 630k synergy positions from DB instead —
+    # Set -SynergyOnly $true to load 630k synergy positions from DB instead -
     # this causes encoder collapse even at low lr_scale; avoid unless testing.
     [bool]$SynergyOnly = $false,
     [int]$SynBatchSize = 256,
@@ -135,11 +135,11 @@ function Show-PostTrainingGuidance {
 
     $dsArg   = if ($Dataset) { ' -Dataset "' + $Dataset + '"' } else { '' }
     $ckpt    = $CheckpointsDir
-    $sep     = '─────────────────────────────────────────────────────────────'
+    $sep     = '-------------------------------------------------------------'
 
     Write-Host ''
     Write-Host $sep -ForegroundColor DarkGray
-    Write-Host (' Phase ' + $Phase + ' complete — evaluation guidance') -ForegroundColor Cyan
+    Write-Host (' Phase ' + $Phase + ' complete - evaluation guidance') -ForegroundColor Cyan
     Write-Host $sep -ForegroundColor DarkGray
 
     switch ($Phase) {
@@ -156,7 +156,7 @@ function Show-PostTrainingGuidance {
             Write-Host ' Regression check: if mana-dork neighbors diverge after staple-pair'
             Write-Host ' training, reduce -StaplePairWeight (default 0.5) and re-run Phase 1.'
             Write-Host ''
-            Write-Host ' Next step — train Phase 2:'
+            Write-Host ' Next step -train Phase 2:'
             Write-Host ('   .\scripts\run.ps1 -Train 2' + $dsArg)
             Write-Host ''
             Write-Host ' Phase 2 NT-Xent loss benchmarks (batch_size=512, ceiling=6.93):'
@@ -175,7 +175,7 @@ function Show-PostTrainingGuidance {
             Write-Host ''
             Write-Host ' Most learning happens in the second half of training as temperature'
             Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
-            Write-Host ' epoch 30 in the 5.5-6.2 range is normal — evaluate geometry,'
+            Write-Host ' epoch 30 in the 5.5-6.2 range is normal - evaluate geometry,'
             Write-Host ' not just loss:'
             Write-Host ''
             Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
@@ -186,7 +186,7 @@ function Show-PostTrainingGuidance {
             Write-Host ''
             Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
             Write-Host ''
-            Write-Host ' Next step — download commanders artifact then train Phase 3:'
+            Write-Host ' Next step -download commanders artifact then train Phase 3:'
             Write-Host '   .\scripts\download_commanders.ps1'
             Write-Host '   .\scripts\run.ps1 -Train 3'
         }
@@ -205,7 +205,7 @@ function Show-PostTrainingGuidance {
             Write-Host ' toward 1.0, the encoder over-updated.  Re-run with -FreezeEncoder'
             Write-Host ' true, or lower -Phase2EncoderLrScale.'
             Write-Host ''
-            Write-Host ' Next step — train Phase 4:'
+            Write-Host ' Next step -train Phase 4:'
             Write-Host '   .\scripts\run.ps1 -Train 4'
         }
         4 {
@@ -408,7 +408,7 @@ if ($Mode -eq 'train') {
 
     # Phase 3: protect Phase 2 geometry.
     # --freeze-encoder skips BPR training entirely and copies Phase 2 weights
-    # forward as phase3_best — use this when the encoder must be preserved
+    # forward as phase3_best - use this when the encoder must be preserved
     # verbatim.  Otherwise encoder_lr_scale throttles the update rate; the
     # commanders artifact generates far more gradient updates per epoch than
     # human decklists, so even 0.1× can cause collapse over 50 epochs.
