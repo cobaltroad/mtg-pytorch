@@ -1665,15 +1665,12 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
 def load_artifact(path: str) -> dict:
     """Load the training artifact produced by export_dataset*.py."""
     log.info("Loading training artifact: %s", path)
-    file_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     data = torch.load(path, map_location="cpu", weights_only=False)
     meta = data.get("meta", {})
-    stored_sha = meta.get("sha256", "(none)")
-    if stored_sha != "(none)" and stored_sha != file_sha:
-        log.warning(
-            "SHA256 MISMATCH — stored=%s  file=%s  (artifact may be corrupted)",
-            stored_sha, file_sha,
-        )
+    # SHA256 is stored in the sidecar .json (written after torch.save, so it
+    # cannot be embedded in the .pt itself).  Integrity is verified by run.ps1
+    # pre-flight before the trainer starts.  Compute the hash here for logging only.
+    file_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     log.info(
         "Artifact: %d cards, %d functional pairs, %d synergy pairs, "
         "%d decks, %d positions (created %s)  sha256=%s",
