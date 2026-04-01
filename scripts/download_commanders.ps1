@@ -67,11 +67,13 @@ if (-not $DatasetUrl) {
     $DatasetUrl = "https://$apiHost/dataset/commanders/download"
 }
 
-$OutputPath = Join-Path $OutputDir 'mtg_commanders.pt'
+$OutputPath  = Join-Path $OutputDir 'mtg_commanders.pt'
+$SidecarPath = Join-Path $OutputDir 'mtg_commanders.json'
 
 # -- Fetch metadata -----------------------------------------------------------
 
 $infoUrl = $DatasetUrl -replace '/download$', '/info'
+$expectedSha = $null
 try {
     Write-Host "Checking artifact metadata at $infoUrl..."
     $info = Invoke-RestMethod -Uri $infoUrl -TimeoutSec 10
@@ -84,7 +86,14 @@ try {
     Write-Host "  Model:              $($info.model)" -ForegroundColor Cyan
     Write-Host "  Size:               $sizeMb MB" -ForegroundColor Cyan
     Write-Host "  Created:            $created UTC" -ForegroundColor Cyan
+    if ($info.sha256) {
+        Write-Host "  SHA256:             $($info.sha256)" -ForegroundColor Cyan
+        $expectedSha = $info.sha256
+    }
     Write-Host ""
+    # Save sidecar JSON
+    $info | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 $SidecarPath
+    Write-Host "Sidecar saved → $SidecarPath" -ForegroundColor DarkGray
 } catch {
     Write-Warning "Could not fetch metadata ($infoUrl): $_"
     Write-Host "Proceeding with download anyway..."
@@ -110,6 +119,26 @@ try {
     $sw.Stop()
     Write-Error "Download failed: $_"
     exit 1
+}
+
+# -- SHA256 verification ------------------------------------------------------
+
+if ($expectedSha) {
+    Write-Host "Verifying SHA256..." -NoNewline
+    $sha = (Get-FileHash -Algorithm SHA256 -Path $OutputPath).Hash.ToLower()
+    if ($sha -eq $expectedSha) {
+        Write-Host " OK" -ForegroundColor Green
+    } else {
+        Write-Host " MISMATCH" -ForegroundColor Red
+        Write-Host "  Expected : $expectedSha" -ForegroundColor Red
+        Write-Host "  Got      : $sha" -ForegroundColor Red
+        Write-Error "SHA256 mismatch - artifact may be corrupted. Re-download and try again."
+        exit 1
+    }
+    Write-Host ""
+} else {
+    Write-Warning "No SHA256 in metadata - skipping integrity check (re-export artifact to include it)"
+    Write-Host ""
 }
 
 # -- Usage hint ---------------------------------------------------------------
