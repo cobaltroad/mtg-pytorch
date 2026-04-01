@@ -110,6 +110,21 @@ OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.p
 MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
 MAX_POSITIVES = int(os.environ.get("COMMANDERS_MAX_POS", "300"))
 
+try:
+    GIT_COMMIT = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    log.info("git_commit: %s", GIT_COMMIT)
+except (FileNotFoundError, subprocess.CalledProcessError):
+    GIT_COMMIT = os.environ.get("GIT_COMMIT", "")
+    if not GIT_COMMIT:
+        log.error(
+            "git not available in container and GIT_COMMIT env var is not set. "
+            "Re-run with: docker compose run -e GIT_COMMIT=$(git rev-parse HEAD) ..."
+        )
+        raise SystemExit(1)
+    log.info("git_commit (from env): %s", GIT_COMMIT)
+
 
 # ── Step 4: Legal commanders ──────────────────────────────────────────────────
 
@@ -373,10 +388,6 @@ def main() -> None:
     # 7. Assemble and save
     commander_count = len(decks)
     avg_pos = sum(len(d["card_idxs"]) for d in decks) / max(commander_count, 1)
-    _git_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True
-    ).stdout.strip() or "unknown"
-
     meta = {
         "model":          EMBEDDING_MODEL,
         "dim":            int(emb_matrix.shape[1]),
@@ -387,7 +398,7 @@ def main() -> None:
         "max_positives":  MAX_POSITIVES,
         "source":             "decompose+staples",
         "synergy_pos_count":  len(synergy_positions),
-        "git_commit":         _git_commit,
+        "git_commit":         GIT_COMMIT,
         "created_at":         datetime.now(timezone.utc).isoformat(),
     }
 

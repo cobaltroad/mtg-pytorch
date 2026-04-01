@@ -84,6 +84,21 @@ MAX_PER_CLASS            = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
 STAPLE_MAX_PER_CATEGORY  = int(os.environ.get("STAPLE_MAX_PER_CATEGORY", "2000"))
 _MANA_ARTIFACTS_CSV      = Path(os.environ.get("MANA_ARTIFACTS_CSV", "/app/edhrec/mana-artifacts.csv"))
 
+try:
+    GIT_COMMIT = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    log.info("git_commit: %s", GIT_COMMIT)
+except (FileNotFoundError, subprocess.CalledProcessError):
+    GIT_COMMIT = os.environ.get("GIT_COMMIT", "")
+    if not GIT_COMMIT:
+        log.error(
+            "git not available in container and GIT_COMMIT env var is not set. "
+            "Re-run with: docker compose run -e GIT_COMMIT=$(git rev-parse HEAD) ..."
+        )
+        raise SystemExit(1)
+    log.info("git_commit (from env): %s", GIT_COMMIT)
+
 
 def _type_bucket(type_line: str) -> str:
     """Map a card's type_line to a coarse super-type bucket.
@@ -390,10 +405,6 @@ def main() -> None:
 
     # 4. Assemble and save
     #    Phases 3/4 are handled by the commanders artifact (mtg_commanders.pt).
-    _git_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True
-    ).stdout.strip() or "unknown"
-
     meta = {
         "model":                  os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"),
         "dim":                    int(emb_matrix.shape[1]),
@@ -409,7 +420,7 @@ def main() -> None:
             "include_commander_value": False,
             "phase2_signal":           "combo+effect_peer",
         },
-        "git_commit":             _git_commit,
+        "git_commit":             GIT_COMMIT,
         "created_at":             datetime.now(timezone.utc).isoformat(),
     }
 
