@@ -57,6 +57,7 @@ import logging
 import math
 import os
 import random
+import subprocess
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -389,6 +390,10 @@ def main() -> None:
 
     # 4. Assemble and save
     #    Phases 3/4 are handled by the commanders artifact (mtg_commanders.pt).
+    _git_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip() or "unknown"
+
     meta = {
         "model":                  os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"),
         "dim":                    int(emb_matrix.shape[1]),
@@ -398,6 +403,13 @@ def main() -> None:
         "synergy_count":          int(len(a_idx)),
         "effect_peer_count":      int(len(ep_a)),
         "training_path":          "compositional",
+        "signal_config": {
+            "include_ability_trigger": False,
+            "include_effect_peer":     True,
+            "include_commander_value": False,
+            "phase2_signal":           "combo+effect_peer",
+        },
+        "git_commit":             _git_commit,
         "created_at":             datetime.now(timezone.utc).isoformat(),
     }
 

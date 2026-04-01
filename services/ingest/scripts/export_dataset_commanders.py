@@ -78,6 +78,7 @@ import json
 import logging
 import os
 import random
+import subprocess
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -372,6 +373,10 @@ def main() -> None:
     # 7. Assemble and save
     commander_count = len(decks)
     avg_pos = sum(len(d["card_idxs"]) for d in decks) / max(commander_count, 1)
+    _git_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip() or "unknown"
+
     meta = {
         "model":          EMBEDDING_MODEL,
         "dim":            int(emb_matrix.shape[1]),
@@ -382,6 +387,7 @@ def main() -> None:
         "max_positives":  MAX_POSITIVES,
         "source":             "decompose+staples",
         "synergy_pos_count":  len(synergy_positions),
+        "git_commit":         _git_commit,
         "created_at":         datetime.now(timezone.utc).isoformat(),
     }
 

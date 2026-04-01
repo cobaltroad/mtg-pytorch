@@ -1672,13 +1672,28 @@ def load_artifact(path: str) -> dict:
     # pre-flight before the trainer starts.  Compute the hash here for logging only.
     file_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     log.info(
-        "Artifact: %d cards, %d functional pairs, %d synergy pairs (created %s)  sha256=%s",
+        "Artifact: %d cards, %d functional pairs, %d synergy pairs, "
+        "%d decks, %d positions (created %s)",
         meta.get("card_count", 0),
         meta.get("functional_pair_count", 0),
         meta.get("synergy_count", 0),
+        meta.get("deck_count", 0),
+        meta.get("synergy_pos_count", 0),
         meta.get("created_at", "?")[:19],
+    )
+    log.info(
+        "Artifact provenance: git=%s  sha256=%s",
+        meta.get("git_commit", "unknown")[:12],
         file_sha[:16],
     )
+    sig = meta.get("signal_config")
+    if sig:
+        log.info("Phase 2 signal config: %s", sig)
+    else:
+        log.warning(
+            "No signal_config in artifact — cannot verify Phase 2 signal composition "
+            "(re-export to embed provenance)."
+        )
     return data
 
 
