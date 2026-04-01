@@ -102,6 +102,7 @@ services:
       BATCH_SIZE: ${INGEST_BATCH_SIZE:-256}
       HF_HOME: /data/hf_cache
       PYTHONPATH: /shared
+      GIT_COMMIT: ${GIT_COMMIT:-}
     volumes:
       - ./services/ingest:/app:cached
       - ./shared:/shared:ro
