@@ -1661,19 +1661,6 @@ def load_artifact(path: str) -> dict:
         meta.get("created_at", "?")[:19],
         file_sha[:16],
     )
-    git_commit = meta.get("git_commit", None)
-    if git_commit:
-        log.info("Artifact git_commit: %s", git_commit[:12])
-    else:
-        log.warning("No git_commit in artifact — cannot verify which code version produced it.")
-    sig = meta.get("signal_config")
-    if sig:
-        log.info("Phase 2 signal_config: %s", sig)
-    else:
-        log.warning(
-            "No signal_config in artifact — cannot verify Phase 2 signal composition "
-            "(re-export to embed provenance)."
-        )
     return data
 
 
