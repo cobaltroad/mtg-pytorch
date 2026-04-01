@@ -1672,13 +1672,10 @@ def load_artifact(path: str) -> dict:
     # pre-flight before the trainer starts.  Compute the hash here for logging only.
     file_sha = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     log.info(
-        "Artifact: %d cards, %d functional pairs, %d synergy pairs, "
-        "%d decks, %d positions (created %s)  sha256=%s",
+        "Artifact: %d cards, %d functional pairs, %d synergy pairs (created %s)  sha256=%s",
         meta.get("card_count", 0),
         meta.get("functional_pair_count", 0),
         meta.get("synergy_count", 0),
-        meta.get("deck_count", 0),
-        meta.get("position_count", 0),
         meta.get("created_at", "?")[:19],
         file_sha[:16],
     )

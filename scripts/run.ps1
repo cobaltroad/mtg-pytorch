@@ -62,8 +62,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
-#   Phase 1-2 → mtg_dataset.pt       (text equivalence + ability-trigger synergy)
-#   Phase 3-4 → mtg_commanders.pt    (commander BPR from synergy_edges)
+#   Phase 1-2 -> mtg_dataset.pt       (text equivalence + ability-trigger synergy)
+#   Phase 3-4 -> mtg_commanders.pt    (commander BPR from synergy_edges)
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
@@ -168,10 +168,10 @@ function Show-PostTrainingGuidance {
         2 {
             Write-Host ''
             Write-Host ' NT-Xent loss scale  (batch_size=512, random ceiling = ln(1024) = 6.93):' -ForegroundColor White
-            Write-Host '   > 6.5       barely learning — check synergy_edges row count'
+            Write-Host '   > 6.5       barely learning - check synergy_edges row count'
             Write-Host '   5.0-6.2     good'
             Write-Host '   3.5-5.0     excellent'
-            Write-Host '   < 3.5       overfit risk — shorten training'
+            Write-Host '   < 3.5       overfit risk - shorten training'
             Write-Host ''
             Write-Host ' Most learning happens in the second half of training as temperature'
             Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
@@ -411,7 +411,7 @@ if ($Mode -eq 'train') {
     # forward as phase3_best - use this when the encoder must be preserved
     # verbatim.  Otherwise encoder_lr_scale throttles the update rate; the
     # commanders artifact generates far more gradient updates per epoch than
-    # human decklists, so even 0.1× can cause collapse over 50 epochs.
+    # human decklists, so even 0.1x can cause collapse over 50 epochs.
     if ($Phase -eq 3) {
         $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
         if ($resolvedFreezeEncoder) {
