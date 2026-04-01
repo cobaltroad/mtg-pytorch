@@ -847,6 +847,7 @@ def train_synergy_phase(
     checkpoint_prefix: str = "phase",
     staple_pairs: list[tuple[int, int, float]] | None = None,
     staple_pair_weight: float = 0.5,
+    staple_embs: np.ndarray | None = None,
 ):
     """Phase 2: NT-Xent (InfoNCE) on positive ability-trigger synergy pairs.
 
@@ -927,11 +928,11 @@ def train_synergy_phase(
             z_b = model(emb_b)
             loss = nt_xent_loss(z_a, z_b, temperature)
 
-            if staple_arr is not None:
+            if staple_arr is not None and staple_embs is not None:
                 batch_n = emb_a.size(0)
                 chosen = np.random.choice(len(staple_pairs), size=batch_n, replace=True)
-                ea = torch.from_numpy(pos_dataset.embs[staple_arr[chosen, 0]]).to(device)
-                eb = torch.from_numpy(pos_dataset.embs[staple_arr[chosen, 1]]).to(device)
+                ea = torch.from_numpy(staple_embs[staple_arr[chosen, 0]]).to(device)
+                eb = torch.from_numpy(staple_embs[staple_arr[chosen, 1]]).to(device)
                 za = model(ea)
                 zb = model(eb)
                 mean_cmc_w = float(staple_weights_arr[chosen].mean())
@@ -2147,6 +2148,16 @@ def main():
 
         staple_pairs_p2 = load_staple_pairs_from_artifact(_artifact) if _artifact else []
 
+        # Build index-addressable embedding array for staple pair lookups.
+        # Staple indices are offsets into artifact card_ids; SynergyDataset
+        # uses a card_id dict so we need a parallel numpy array.
+        staple_embs_p2: np.ndarray | None = None
+        if staple_pairs_p2 and _artifact:
+            card_ids_list = _artifact["card_ids"]
+            staple_embs_p2 = np.stack(
+                [embeddings[cid] for cid in card_ids_list]
+            ).astype(np.float32)
+
         summary = train_synergy_phase(
             model,
             dataset,
@@ -2159,6 +2170,7 @@ def main():
             checkpoint_prefix=pfx,
             staple_pairs=staple_pairs_p2 or None,
             staple_pair_weight=args.staple_pair_weight,
+            staple_embs=staple_embs_p2,
         )
         _wandb_summary(summary)
 
