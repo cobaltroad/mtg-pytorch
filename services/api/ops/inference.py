@@ -60,6 +60,7 @@ _ramp_cache: dict[str, tuple[frozenset, dict]] = {}         # keyed by db_url
 _land_staple_cache: dict[str, dict[str, str]] = {}          # keyed by db_url
 _legal_ids_cache: dict[str, frozenset[str]] = {}            # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
+_card_metadata_cache: dict[str, dict[str, dict]] = {}       # keyed by db_url
 # Sparse adjacency dict: {card_id: {neighbour_id: weight}}.
 # At ~100k edges × 8 bytes ≈ 800 KB — safe to keep in memory.
 _synergy_adj_cache: dict[str, dict[str, dict[str, float]]] = {}  # keyed by db_url
@@ -241,6 +242,34 @@ def get_cmc_map(db_url: str) -> dict[str, float]:
     result: dict[str, float] = {card_id: float(cmc or 0) for card_id, cmc in rows}
     log.info("Loaded CMC for %d cards", len(result))
     _cmc_cache[db_url] = result
+    return result
+
+
+def get_card_metadata(db_url: str) -> dict[str, dict]:
+    """Return {card_id: {oracle_id, name, type_line, mana_cost, cmc}} for all cards. Cached."""
+    if db_url in _card_metadata_cache:
+        return _card_metadata_cache[db_url]
+
+    log.info("Loading card metadata from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id::text, oracle_id::text, name, type_line, mana_cost, cmc FROM cards"
+            )
+            rows = cur.fetchall()
+
+    result: dict[str, dict] = {
+        card_id: {
+            "oracle_id": oracle_id,
+            "name": name,
+            "type_line": type_line,
+            "mana_cost": mana_cost,
+            "cmc": float(cmc) if cmc is not None else None,
+        }
+        for card_id, oracle_id, name, type_line, mana_cost, cmc in rows
+    }
+    log.info("Loaded metadata for %d cards", len(result))
+    _card_metadata_cache[db_url] = result
     return result
 
 

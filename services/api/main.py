@@ -6,10 +6,9 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
-from uuid import UUID, uuid4
+from typing import Annotated
+from uuid import UUID
 
 from fastapi import FastAPI, Query, HTTPException, Depends, UploadFile, File, Header
 from fastapi.responses import FileResponse
@@ -17,8 +16,8 @@ from pydantic import BaseModel
 
 from sqlalchemy import text
 
-from db import get_db, SessionLocal, AsyncSession
-from ops import cards as card_ops, decks as deck_ops, synergy as synergy_ops, training as training_ops
+from db import get_db, AsyncSession
+from ops import cards as card_ops, synergy as synergy_ops, training as training_ops
 from ops.commander_analysis import (
     analyze_commander_oracle_text,
     combine_partner_analyses,
@@ -39,13 +38,8 @@ DECK_SAVE_DIR     = Path(os.environ.get("DECK_SAVE_DIR",     "/app/generated_dec
 app = FastAPI(
     title="MTG Commander AI",
     version="0.1.0",
-    description="Card similarity search, synergy queries, and commander deck generation.",
+    description="Card similarity search, synergy queries, and commander deck scoring.",
 )
-
-# ── In-memory job store ───────────────────────────────────────────────────────
-# { job_id: {"status": str, "progress": float, "message": str,
-#            "result": dict|None, "error": str|None, "created_at": datetime} }
-_jobs: dict[str, dict[str, Any]] = {}
 
 
 # ── Startup: pre-load embeddings in background ────────────────────────────────
@@ -207,152 +201,72 @@ async def get_synergies(
     return await synergy_ops.top_partners(db, oracle_id, score_type, limit)
 
 
-# ── Deck generation ──────────────────────────────────────────────────────────
+# ── Commander candidate scoring ───────────────────────────────────────────────
 
-class DeckRequest(BaseModel):
-    commander_oracle_id: UUID
-    partner_oracle_id: UUID | None = None  # second commander for partner pairs
-    checkpoint: str = "latest"
-    boost_overrides: list[str] = []
-    combo_boost: float = 0.3
-    synergy_alpha: float = 0.4  # blend weight: 0.0 = model-only, 1.0 = synergy-only
-
-
-class ComboPackageOut(BaseModel):
-    spellbook_id: str
-    produces: list[str]
-    cards_included: list[str]
-    cards_missing: list[str]
-    completion: float
-    package_weight: float
-    boost_applied: bool = False
+class CandidateOut(BaseModel):
+    oracle_id: UUID
+    name: str
+    type_line: str | None = None
+    mana_cost: str | None = None
+    cmc: float | None = None
+    score: float
 
 
-class DeckCardOut(CardOut):
-    count: int = 1
-    is_ramp: bool = False
-    roles: list[dict] = []
-    score_tags: list[str] = []
+@app.get("/commanders/{oracle_id}/candidates", response_model=list[CandidateOut])
+async def score_commander_candidates(
+    oracle_id: UUID,
+    checkpoint: str = "phase3_best",
+    db: AsyncSession = Depends(get_db),
+):
+    """Score all color-identity-legal cards against a commander.
 
-
-class DeckSignalsOut(BaseModel):
-    wants_attack: bool = False
-    tribal_types: list[str] = []
-    real_colors: list[str] = []
-    active_boosts: list[str] = []
-
-
-class DeckOut(BaseModel):
-    commander: CardOut
-    cards: list[DeckCardOut]
-    scores: list[float]
-    checkpoint: str
-    context_cards: list[str] = []
-    proxy_context: bool = False
-    combo_packages_triggered: list[ComboPackageOut] = []
-    deck_signals: DeckSignalsOut = DeckSignalsOut()
-
-
-def _save_deck(result: dict) -> str | None:
-    """Persist a generated deck to DECK_SAVE_DIR as a timestamped JSON file.
-
-    Returns the filename (not full path) on success, None on failure.
+    Returns all candidates sorted by Phase 3 CommanderScorer output —
+    the model's learned estimate of commander-card fit.  No heuristic
+    adjustments applied.
     """
-    try:
-        DECK_SAVE_DIR.mkdir(parents=True, exist_ok=True)
-        commander_name = (
-            result.get("commander", {}).get("name", "unknown")
-            .replace(" ", "_")
-            .replace(",", "")
-            .replace("'", "")
-        )
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        save_path = DECK_SAVE_DIR / f"{timestamp}_{commander_name}.json"
-        save_path.write_text(json.dumps(result, indent=2, default=str))
-        log.info("Deck saved: %s", save_path)
-        return save_path.name
-    except Exception as exc:
-        log.warning("Failed to save generated deck: %s", exc)
-        return None
+    if not DATABASE_URL:
+        raise HTTPException(503, "DATABASE_URL not configured")
 
+    result = await db.execute(
+        text("SELECT id::text, color_identity FROM cards WHERE oracle_id = :oid LIMIT 1"),
+        {"oid": str(oracle_id)},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(404, "Commander not found")
+    commander_id, color_identity = row[0], frozenset(row[1] or [])
 
-class JobStarted(BaseModel):
-    job_id: str
+    from ops import inference
+    loop = asyncio.get_event_loop()
 
+    model = await loop.run_in_executor(None, inference.get_model, checkpoint)
+    if model is None:
+        raise HTTPException(503, f"Model checkpoint '{checkpoint}' unavailable or dimension mismatch")
 
-class JobStatus(BaseModel):
-    job_id: str
-    status: str          # queued | running | complete | error
-    progress: float      # 0.0 – 1.0
-    message: str
-    result: dict | None = None
-    error: str | None = None
+    embeddings  = await loop.run_in_executor(None, inference.get_embeddings, DATABASE_URL)
+    legal_ids   = await loop.run_in_executor(None, inference.get_legal_ids, DATABASE_URL)
+    color_ids   = await loop.run_in_executor(None, inference.get_color_identities, DATABASE_URL)
+    card_meta   = await loop.run_in_executor(None, inference.get_card_metadata, DATABASE_URL)
 
+    legal_color = [
+        cid for cid in legal_ids
+        if cid in embeddings and color_ids.get(cid, frozenset()) <= color_identity
+        and cid != commander_id
+    ]
 
-@app.post("/decks/generate", response_model=JobStarted)
-async def generate_deck(req: DeckRequest):
-    """Submit a deck generation job.  Returns a job_id immediately.
+    scored = await loop.run_in_executor(
+        None,
+        lambda: inference.score_cards(
+            commander_id, [], embeddings, model, legal_color,
+        ),
+    )
 
-    Poll GET /decks/jobs/{job_id} for progress and the final result.
-    """
-    job_id = str(uuid4())
-    _jobs[job_id] = {
-        "job_id": job_id,
-        "status": "queued",
-        "progress": 0.0,
-        "message": "Queued…",
-        "result": None,
-        "error": None,
-        "created_at": datetime.utcnow(),
-    }
-
-    async def _run() -> None:
-        _jobs[job_id]["status"] = "running"
-
-        def _progress(fraction: float, message: str) -> None:
-            _jobs[job_id]["progress"] = fraction
-            _jobs[job_id]["message"] = message
-
-        try:
-            async with SessionLocal() as db:
-                result = await deck_ops.generate(
-                    db,
-                    req.commander_oracle_id,
-                    req.checkpoint,
-                    boost_overrides=req.boost_overrides or None,
-                    combo_boost=req.combo_boost,
-                    partner_oracle_id=req.partner_oracle_id,
-                    synergy_alpha=req.synergy_alpha,
-                    progress_cb=_progress,
-                )
-            if result is None:
-                _jobs[job_id].update({
-                    "status": "error",
-                    "error": "Commander not found or model unavailable",
-                })
-            else:
-                deck_filename = _save_deck(result)
-                _jobs[job_id].update({
-                    "status": "complete",
-                    "progress": 1.0,
-                    "message": "Done",
-                    "result": {**result, "deck_filename": deck_filename},
-                })
-        except Exception as exc:
-            log.exception("Deck generation job %s failed", job_id)
-            _jobs[job_id].update({"status": "error", "error": str(exc)})
-
-    asyncio.create_task(_run())
-    return JobStarted(job_id=job_id)
-
-
-@app.get("/decks/jobs/{job_id}", response_model=JobStatus)
-async def get_job(job_id: str):
-    """Poll for deck generation progress and retrieve the result when complete."""
-    job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    return job
+    out = []
+    for cid, score in scored:
+        meta = card_meta.get(cid)
+        if meta:
+            out.append(CandidateOut(score=round(score, 6), **meta))
+    return out
 
 
 # ── Generated deck history ───────────────────────────────────────────────────
@@ -520,9 +434,14 @@ async def upload_checkpoint(
         tmp.unlink(missing_ok=True)
         raise HTTPException(500, f"Write failed: {exc}")
 
-    # Evict cached model so next inference loads the new weights
-    inference._model_cache.pop(name, None)
-    log.info("Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data))
+    # Evict cached model(s) so next inference loads the new weights.
+    # Uploading phase2_best invalidates ALL bundles (each bundle embeds the encoder).
+    if name == "phase2_best":
+        inference._model_cache.clear()
+        log.info("phase2_best replaced — full model cache cleared (%d bytes)", len(data))
+    else:
+        inference._model_cache.pop(name, None)
+        log.info("Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data))
     return {"saved": str(dest), "bytes": len(data), "cache_cleared": True}
 
 
