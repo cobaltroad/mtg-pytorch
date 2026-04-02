@@ -51,11 +51,11 @@ Woodland Cemetery's nearest neighbour is Overgrown Tomb.
 ### Synergy edges
 
 The ingest pipeline also builds a `synergy_edges` table of pairwise synergy
-scores.  The primary type is **ability_trigger**: for each triggered-ability
-pattern on card A (e.g. "whenever a creature dies") the pipeline identifies
-every card B whose abilities could fire that trigger (e.g. a sac outlet).
-These producer/consumer pairs become the positive examples for Phase 2
-training.
+scores.  The primary type is **ability_trigger**: the `tag_mechanic_tags` stage
+tags every card with its deck-key roles (e.g. `sac_outlet`, `counter_trigger`,
+`tribal_elf`) using direct SQL against card columns — no oracle-text regex
+pass required.  `compute_textmatch_synergy` then builds producer/consumer edges
+from those role tags, which become the positive examples for Phase 2 training.
 
 Tribal synergy edges are computed separately, including changeling-aware
 matching so cards like Maskwood Nexus correctly count as members of every tribe.

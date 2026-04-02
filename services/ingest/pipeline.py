@@ -5,12 +5,11 @@ Two-step workflow
 -----------------
 download   -- Fetch card data (MTGJSON -> cards table) + import combos (Commander Spellbook).
               Re-run when new sets release or combo data changes.
-process    -- Embed cards, tag abilities, compute synergy edges, export training artifact.
+process    -- Embed cards, tag mechanic roles, compute synergy edges, export training artifact.
               Re-run after download or after model/pattern changes.
 
 Commander artifact pipeline (run after process):
   python pipeline.py --stage decompose_commanders             Step 0:  write card_abilities rows (source='decompose')
-  python pipeline.py --stage tag_mechanic_tags               Step 0b: tag candidate cards with deck-key role labels
   python pipeline.py --stage compute_commander_value_synergy  Step 1:  commander-value synergy edges
   python pipeline.py --stage export_dataset_commanders        Step 2:  export mtg_commanders.pt
 
@@ -19,9 +18,9 @@ Run download only:  python pipeline.py --stage download
 Run process only:   python pipeline.py --stage process
 
 Individual sub-stages (rarely needed):
-  embed_cards, tag_abilities [--rescan],
+  embed_cards, tag_mechanic_tags [--rescan],
   compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy,
-  decompose_commanders, tag_mechanic_tags [--rescan], compute_commander_value_synergy,
+  decompose_commanders, compute_commander_value_synergy,
   export_dataset, export_dataset_commanders
 
 Data sources
@@ -48,7 +47,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 from stages.download import download as _download  # noqa: E402
-from stages.tag import embed_cards, tag_abilities  # noqa: E402
+from stages.tag import embed_cards  # noqa: E402
+from stages.mechanic_tags import tag_mechanic_tags  # noqa: E402
 from stages.dataset import (
     compute_textmatch_synergy,
     compute_xmage_synergy,
@@ -73,7 +73,7 @@ async def download() -> None:
 
 
 async def process() -> None:
-    """Embed -> tag -> compute synergy paths -> export training dataset.
+    """Embed -> tag mechanic roles -> compute synergy paths -> export training dataset.
 
     Requires the download step to have been run first.
 
@@ -82,7 +82,7 @@ async def process() -> None:
     explicitly before building the commander artifact.
     """
     await embed_cards()
-    await tag_abilities()
+    tag_mechanic_tags()
     await compute_textmatch_synergy()
     await compute_xmage_synergy()
     await compute_xmage_effect_synergy()
@@ -108,7 +108,7 @@ if __name__ == "__main__":
             "process",
             # Tag sub-stages
             "embed_cards",
-            "tag_abilities",
+            "tag_mechanic_tags",
             "tag_abilities_xmage",
             # Synergy sub-stages
             "compute_textmatch_synergy",
@@ -116,7 +116,6 @@ if __name__ == "__main__":
             "compute_xmage_effect_synergy",
             # Commander artifact sub-stages
             "decompose_commanders",
-            "tag_mechanic_tags",
             "compute_commander_value_synergy",
             # Export sub-stages
             "export_dataset",
@@ -126,10 +125,10 @@ if __name__ == "__main__":
         default=None,
         help=(
             "download: fetch MTGJSON + load cards + import combos. "
-            "process: embed + tag + compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy + export_dataset. "
+            "process: embed + tag_mechanic_tags + compute synergy + export_dataset. "
+            "tag_mechanic_tags: write deck-key role tags to candidate cards (source='mechanic'). "
             "tag_abilities_xmage: supplement card_abilities from XMage source tree "
             "(requires XMAGE_DIR env var; mount mage/ read-only). "
-            "tag_mechanic_tags: write deck-key role tags to candidate cards (source='mechanic'). "
             "Omit to run both download and process."
         ),
     )
@@ -137,8 +136,8 @@ if __name__ == "__main__":
         "--rescan",
         action="store_true",
         help=(
-            "tag_abilities only: re-apply every trigger pattern to every card, "
-            "not just those with 0 existing rows.  Use after improving a pattern regex."
+            "tag_mechanic_tags only: delete all existing source='mechanic' role rows "
+            "first, then re-insert.  Use after updating SQL in synergy modules."
         ),
     )
     args = parser.parse_args()
@@ -149,8 +148,8 @@ if __name__ == "__main__":
         asyncio.run(process())
     elif args.stage == "embed_cards":
         asyncio.run(embed_cards())
-    elif args.stage == "tag_abilities":
-        asyncio.run(tag_abilities(rescan=args.rescan))
+    elif args.stage == "tag_mechanic_tags":
+        tag_mechanic_tags(rescan=args.rescan)
     elif args.stage == "tag_abilities_xmage":
         from xmage_parse import tag_abilities_xmage as _xmage_tag
         import os as _os
@@ -167,10 +166,6 @@ if __name__ == "__main__":
         from stages.decompose import write_commander_abilities as _decompose
 
         _decompose()
-    elif args.stage == "tag_mechanic_tags":
-        from stages.mechanic_tags import tag_mechanic_tags as _tag_mechanic_tags
-
-        _tag_mechanic_tags(rescan=args.rescan)
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":

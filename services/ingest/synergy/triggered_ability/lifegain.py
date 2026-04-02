@@ -14,3 +14,15 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("lifegain_lifelink",       "Keyword: Lifelink",                    p(r"\blifelink\b")),
     ("lifegain_soul_warden",    "Soul Warden ETB lifegain",             p(r"whenever (?:another )?creature enters.{0,40}you gain")),
 ]
+
+# Direct oracle_text SQL for the lifegain_trigger deck key — union of all patterns
+# above as PostgreSQL WHERE fragments against the cards table.  Used by
+# stages/mechanic_tags.py to tag lifegain-payoff cards without depending on
+# card_abilities rows from tag_abilities.
+SQL: str = (
+    "(oracle_text ILIKE '%%whenever you gain life%%'"
+    " OR oracle_text ~* 'whenever (a player|an opponent) gains life'"
+    " OR oracle_text ~* 'for each .{0,3}life (you gain|gained)'"
+    " OR oracle_text ILIKE '%%lifelink%%'"
+    " OR oracle_text ~* 'whenever .{0,8}creature enters.{0,40}you gain')"
+)

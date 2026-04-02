@@ -44,3 +44,16 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("single_attacker_pump", "Grants a single attacking creature a power/toughness boost",
      p(r"target attacking creature(?:\s+you control)?\s+gets? \+")),
 ]
+
+# Direct oracle_text SQL for the combat_tricks deck key — union of all patterns
+# above as PostgreSQL WHERE fragments against the cards table.  Used by
+# stages/mechanic_tags.py to tag combat-enabler cards without depending on
+# card_abilities rows from tag_abilities.
+SQL: str = (
+    "(oracle_text ~* '(has|have|gains?) (flying|menace|fear|intimidate|shadow|horsemanship|skulk)'"
+    " OR oracle_text ILIKE '%%can''t be blocked%%'"
+    " OR oracle_text ~* '(has|have|gains?) (first strike|double strike|deathtouch|lifelink|trample)'"
+    " OR oracle_text ~* '(has|have|gains?) vigilance'"
+    " OR oracle_text ~* 'attacking creatures?.+get [+]'"
+    " OR oracle_text ~* 'target attacking creature.+gets? [+]')"
+)

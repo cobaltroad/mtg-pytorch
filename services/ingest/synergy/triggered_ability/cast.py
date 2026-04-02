@@ -41,3 +41,16 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("aura_equipment_cast",  "Aura/equipment cast trigger",
      p(r"whenever .{0,20}cast (?:an? )?(?:aura|equipment|vehicle)")),
 ]
+
+# Direct oracle_text SQL equivalents — used by stages/mechanic_tags.py so that
+# cast-trigger amplifier tags can be written without depending on card_abilities
+# rows from tag_abilities.  Mirrors the PATTERNS above as PostgreSQL ~* (POSIX
+# case-insensitive regex) WHERE fragments against the cards table.
+CAST_SQL: dict[str, str] = {
+    "enchantment_cast":     "oracle_text ~* 'whenever .{0,20}cast .{0,3}enchantment'",
+    "creature_cast":        "oracle_text ~* 'whenever .{0,20}cast .{0,3}creature spell'",
+    "artifact_cast":        "oracle_text ~* 'whenever .{0,20}cast .{0,3}artifact spell'",
+    "instant_sorcery_cast": "oracle_text ~* 'whenever .{0,20}cast .{0,3}(instant|sorcery|noncreature) spell'",
+    "historic_cast":        "oracle_text ~* 'whenever .{0,20}cast .{0,3}historic spell'",
+    "aura_equipment_cast":  "oracle_text ~* 'whenever .{0,20}cast .{0,3}(aura|equipment|vehicle)'",
+}

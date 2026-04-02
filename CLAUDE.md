@@ -22,7 +22,8 @@ mtg-pytorch/
 │   │   └── stages/             # Focused stage modules (pipeline.py delegates here)
 │   │       ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
 │   │       ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
-│   │       ├── tag.py          #   embed_cards + tag_abilities (3 passes)
+│   │       ├── tag.py          #   embed_cards
+│   │       ├── mechanic_tags.py #  tag_mechanic_tags — canonical role tagger (replaces tag_abilities)
 │   │       ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
 │   │       ├── commander.py    #   compute_commander_value_synergy
 │   │       └── export.py       #   Thin wrappers for all export sub-stages
@@ -65,12 +66,11 @@ docker compose run --rm ingest
 
 # Individual sub-stages (useful after code changes or partial failures):
 docker compose run --rm ingest python pipeline.py --stage embed_cards
-docker compose run --rm ingest python pipeline.py --stage tag_abilities
-docker compose run --rm ingest python pipeline.py --stage tag_abilities --rescan   # re-apply all patterns to all cards
-docker compose run --rm ingest python pipeline.py --stage tag_abilities_xmage      # supplement with XMage source parsing (requires mage/ mount)
+docker compose run --rm ingest python pipeline.py --stage tag_mechanic_tags
+docker compose run --rm ingest python pipeline.py --stage tag_mechanic_tags --rescan   # delete + re-insert all mechanic role rows
+docker compose run --rm ingest python pipeline.py --stage tag_abilities_xmage          # supplement with XMage source parsing (requires mage/ mount)
 docker compose run --rm ingest python pipeline.py --stage compute_textmatch_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_xmage_synergy
-docker compose run --rm ingest python pipeline.py --stage compute_effect_peer_synergy  # requires tag_abilities_xmage
 docker compose run --rm ingest python pipeline.py --stage export_dataset
 
 # Commander artifact pipeline (required before export_dataset_commanders):
@@ -463,11 +463,10 @@ together after training.
 ## XMage as a training signal
 
 XMage's Java card implementations encode machine-readable ability structure
-(triggered, activated, static, keyword) via typed Java classes.  The ingest
-pipeline's `tag_abilities` stage uses regex heuristics on oracle text as a
-starting point.  `tag_abilities_xmage` supplements this with a pass over the
-XMage Java source tree (`mage/`) and writes `card_abilities` rows tagged
-`source='xmage'`.
+(triggered, activated, static, keyword) via typed Java classes.
+`tag_abilities_xmage` supplements the canonical `tag_mechanic_tags` stage with
+a pass over the XMage Java source tree (`mage/`) and writes `card_abilities`
+rows tagged `source='xmage'`.
 
 ### How `xmage_parse.py` works
 
