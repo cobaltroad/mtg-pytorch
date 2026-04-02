@@ -16,6 +16,7 @@ st.title("🃏 MTG Commander AI")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 @st.cache_data(ttl=300)
 def search_cards(q: str) -> list[dict]:
     r = httpx.get(f"{API_URL}/cards/search", params={"q": q, "limit": 20}, timeout=10)
@@ -32,7 +33,6 @@ def score_candidates(oracle_id: str, checkpoint: str = "phase3_best") -> list[di
     )
     r.raise_for_status()
     return r.json()
-
 
 
 @st.cache_data(ttl=300)
@@ -77,6 +77,7 @@ def get_generated_deck(filename: str) -> dict | None:
 
 # ── UI constants ──────────────────────────────────────────────────────────────
 
+
 def _checkpoint_label(checkpoint: str) -> str:
     if checkpoint.startswith("cmd_"):
         return "👑 Commander"
@@ -85,12 +86,13 @@ def _checkpoint_label(checkpoint: str) -> str:
 
 # ── Shared deck display ───────────────────────────────────────────────────────
 
+
 def render_deck(deck: dict) -> None:
     """Render the full deck view. Accepts the deck result dict from the API."""
     st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
     st.markdown(f"**Commander:** {deck['commander']['name']}")
 
-    _safe_name = re.sub(r"[^\w]", "_", deck['commander']['name'])
+    _safe_name = re.sub(r"[^\w]", "_", deck["commander"]["name"])
     _dl_cols = st.columns(2)
     _dl_cols[0].download_button(
         "⬇ Download deck (JSON)",
@@ -151,21 +153,57 @@ with tab_deck:
         with st.spinner("Searching…"):
             candidates = search_cards(cmd_query)
         if candidates:
-            options = {f"{c['name']} — {c.get('type_line','')}": c for c in candidates}
+            options = {f"{c['name']} — {c.get('type_line', '')}": c for c in candidates}
             choice = st.selectbox("Select commander", list(options.keys()))
             commander = options[choice]
-
 
     # ── Commander decompose signals ───────────────────────────────────────────
     if commander:
         _signals = get_commander_decompose(str(commander["oracle_id"]))
         with st.expander(f"Decompose signals: {commander['name']}", expanded=True):
+            # Oracle text
+            _oracle = (commander.get("oracle_text") or "").strip()
+            if _oracle:
+                st.markdown(
+                    "<div style='font-size:0.85em; color:#ccc; white-space:pre-wrap; "
+                    "border-left:3px solid #555; padding-left:0.75em; margin-bottom:0.75em;'>"
+                    + _oracle.replace("\n", "<br>")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
             if not _signals:
-                st.info("No decompose signals found. Run the decompose pipeline stage first.")
+                st.info(
+                    "No decompose signals found. Run the decompose pipeline stage first."
+                )
             else:
+                # Render signals as a two-column table:
+                #   col 1 — signal label + matched phrase
+                #   col 2 — deck key (backtick) + side badge + deck label
+                _sig_col1, _sig_col2 = st.columns([2, 2])
+                with _sig_col1:
+                    st.caption("Signal")
+                with _sig_col2:
+                    st.caption("Deck needs")
                 for sig in _signals:
-                    phrase = f'  — `"{sig["raw_text"]}"` ' if sig.get("raw_text") else ""
-                    st.markdown(f"- **{sig['ability_name']}**  `{sig['trigger_event']}`{phrase}")
+                    phrase = (
+                        f'  — `"{sig["raw_text"]}"` ' if sig.get("raw_text") else ""
+                    )
+                    deck_keys = sig.get("deck_keys") or []
+                    deck_labels = sig.get("deck_labels") or []
+                    side = sig.get("side")
+                    _c1, _c2 = st.columns([2, 2])
+                    with _c1:
+                        st.markdown(f"**{sig['ability_name']}**{phrase}")
+                    with _c2:
+                        if deck_keys and side:
+                            side_badge = "📤" if side == "producer" else "📥"
+                            lines = [
+                                f"{side_badge} `{dk}` — {dl}"
+                                for dk, dl in zip(deck_keys, deck_labels)
+                            ]
+                            st.markdown("  \n".join(lines))
+                        else:
+                            st.markdown("—")
 
     # ── Advanced options ──────────────────────────────────────────────────────
     _chosen_checkpoint = "phase3_best"
@@ -197,7 +235,9 @@ with tab_deck:
             try:
                 results = score_candidates(oracle_id, _chosen_checkpoint)
             except httpx.HTTPStatusError as e:
-                st.error(f"Scoring failed ({e.response.status_code}): {e.response.text}")
+                st.error(
+                    f"Scoring failed ({e.response.status_code}): {e.response.text}"
+                )
                 results = []
             except Exception as e:
                 st.error(f"Scoring failed: {e}")
@@ -205,25 +245,29 @@ with tab_deck:
 
         if results:
             st.caption(f"{len(results)} color-identity-legal candidates scored")
-            df = pd.DataFrame([
-                {
-                    "name": r["name"],
-                    "type_line": r.get("type_line") or "",
-                    "mana_cost": r.get("mana_cost") or "",
-                    "cmc": r.get("cmc"),
-                    "score": round(r["score"], 4),
-                    "cosine_sim": round(r["cosine_sim"], 4),
-                }
-                for r in results
-            ])
+            df = pd.DataFrame(
+                [
+                    {
+                        "name": r["name"],
+                        "type_line": r.get("type_line") or "",
+                        "mana_cost": r.get("mana_cost") or "",
+                        "score": round(r["score"], 4),
+                        "cosine_sim": round(r["cosine_sim"], 4),
+                        "tags": ", ".join(r.get("tags") or []),
+                    }
+                    for r in results
+                ]
+            )
             st.dataframe(
                 df,
                 use_container_width=True,
                 height=700,
                 column_config={
                     "score": st.column_config.NumberColumn("Fit score", format="%.4f"),
-                    "cosine_sim": st.column_config.NumberColumn("Cosine sim", format="%.4f"),
-                    "cmc": st.column_config.NumberColumn("CMC", format="%.0f"),
+                    "cosine_sim": st.column_config.NumberColumn(
+                        "Cosine sim", format="%.4f"
+                    ),
+                    "tags": st.column_config.TextColumn("Tags"),
                 },
             )
 
@@ -238,6 +282,7 @@ with tab_history:
     if not decks_list:
         st.info("No generated decks on record.")
     else:
+
         def _deck_label(d: dict) -> str:
             badge = _checkpoint_label(d.get("checkpoint", ""))
             return f"{d['commander']}  [{badge}]  —  {d['filename']}  ({d['card_count']} cards)"
@@ -273,7 +318,9 @@ with tab_history:
                 st.warning("Need at least two decks to compare.")
                 _compare_mode = False
             else:
-                chosen_label_b = st.selectbox("Compare with", _other_labels, key="compare_b")
+                chosen_label_b = st.selectbox(
+                    "Compare with", _other_labels, key="compare_b"
+                )
                 chosen_filename_b = options_map[chosen_label_b]
 
         st.divider()
@@ -286,10 +333,14 @@ with tab_history:
             else:
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    st.markdown(f"### {_checkpoint_label(deck_a.get('checkpoint', ''))}")
+                    st.markdown(
+                        f"### {_checkpoint_label(deck_a.get('checkpoint', ''))}"
+                    )
                     render_deck(deck_a)
                 with col_b:
-                    st.markdown(f"### {_checkpoint_label(deck_b.get('checkpoint', ''))}")
+                    st.markdown(
+                        f"### {_checkpoint_label(deck_b.get('checkpoint', ''))}"
+                    )
                     render_deck(deck_b)
         else:
             deck = get_generated_deck(chosen_filename)

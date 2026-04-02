@@ -7,13 +7,18 @@ Every pattern key belongs to exactly one side of a commander's game plan:
   PRODUCER  — the commander *outputs* a resource or trigger as a primary
                effect.  The SQL selects cards that amplify or pay off from
                that output.
-               Key encodes what the commander generates; SQL finds consumers.
-               e.g. Tyvar places +1/+1 counters → key "counter_placement"
+               Decompose keys (what fires on the commander's oracle text) are
+               translated to deck keys (what the deck needs) via
+               PRODUCER_DECOMPOSE_TO_DECK_KEY.  PATTERN_KEY_TO_PRODUCER_SQL
+               is indexed by deck key, not decompose key.
+               e.g. Tyvar fires decompose key "counter_placement"
+                    → deck key "counter_trigger"
                     → SQL returns doublers, proliferate, power-matters payoffs.
 
   CONSUMER  — the commander *needs* the deck to supply a resource or card
                type in order for its ability to fire or scale.
                Key encodes what the commander demands; SQL finds providers.
+               Consumer deck key == decompose key (no translation needed).
                e.g. Tyvar triggers off mana abilities → key "mana_dork"
                     → SQL returns creatures that tap for mana.
 
@@ -24,10 +29,11 @@ Tyvar the Bellicose {2}{B}{G}  —  5/4 Legendary Creature — Elf Warrior
    resolves, put a number of +1/+1 counters on it equal to the amount of mana
    this creature produced.  This ability triggers only once each turn.'"
 
-  PRODUCER keys: counter_placement  (Tyvar outputs counters onto mana dorks)
-  CONSUMER keys: mana_dork          (Tyvar needs creatures that tap for mana)
-                 attack_trigger     (Tyvar needs a deck that wants to attack)
-                 tribal_elf         (Tyvar needs Elves to trigger his ability)
+  PRODUCER decompose key: counter_placement
+           → deck key:    counter_trigger   (counter-trigger amplifiers)
+  CONSUMER keys: mana_dork                  (creatures that tap for mana)
+                 attack_trigger             (deck that wants to attack)
+                 tribal_elf                 (Elves to trigger his ability)
 """
 
 from __future__ import annotations
@@ -39,7 +45,10 @@ from synergy.combat import PATTERNS as _combat_tricks
 from synergy.tribal import tribal_sql, TRIBES as _tribes
 from synergy.staples.treasure import SQL as _TREASURE_SQL
 from synergy.staples.token import SQL as _TOKEN_SQL
-from mtg_sql.staples.removal import DESTROY as _REMOVAL_DESTROY, DAMAGE as _REMOVAL_DAMAGE
+from mtg_sql.staples.removal import (
+    DESTROY as _REMOVAL_DESTROY,
+    DAMAGE as _REMOVAL_DAMAGE,
+)
 
 
 # _spells values are raw SQL strings; _triggered_abilities / _activated_abilities
@@ -64,53 +73,167 @@ def _family_sql(family_key: str) -> str:
     )
 
 
+# ── Producer → deck-key translation ─────────────────────────────────────────
+# Maps the decompose key that fires on a commander's oracle text to the deck
+# key that describes what the *deck* needs to support that commander.
+#
+# Decompose key (what the commander does)  →  Deck key (what the deck needs)
+#
+# NOTE: This dict is the single source of truth for the producer relationship.
+#   - PATTERN_KEY_TO_PRODUCER_SQL is indexed by deck key (right-hand values).
+#   - stages/decompose.py, scripts/export_dataset_commanders.py, and
+#     scripts/eval_decomposition.py all go through this dict first.
+#   - A copy of this dict and DECK_KEY_LABELS is maintained in
+#     services/api/main.py (no shared import path); keep them in sync.
+PRODUCER_DECOMPOSE_TO_DECK_KEY: dict[str, list[str]] = {
+    "lifegain_producer": ["lifegain_trigger"],
+    "draw_producer": ["draw_trigger"],
+    "counter_placement": ["counter_trigger"],
+    "high_mv_payoff": ["high_mv_payoff"],
+    "cascade": ["cast_from_exile_payoff"],
+    # token generators need ETB payoffs (producer) AND sac outlets (tokens are the fodder)
+    "creature_token_generator": ["creature_etb_payoff", "sac_outlet"],
+    # attack/combat-damage commanders need combat tricks in the deck
+    "attack_trigger": ["combat_tricks"],
+    "combat_damage_to_player": ["combat_tricks"],
+    # death-trigger commanders need sac outlets, self-sacrificing fodder, low-toughness
+    # creatures, destroy removal, and damage-based removal
+    "death_trigger": [
+        "sac_outlet",
+        "sacrifice_fodder",
+        "toughness_1_creatures",
+        "destroy_removal",
+        "damage_removal",
+    ],
+    # sacrifice-payoff commanders need sac outlets + treasure generators + token generators
+    "sacrifice_payoff": ["sac_outlet", "treasure_generators", "token_generators"],
+    # cast trigger commanders need both amplifiers (other cards with same trigger)
+    # and spells of the triggering type as fodder
+    "cast_trigger_enchantment": ["enchantment_cast", "spell_enchantment"],
+    "cast_trigger_creature": ["creature_cast", "spell_creature"],
+    "cast_trigger_artifact": ["artifact_cast", "spell_artifact"],
+    "cast_trigger_instant_sorcery": ["instant_sorcery_cast", "spell_instant_sorcery"],
+    "cast_trigger_historic": ["historic_cast", "spell_historic"],
+    "cast_trigger_aura_equipment": ["aura_equipment_cast", "spell_aura_equipment"],
+}
+
+
+# ── Human-readable labels for deck keys ──────────────────────────────────────
+# Used by the API and UI to display the producer→consumer relationship.
+# Producer deck keys (no oracle pattern fires these on the commander):
+# Consumer deck keys (key == decompose key) borrow the ORACLE_PATTERNS label
+# style from stages/decompose.py.
+DECK_KEY_LABELS: dict[str, str] = {
+    # ── producer deck keys ────────────────────────────────────────────────────
+    "lifegain_trigger": "Lifegain trigger payoffs",
+    "draw_trigger": "Draw trigger payoffs",
+    "counter_trigger": "Counter trigger payoffs",
+    "high_mv_payoff": "High mana value payoffs",
+    "cast_from_exile_payoff": "Cast-from-exile payoffs",
+    "creature_etb_payoff": "Creature ETB payoffs",
+    # ── translated consumer deck keys ─────────────────────────────────────────
+    "combat_tricks": "Combat tricks (evasion, pump, haste)",
+    "sac_outlet": "Sac outlets",
+    "sacrifice_fodder": "Self-sacrificing fodder",
+    "toughness_1_creatures": "Toughness-1 creatures",
+    "destroy_removal": "Destroy removal",
+    "damage_removal": "Damage-based removal",
+    "treasure_generators": "Treasure generators",
+    "token_generators": "Token generators",
+    # cast trigger amplifiers (cards that also trigger on the same cast event)
+    "enchantment_cast": "Enchantment cast trigger amplifiers",
+    "creature_cast": "Creature cast trigger amplifiers",
+    "artifact_cast": "Artifact cast trigger amplifiers",
+    "instant_sorcery_cast": "Instant/sorcery cast trigger amplifiers",
+    "historic_cast": "Historic cast trigger amplifiers",
+    "aura_equipment_cast": "Aura/equipment cast trigger amplifiers",
+    # spell fodder (spells of the type that trigger the commander)
+    "spell_enchantment": "Enchantment spells",
+    "spell_creature": "Creature spells",
+    "spell_artifact": "Artifact spells",
+    "spell_instant_sorcery": "Instant / sorcery spells",
+    "spell_historic": "Historic spells",
+    "spell_aura_equipment": "Aura / equipment spells",
+    "mana_dork": "Mana ability creatures",
+    **{
+        f"cast_trigger_{c}": f"{c.title()} spells"
+        for c in ("white", "blue", "black", "red", "green", "colorless")
+    },
+    **{
+        f"tribal_{t}": f"{t.title()} tribal creatures"
+        for t in (
+            "elf",
+            "dragon",
+            "zombie",
+            "vampire",
+            "eldrazi",
+            "human",
+            "dinosaur",
+            "goblin",
+            "angel",
+            "pirate",
+            "wizard",
+            "assassin",
+            "merfolk",
+            "cat",
+            "sliver",
+            "wolf",
+            "demon",
+            "ninja",
+            "squirrel",
+            "elemental",
+            "dog",
+            "spirit",
+            "knight",
+            "horror",
+            "faerie",
+            "dwarf",
+        )
+    },
+}
+
+
 PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
-
-    # ── PRODUCER: deck needs lifegain payoff cards ────────────────────────────
-    # A commander that outputs lifegain (e.g. Sythis, Oloro) wants cards that
-    # consume life-gain triggers: Ajani's Pridemate, Archangel of Thune, etc.
-    "lifegain_producer": _family_sql("lifegain_trigger"),
-
-    # ── PRODUCER: deck needs draw payoff cards ────────────────────────────────
-    # A commander that draws cards as a primary output (e.g. Sythis, Edric)
-    # wants cards that consume draw triggers: Niv-Mizzet, Psychosis Crawler, etc.
-    "draw_producer": _family_sql("draw_trigger"),
-
-    # ── PRODUCER: counter synergy from commanders that place counters ──────────
-    # Any commander whose oracle text places +1/+1 counters as a primary output
-    # wants the same counter consumer package.
-    "counter_placement": _family_sql("counter_trigger"),
-
-    # ── PRODUCER: high-MV payoff commanders want high mana value spells ───────
-    # A commander that scales damage from revealed card MV (e.g. Yuriko) wants
-    # the deck stacked with the highest-CMC spells possible.
+    # ── deck key: lifegain_trigger ────────────────────────────────────────────
+    # Commander fires decompose key "lifegain_producer" (outputs life gain).
+    # Deck needs cards that consume life-gain triggers:
+    # Ajani's Pridemate, Archangel of Thune, etc.
+    "lifegain_trigger": _family_sql("lifegain_trigger"),
+    # ── deck key: draw_trigger ────────────────────────────────────────────────
+    # Commander fires decompose key "draw_producer" (draws cards as output).
+    # Deck needs cards that consume draw triggers:
+    # Niv-Mizzet, Psychosis Crawler, etc.
+    "draw_trigger": _family_sql("draw_trigger"),
+    # ── deck key: counter_trigger ─────────────────────────────────────────────
+    # Commander fires decompose key "counter_placement" (places +1/+1 counters).
+    # Deck needs counter-trigger amplifiers: Hardened Scales, Doubling Season, etc.
+    "counter_trigger": _family_sql("counter_trigger"),
+    # ── deck key: high_mv_payoff ──────────────────────────────────────────────
+    # Commander fires decompose key "high_mv_payoff" (scales from card MV).
+    # Deck needs the highest-CMC spells possible (Yuriko, Yennett, etc.).
     "high_mv_payoff": _spells["high_mv"],
-
-    # ── PRODUCER: cascade commanders want cast-from-exile payoff cards ────────
-    # A commander with cascade (e.g. Yidris, Maelstrom Wanderer, Abaddon) or
-    # that otherwise exiles cards to cast them wants cards that trigger or scale
-    # off spells being cast from exile: Prosper, Faldorn, etc.
-    "cascade": _spells["cast_from_exile_payoff"],
-
-    # ── PRODUCER: creature token generators want ETB payoff cards ─────────────
-    # A commander that outputs creature tokens (e.g. Krenko, Mob Boss) wants
-    # cards that fire when creatures enter: Purphoros, Impact Tremors, Anointed
-    # Procession, etc.  Both token and non-token ETB consumers qualify.
-    "creature_token_generator": _family_sql("creature_etb"),
+    # ── deck key: cast_from_exile_payoff ──────────────────────────────────────
+    # Commander fires decompose key "cascade" (exiles and casts extra spells).
+    # Deck needs cards that trigger/scale off casting from exile:
+    # Prosper, Faldorn, etc.
+    "cast_from_exile_payoff": _spells["cast_from_exile_payoff"],
+    # ── deck key: creature_etb_payoff ─────────────────────────────────────────
+    # Commander fires decompose key "creature_token_generator" (floods board
+    # with creature tokens).  Deck needs ETB payoff cards: Purphoros, Impact
+    # Tremors, Anointed Procession, etc.
+    # Sac outlets are covered by the CONSUMER entry for "creature_token_generator".
+    "creature_etb_payoff": _family_sql("creature_etb"),
 }
 
 PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
-
     # ── CONSUMER: deck needs tribal creatures (all supported tribes) ──────────
     # Any commander with a tribal payoff (e.g. Tyvar for Elves) wants the deck
     # filled with creatures of that tribe (and changelings).
     **{f"tribal_{_tribe}": tribal_sql(_tribe) for _tribe, _ in _tribes},
-
     # ── CONSUMER: deck needs mana-ability creatures ───────────────────────────
     # Tyvar's second ability triggers off mana abilities — the deck produces
     # the game state he needs by running creatures that tap for mana.
     "mana_dork": f"type_line ILIKE '%%Creature%%' AND {_family_sql('mana_producer')}",
-
     # ── CONSUMER: attack triggers want cards that encourage combat ────────────
     # A commander with an attack trigger (e.g. Tyvar, Isshin, Gahiji) benefits
     # most from a deck full of evasion granters, keyword enablers, and pump
@@ -118,13 +241,11 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # to profitably block.
     "attack_trigger": _family_sql("combat_tricks"),
     "combat_damage_to_player": _family_sql("combat_tricks"),
-
     # ── CONSUMER: creature token generators want sac outlets ─────────────────
     # A commander that floods the board with tokens (e.g. Krenko) wants sac
     # outlets to convert that board presence into damage, draw, or mana:
     # Ashnod's Altar, Goblin Bombardment, Viscera Seer, etc.
     "creature_token_generator": _family_sql("sac_outlet"),
-
     # ── CONSUMER: death-trigger commanders want sac outlets + self-sac fodder ───
     # A commander that triggers on creature death (e.g. Syr Konrad: "whenever
     # another creature dies, each opponent loses 1 life"; Teysa Karlov: "whenever
@@ -141,7 +262,6 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
         f" OR {_REMOVAL_DESTROY}"
         f" OR {_REMOVAL_DAMAGE})"
     ),
-
     # ── CONSUMER: sacrifice-payoff commanders want sac outlets + fodder ──────────
     # A commander that scales off sacrificing permanents (e.g. Korvold: "whenever
     # you sacrifice a permanent, draw a card and put a +1/+1 counter on Korvold";
@@ -151,18 +271,16 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # Treasure generators (Dockside Extortionist, Smothering Tithe, Pitiless
     # Plunderer) are ideal fodder — they also produce mana when sacrificed.
     "sacrifice_payoff": f"({_family_sql('sac_outlet')} OR {_TREASURE_SQL} OR {_TOKEN_SQL})",
-
     # ── CONSUMER: deck needs spells of the type the commander cares about ─────
     # A commander with a cast trigger (e.g. Sythis) wants the deck filled with
     # the triggering spell type — enchantments for Sythis, creatures for Beast
     # Whisperer, etc.  SQL comes from _spells directly (raw type_line filters).
-    "cast_trigger_enchantment":     _spells["spell_enchantment"],
-    "cast_trigger_creature":        _spells["spell_creature"],
-    "cast_trigger_artifact":        _spells["spell_artifact"],
+    "cast_trigger_enchantment": _spells["spell_enchantment"],
+    "cast_trigger_creature": _spells["spell_creature"],
+    "cast_trigger_artifact": _spells["spell_artifact"],
     "cast_trigger_instant_sorcery": _spells["spell_instant_sorcery"],
-    "cast_trigger_historic":        _spells["spell_historic"],
-    "cast_trigger_aura_equipment":  _spells["spell_aura_equipment"],
-
+    "cast_trigger_historic": _spells["spell_historic"],
+    "cast_trigger_aura_equipment": _spells["spell_aura_equipment"],
     # ── CONSUMER: color-based cast triggers want spells of that color ─────────
     # A commander whose trigger fires on a specific color (e.g. K'rrik for black,
     # Chandra for red, Aragorn for multicolor) wants the deck filled with spells

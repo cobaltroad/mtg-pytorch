@@ -108,6 +108,7 @@ from export_db_helpers import (
 from synergy.commander_mechanics import (
     PATTERN_KEY_TO_PRODUCER_SQL,
     PATTERN_KEY_TO_CONSUMER_SQL,
+    PRODUCER_DECOMPOSE_TO_DECK_KEY,
 )
 from synergy.staples import STAPLE_CATEGORIES
 from mtg_sql import commanders
@@ -212,8 +213,11 @@ def _load_commander_positives(
     with get_conn() as conn:
         for key in sorted(all_keys):
             where_clauses = []
-            if key in PATTERN_KEY_TO_PRODUCER_SQL:
-                where_clauses.append(PATTERN_KEY_TO_PRODUCER_SQL[key])
+            # Producer: decompose key → list of deck keys → SQL
+            for deck_key in PRODUCER_DECOMPOSE_TO_DECK_KEY.get(key, []):
+                if deck_key in PATTERN_KEY_TO_PRODUCER_SQL:
+                    where_clauses.append(PATTERN_KEY_TO_PRODUCER_SQL[deck_key])
+            # Consumer: decompose key == deck key
             if key in PATTERN_KEY_TO_CONSUMER_SQL:
                 where_clauses.append(PATTERN_KEY_TO_CONSUMER_SQL[key])
             if not where_clauses:

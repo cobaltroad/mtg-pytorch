@@ -37,8 +37,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from mtg_sql import commanders
 from regex_utils import p  # noqa: E402
 from synergy.commander_mechanics import (
+    DECK_KEY_LABELS,
     PATTERN_KEY_TO_CONSUMER_SQL,
     PATTERN_KEY_TO_PRODUCER_SQL,
+    PRODUCER_DECOMPOSE_TO_DECK_KEY,
 )
 from synergy.tribal import TRIBES as _tribes
 
@@ -489,7 +491,7 @@ def _print_decomposition(card: dict) -> None:
 
     for key, label, phrase in hits:
         in_consumer = key in PATTERN_KEY_TO_CONSUMER_SQL
-        in_producer = key in PATTERN_KEY_TO_PRODUCER_SQL
+        in_producer = key in PRODUCER_DECOMPOSE_TO_DECK_KEY
         if in_consumer:
             consumer.append((key, label, phrase))
         if in_producer:
@@ -508,7 +510,7 @@ def _print_decomposition(card: dict) -> None:
     print()
 
     _section("CONSUMER — deck needs these cards", consumer)
-    _section("PRODUCER — deck amplifies this output", producer)
+    _section("PRODUCER — deck amplifies this output", producer, producer=True)
     _section("TODO — detected but no SQL entry yet", todo, dim=True)
 
 
@@ -516,6 +518,7 @@ def _section(
     title: str,
     rows: list[tuple[str, str, str]],
     dim: bool = False,
+    producer: bool = False,
 ) -> None:
     if not rows:
         return
@@ -524,7 +527,13 @@ def _section(
     print(f"  {'-' * (len(title))}")
     for key, label, phrase in rows:
         snippet = phrase[:60].replace("\n", " ")
-        print(f"{prefix}{key:<30}  # {snippet}")
+        if producer and key in PRODUCER_DECOMPOSE_TO_DECK_KEY:
+            deck_keys = PRODUCER_DECOMPOSE_TO_DECK_KEY[key]
+            parts = [f"{dk} ({DECK_KEY_LABELS.get(dk, dk)})" for dk in deck_keys]
+            suffix = f"  → deck needs: {', '.join(parts)}"
+        else:
+            suffix = ""
+        print(f"{prefix}{key:<30}  # {snippet}{suffix}")
     print()
 
 

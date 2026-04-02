@@ -21,13 +21,15 @@ from ops import cards as card_ops, synergy as synergy_ops, training as training_
 
 log = logging.getLogger(__name__)
 
-DATABASE_URL      = os.environ.get("DATABASE_URL", "")
-ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
-DATASET_PATH      = Path(os.environ.get("DATASET_PATH",      "/data/mtg_dataset.pt"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+DATASET_PATH = Path(os.environ.get("DATASET_PATH", "/data/mtg_dataset.pt"))
 DATASET_META_PATH = Path(os.environ.get("DATASET_META_PATH", "/data/mtg_dataset.json"))
-DATASET_CMD_PATH       = Path(os.environ.get("DATASET_CMD_PATH",       "/data/mtg_commanders.pt"))
-DATASET_CMD_META_PATH  = Path(os.environ.get("DATASET_CMD_META_PATH",  "/data/mtg_commanders.json"))
-DECK_SAVE_DIR     = Path(os.environ.get("DECK_SAVE_DIR",     "/app/generated_decks"))
+DATASET_CMD_PATH = Path(os.environ.get("DATASET_CMD_PATH", "/data/mtg_commanders.pt"))
+DATASET_CMD_META_PATH = Path(
+    os.environ.get("DATASET_CMD_META_PATH", "/data/mtg_commanders.json")
+)
+DECK_SAVE_DIR = Path(os.environ.get("DECK_SAVE_DIR", "/app/generated_decks"))
 
 app = FastAPI(
     title="MTG Commander AI",
@@ -38,6 +40,7 @@ app = FastAPI(
 
 # ── Startup: pre-load embeddings in background ────────────────────────────────
 
+
 @app.on_event("startup")
 async def _preload_embeddings():
     """Fire-and-forget embedding pre-load so the first generate request isn't slow."""
@@ -47,6 +50,7 @@ async def _preload_embeddings():
     async def _load():
         try:
             from ops import inference
+
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, inference.get_embeddings, DATABASE_URL)
             log.info("Embeddings pre-loaded successfully")
@@ -58,12 +62,14 @@ async def _preload_embeddings():
 
 # ── Health ───────────────────────────────────────────────────────────────────
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
 # ── Cards ────────────────────────────────────────────────────────────────────
+
 
 class CardOut(BaseModel):
     oracle_id: UUID
@@ -109,13 +115,182 @@ async def similar_cards(
     return results
 
 
-
 # ── Commander decomposition ───────────────────────────────────────────────────
 
+# Producer → deck-key translation and labels.
+# Canonical source: services/ingest/synergy/commander_mechanics.py
+# Keep this in sync with PRODUCER_DECOMPOSE_TO_DECK_KEY and DECK_KEY_LABELS there.
+_PRODUCER_DECOMPOSE_TO_DECK_KEY: dict[str, list[str]] = {
+    "lifegain_producer": ["lifegain_trigger"],
+    "draw_producer": ["draw_trigger"],
+    "counter_placement": ["counter_trigger"],
+    "high_mv_payoff": ["high_mv_payoff"],
+    "cascade": ["cast_from_exile_payoff"],
+    "creature_token_generator": ["creature_etb_payoff", "sac_outlet"],
+    "attack_trigger": ["combat_tricks"],
+    "combat_damage_to_player": ["combat_tricks"],
+    "death_trigger": [
+        "sac_outlet",
+        "sacrifice_fodder",
+        "toughness_1_creatures",
+        "destroy_removal",
+        "damage_removal",
+    ],
+    "sacrifice_payoff": ["sac_outlet", "treasure_generators", "token_generators"],
+    "cast_trigger_enchantment": ["enchantment_cast", "spell_enchantment"],
+    "cast_trigger_creature": ["creature_cast", "spell_creature"],
+    "cast_trigger_artifact": ["artifact_cast", "spell_artifact"],
+    "cast_trigger_instant_sorcery": ["instant_sorcery_cast", "spell_instant_sorcery"],
+    "cast_trigger_historic": ["historic_cast", "spell_historic"],
+    "cast_trigger_aura_equipment": ["aura_equipment_cast", "spell_aura_equipment"],
+}
+
+# All consumer decompose keys (deck key == decompose key for consumers).
+_CONSUMER_DECOMPOSE_KEYS: frozenset[str] = frozenset(
+    {
+        "creature_token_generator",
+        "mana_dork",
+        # color-based cast triggers
+        "cast_trigger_white",
+        "cast_trigger_blue",
+        "cast_trigger_black",
+        "cast_trigger_red",
+        "cast_trigger_green",
+        "cast_trigger_colorless",
+        # tribal
+        "tribal_elf",
+        "tribal_dragon",
+        "tribal_zombie",
+        "tribal_vampire",
+        "tribal_eldrazi",
+        "tribal_human",
+        "tribal_dinosaur",
+        "tribal_goblin",
+        "tribal_angel",
+        "tribal_pirate",
+        "tribal_wizard",
+        "tribal_assassin",
+        "tribal_merfolk",
+        "tribal_cat",
+        "tribal_sliver",
+        "tribal_wolf",
+        "tribal_demon",
+        "tribal_ninja",
+        "tribal_squirrel",
+        "tribal_elemental",
+        "tribal_dog",
+        "tribal_spirit",
+        "tribal_knight",
+        "tribal_horror",
+        "tribal_faerie",
+        "tribal_dwarf",
+    }
+)
+
+_DECK_KEY_LABELS: dict[str, str] = {
+    # producer deck keys
+    "lifegain_trigger": "Lifegain trigger payoffs",
+    "draw_trigger": "Draw trigger payoffs",
+    "counter_trigger": "Counter trigger payoffs",
+    "high_mv_payoff": "High mana value payoffs",
+    "cast_from_exile_payoff": "Cast-from-exile payoffs",
+    "creature_etb_payoff": "Creature ETB payoffs",
+    # translated consumer deck keys
+    "combat_tricks": "Combat tricks (evasion, pump, haste)",
+    "sac_outlet": "Sac outlets",
+    "sacrifice_fodder": "Self-sacrificing fodder",
+    "toughness_1_creatures": "Toughness-1 creatures",
+    "destroy_removal": "Destroy removal",
+    "damage_removal": "Damage-based removal",
+    "treasure_generators": "Treasure generators",
+    "token_generators": "Token generators",
+    # cast trigger amplifiers
+    "enchantment_cast": "Enchantment cast trigger amplifiers",
+    "creature_cast": "Creature cast trigger amplifiers",
+    "artifact_cast": "Artifact cast trigger amplifiers",
+    "instant_sorcery_cast": "Instant/sorcery cast trigger amplifiers",
+    "historic_cast": "Historic cast trigger amplifiers",
+    "aura_equipment_cast": "Aura/equipment cast trigger amplifiers",
+    # spell fodder
+    "spell_enchantment": "Enchantment spells",
+    "spell_creature": "Creature spells",
+    "spell_artifact": "Artifact spells",
+    "spell_instant_sorcery": "Instant / sorcery spells",
+    "spell_historic": "Historic spells",
+    "spell_aura_equipment": "Aura / equipment spells",
+    "mana_dork": "Mana ability creatures",
+    "cast_trigger_white": "White spells",
+    "cast_trigger_blue": "Blue spells",
+    "cast_trigger_black": "Black spells",
+    "cast_trigger_red": "Red spells",
+    "cast_trigger_green": "Green spells",
+    "cast_trigger_colorless": "Colorless spells",
+    **{
+        f"tribal_{t}": f"{t.title()} tribal creatures"
+        for t in (
+            "elf",
+            "dragon",
+            "zombie",
+            "vampire",
+            "eldrazi",
+            "human",
+            "dinosaur",
+            "goblin",
+            "angel",
+            "pirate",
+            "wizard",
+            "assassin",
+            "merfolk",
+            "cat",
+            "sliver",
+            "wolf",
+            "demon",
+            "ninja",
+            "squirrel",
+            "elemental",
+            "dog",
+            "spirit",
+            "knight",
+            "horror",
+            "faerie",
+            "dwarf",
+        )
+    },
+}
+
+
 class DecomposeSignal(BaseModel):
-    ability_name: str   # human-readable label, e.g. "Attack trigger"
-    trigger_event: str  # pattern key, e.g. "attack_trigger"
+    ability_name: str  # human-readable label, e.g. "Attack trigger"
+    trigger_event: str  # decompose key, e.g. "attack_trigger"
     raw_text: str | None = None  # matched oracle phrase
+    deck_keys: list[str] = []  # what the deck needs, e.g. ["counter_trigger"]
+    deck_labels: list[str] = []  # e.g. ["Counter trigger payoffs"]
+    side: str | None = None  # "producer" | "consumer" | None
+
+
+def _enrich_signal(
+    ability_name: str, trigger_event: str, raw_text: str | None
+) -> DecomposeSignal:
+    """Resolve deck_keys, deck_labels, and side for a decompose signal."""
+    key = trigger_event or ""
+    if key in _PRODUCER_DECOMPOSE_TO_DECK_KEY:
+        deck_keys = _PRODUCER_DECOMPOSE_TO_DECK_KEY[key]
+        side = "producer"
+    elif key in _CONSUMER_DECOMPOSE_KEYS:
+        deck_keys = [key]
+        side = "consumer"
+    else:
+        deck_keys = []
+        side = None
+    deck_labels = [_DECK_KEY_LABELS.get(dk, dk) for dk in deck_keys]
+    return DecomposeSignal(
+        ability_name=ability_name,
+        trigger_event=key,
+        raw_text=raw_text,
+        deck_keys=deck_keys,
+        deck_labels=deck_labels,
+        side=side,
+    )
 
 
 @app.get("/commanders/{oracle_id}/decompose", response_model=list[DecomposeSignal])
@@ -136,13 +311,11 @@ async def get_commander_decompose(
         """),
         {"oid": str(oracle_id)},
     )
-    return [
-        DecomposeSignal(ability_name=row[0], trigger_event=row[1] or "", raw_text=row[2])
-        for row in result.fetchall()
-    ]
+    return [_enrich_signal(row[0], row[1] or "", row[2]) for row in result.fetchall()]
 
 
 # ── Synergy ──────────────────────────────────────────────────────────────────
+
 
 class SynergyPair(BaseModel):
     card_a: UUID
@@ -164,14 +337,18 @@ async def get_synergies(
 
 # ── Commander candidate scoring ───────────────────────────────────────────────
 
+
 class CandidateOut(BaseModel):
     oracle_id: UUID
     name: str
     type_line: str | None = None
     mana_cost: str | None = None
     cmc: float | None = None
-    score: float        # CommanderScorer fit (Phase 3)
-    cosine_sim: float   # Phase 2 encoder cosine similarity
+    score: float  # CommanderScorer fit (Phase 3)
+    cosine_sim: float  # Phase 2 encoder cosine similarity
+    tags: list[
+        str
+    ] = []  # role tags + xmage trigger tags; xmage tags prefixed with "⚡"
 
 
 @app.get("/commanders/{oracle_id}/candidates", response_model=list[CandidateOut])
@@ -190,7 +367,9 @@ async def score_commander_candidates(
         raise HTTPException(503, "DATABASE_URL not configured")
 
     result = await db.execute(
-        text("SELECT id::text, color_identity FROM cards WHERE oracle_id = :oid LIMIT 1"),
+        text(
+            "SELECT id::text, color_identity FROM cards WHERE oracle_id = :oid LIMIT 1"
+        ),
         {"oid": str(oracle_id)},
     )
     row = result.fetchone()
@@ -199,58 +378,124 @@ async def score_commander_candidates(
     commander_id, color_identity = row[0], frozenset(row[1] or [])
 
     from ops import inference
+
     loop = asyncio.get_event_loop()
 
     model = await loop.run_in_executor(None, inference.get_model, checkpoint)
     if model is None:
-        raise HTTPException(503, f"Model checkpoint '{checkpoint}' unavailable or dimension mismatch")
+        raise HTTPException(
+            503, f"Model checkpoint '{checkpoint}' unavailable or dimension mismatch"
+        )
 
-    embeddings  = await loop.run_in_executor(None, inference.get_embeddings, DATABASE_URL)
-    legal_ids   = await loop.run_in_executor(None, inference.get_legal_ids, DATABASE_URL)
-    color_ids   = await loop.run_in_executor(None, inference.get_color_identities, DATABASE_URL)
-    card_meta   = await loop.run_in_executor(None, inference.get_card_metadata, DATABASE_URL)
+    embeddings = await loop.run_in_executor(
+        None, inference.get_embeddings, DATABASE_URL
+    )
+    legal_ids = await loop.run_in_executor(None, inference.get_legal_ids, DATABASE_URL)
+    color_ids = await loop.run_in_executor(
+        None, inference.get_color_identities, DATABASE_URL
+    )
+    card_meta = await loop.run_in_executor(
+        None, inference.get_card_metadata, DATABASE_URL
+    )
 
     legal_color = [
-        cid for cid in legal_ids
-        if cid in embeddings and color_ids.get(cid, frozenset()) <= color_identity
+        cid
+        for cid in legal_ids
+        if cid in embeddings
+        and color_ids.get(cid, frozenset()) <= color_identity
         and cid != commander_id
     ]
 
     scored = await loop.run_in_executor(
         None,
-        lambda: inference.score_candidates(commander_id, legal_color, embeddings, model),
+        lambda: inference.score_candidates(
+            commander_id, legal_color, embeddings, model
+        ),
     )
 
     out = []
     for cid, score, cosine_sim in scored:
         meta = card_meta.get(cid)
         if meta:
-            out.append(CandidateOut(
-                score=round(score, 6),
-                cosine_sim=round(cosine_sim, 6),
-                **meta,
-            ))
+            out.append(
+                CandidateOut(
+                    score=round(score, 6),
+                    cosine_sim=round(cosine_sim, 6),
+                    **meta,
+                )
+            )
+
+    # Fetch role + xmage trigger tags for all returned candidates in one query.
+    # Role tags are plain (e.g. "ramp"); xmage tags are prefixed with "⚡" to
+    # distinguish their source visually in the UI.
+    if out:
+        oracle_ids = [str(c.oracle_id) for c in out]
+        tag_rows = await db.execute(
+            text("""
+                SELECT c.oracle_id::text,
+                       ca.ability_type,
+                       ca.ability_name,
+                       ca.source
+                FROM card_abilities ca
+                JOIN cards c ON c.id = ca.card_id
+                WHERE c.oracle_id = ANY(CAST(:oracle_ids AS uuid[]))
+                  AND (
+                    ca.ability_type = 'role'
+                    OR ca.source    = 'xmage'
+                  )
+            """),
+            {"oracle_ids": oracle_ids},
+        )
+        # Build oracle_id → sorted tag list
+        from collections import defaultdict
+
+        tags_by_oracle: dict[str, list[str]] = defaultdict(list)
+        seen_tags: dict[str, set[str]] = defaultdict(set)
+        for oid, ability_type, ability_name, source in tag_rows.fetchall():
+            if source == "xmage":
+                tag = f"⚡ {ability_name}"
+            else:
+                tag = ability_name
+            if tag not in seen_tags[oid]:
+                seen_tags[oid].add(tag)
+                tags_by_oracle[oid].append(tag)
+
+        # Attach tags to each candidate; role tags first, then xmage tags
+        for candidate in out:
+            oid = str(candidate.oracle_id)
+            raw = tags_by_oracle.get(oid, [])
+            candidate.tags = sorted(
+                [t for t in raw if not t.startswith("⚡")],
+            ) + sorted(
+                [t for t in raw if t.startswith("⚡")],
+            )
+
     return out
 
 
 # ── Generated deck history ───────────────────────────────────────────────────
+
 
 @app.get("/decks/generated")
 async def list_generated_decks(limit: int = 50):
     """List previously generated decks (newest first)."""
     if not DECK_SAVE_DIR.exists():
         return []
-    files = sorted(DECK_SAVE_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    files = sorted(
+        DECK_SAVE_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True
+    )
     result = []
     for f in files[:limit]:
         try:
             data = json.loads(f.read_text())
-            result.append({
-                "filename": f.name,
-                "commander": data.get("commander", {}).get("name", "Unknown"),
-                "checkpoint": data.get("checkpoint", ""),
-                "card_count": len(data.get("cards", [])),
-            })
+            result.append(
+                {
+                    "filename": f.name,
+                    "commander": data.get("commander", {}).get("name", "Unknown"),
+                    "checkpoint": data.get("checkpoint", ""),
+                    "card_count": len(data.get("cards", [])),
+                }
+            )
         except Exception:
             pass
     return result
@@ -270,6 +515,7 @@ async def get_generated_deck(filename: str):
 
 # ── Deck metrics ─────────────────────────────────────────────────────────────
 
+
 @app.get("/decks/metrics")
 async def deck_metrics():
     """Return cached Recall@K metrics for the current phase3_best checkpoint."""
@@ -278,6 +524,7 @@ async def deck_metrics():
 
     try:
         from ops import inference
+
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
@@ -290,6 +537,7 @@ async def deck_metrics():
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
+
 
 class TrainRequest(BaseModel):
     phase: int
@@ -357,13 +605,19 @@ async def stop_training(container_id: str):
 
 # ── Checkpoint management ─────────────────────────────────────────────────────
 
+
 @app.get("/checkpoints")
 async def list_checkpoints():
     """List available checkpoint files."""
     from ops import inference
+
     if not inference.CHECKPOINT_DIR.exists():
         return []
-    files = sorted(inference.CHECKPOINT_DIR.glob("*.pt"), key=lambda f: f.stat().st_mtime, reverse=True)
+    files = sorted(
+        inference.CHECKPOINT_DIR.glob("*.pt"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
     return [
         {
             "name": f.stem,
@@ -387,8 +641,9 @@ async def upload_checkpoint(
         raise HTTPException(400, "File must be a .pt checkpoint")
 
     from ops import inference
+
     dest = inference.CHECKPOINT_DIR / f"{name}.pt"
-    tmp  = dest.with_suffix(".pt.tmp")
+    tmp = dest.with_suffix(".pt.tmp")
 
     try:
         data = await file.read()
@@ -402,14 +657,19 @@ async def upload_checkpoint(
     # Uploading phase2_best invalidates ALL bundles (each bundle embeds the encoder).
     if name == "phase2_best":
         inference._model_cache.clear()
-        log.info("phase2_best replaced — full model cache cleared (%d bytes)", len(data))
+        log.info(
+            "phase2_best replaced — full model cache cleared (%d bytes)", len(data)
+        )
     else:
         inference._model_cache.pop(name, None)
-        log.info("Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data))
+        log.info(
+            "Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data)
+        )
     return {"saved": str(dest), "bytes": len(data), "cache_cleared": True}
 
 
 # ── Training dataset ──────────────────────────────────────────────────────────
+
 
 @app.get("/dataset/info")
 async def dataset_info():

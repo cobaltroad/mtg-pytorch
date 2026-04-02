@@ -29,14 +29,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from stages.decompose import ORACLE_PATTERNS, _detect, _fetch
 from mtg_sql import commanders
 from synergy.commander_mechanics import (
+    DECK_KEY_LABELS,
     PATTERN_KEY_TO_CONSUMER_SQL,
     PATTERN_KEY_TO_PRODUCER_SQL,
+    PRODUCER_DECOMPOSE_TO_DECK_KEY,
 )
 
-DATABASE_URL = (
-    os.environ.get("DATABASE_URL", "")
-    .replace("postgresql+asyncpg://", "postgresql://")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").replace(
+    "postgresql+asyncpg://", "postgresql://"
 )
+
 
 def _query_cards(where_sql: str, limit: int, conn) -> list[dict]:
     # Build the query as a plain string — where_sql comes from hardcoded
@@ -65,7 +67,7 @@ def _print_section(
 ) -> None:
     count = len(cards)
     print(f"\n  [{role}] {key}  —  {label}")
-    print(f"  matched: \"{phrase[:70]}\"")
+    print(f'  matched: "{phrase[:70]}"')
     print(f"  SQL:     {where_sql[:100]}{'…' if len(where_sql) > 100 else ''}")
     print(f"  cards ({count}):")
     if not cards:
@@ -102,8 +104,7 @@ def list_no_signals(limit: int) -> None:
         conn.close()
 
     gaps = [
-        cmd for cmd in commanders
-        if not _detect(cmd["oracle_text"], cmd["type_line"])
+        cmd for cmd in commanders if not _detect(cmd["oracle_text"], cmd["type_line"])
     ]
 
     total = len(commanders)
@@ -128,7 +129,7 @@ def eval_commander(name: str, limit: int, key_filter: str | None) -> None:
     try:
         for card in cards:
             oracle_text = card.get("oracle_text") or ""
-            type_line   = card.get("type_line") or ""
+            type_line = card.get("type_line") or ""
             ci = "".join(card.get("color_identity") or []) or "C"
 
             hits = _detect(oracle_text, type_line)
@@ -145,24 +146,33 @@ def eval_commander(name: str, limit: int, key_filter: str | None) -> None:
                 if key_filter and key != key_filter:
                     continue
 
-                in_consumer = key in PATTERN_KEY_TO_CONSUMER_SQL
-                in_producer = key in PATTERN_KEY_TO_PRODUCER_SQL
+            in_consumer = key in PATTERN_KEY_TO_CONSUMER_SQL
+            in_producer = key in PRODUCER_DECOMPOSE_TO_DECK_KEY
 
-                if not in_consumer and not in_producer:
-                    print(f"  [TODO]  {key}  —  {label}")
-                    print(f"          matched: \"{phrase[:70]}\"")
-                    print(f"          (no SQL entry in commander_mechanics.py yet)")
-                    continue
+            if not in_consumer and not in_producer:
+                print(f"  [TODO]  {key}  —  {label}")
+                print(f'          matched: "{phrase[:70]}"')
+                print(f"          (no SQL entry in commander_mechanics.py yet)")
+                continue
 
-                if in_consumer:
-                    where = PATTERN_KEY_TO_CONSUMER_SQL[key]
+            if in_consumer:
+                where = PATTERN_KEY_TO_CONSUMER_SQL[key]
+                result = _query_cards(where, limit, conn)
+                _print_section("CONSUMER", key, label, phrase, where, result)
+
+            if in_producer:
+                for deck_key in PRODUCER_DECOMPOSE_TO_DECK_KEY[key]:
+                    deck_label = DECK_KEY_LABELS.get(deck_key, deck_key)
+                    where = PATTERN_KEY_TO_PRODUCER_SQL[deck_key]
                     result = _query_cards(where, limit, conn)
-                    _print_section("CONSUMER", key, label, phrase, where, result)
-
-                if in_producer:
-                    where = PATTERN_KEY_TO_PRODUCER_SQL[key]
-                    result = _query_cards(where, limit, conn)
-                    _print_section("PRODUCER", key, label, phrase, where, result)
+                    _print_section(
+                        f"PRODUCER → {deck_key} ({deck_label})",
+                        key,
+                        label,
+                        phrase,
+                        where,
+                        result,
+                    )
 
             print()
     finally:
@@ -174,19 +184,25 @@ def main() -> None:
         description="Show cards matched by decompose+tag for a commander."
     )
     parser.add_argument(
-        "name", nargs="?", default=None,
+        "name",
+        nargs="?",
+        default=None,
         help="Commander name (partial, case-insensitive). Required unless --no-signals.",
     )
     parser.add_argument(
-        "--limit", type=int, default=10,
+        "--limit",
+        type=int,
+        default=10,
         help="Max cards to show per key, or commanders to show with --no-signals (default: 10; 0 = all)",
     )
     parser.add_argument(
-        "--key", default=None,
+        "--key",
+        default=None,
         help="Only evaluate a specific pattern key (e.g. mana_dork)",
     )
     parser.add_argument(
-        "--no-signals", action="store_true",
+        "--no-signals",
+        action="store_true",
         help="List all legal commanders that fire zero decompose patterns (gap analysis).",
     )
     args = parser.parse_args()

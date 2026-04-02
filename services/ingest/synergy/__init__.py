@@ -27,13 +27,24 @@ Sub-packages and modules
                              :data:`STAPLE_CATEGORIES` used by
                              ``export_dataset_commanders.py``.
 
-* :mod:`commander_mechanics` — producer and consumer SQL fragments keyed by
-                             mechanic pattern key (e.g. ``counter_placement``,
-                             ``attack_trigger``, ``tribal_elf``).  Exports
-                             :data:`PATTERN_KEY_TO_PRODUCER_SQL` and
-                             :data:`PATTERN_KEY_TO_CONSUMER_SQL`.  Used by
-                             ``stages/decompose.py`` for gap analysis and by
-                             ``export_dataset_commanders.py`` to build
+* :mod:`commander_mechanics` — producer and consumer SQL fragments.  Exports:
+                             - :data:`PRODUCER_DECOMPOSE_TO_DECK_KEY` — maps
+                               the decompose key that fires on a commander's
+                               oracle text to the deck key (what the deck
+                               needs).  Single source of truth for the
+                               producer→consumer relationship.
+                             - :data:`DECK_KEY_LABELS` — human-readable label
+                               for every deck key (both producer and consumer
+                               sides).
+                             - :data:`PATTERN_KEY_TO_PRODUCER_SQL` — indexed
+                               by deck key (right-hand values of
+                               PRODUCER_DECOMPOSE_TO_DECK_KEY), not decompose
+                               key.
+                             - :data:`PATTERN_KEY_TO_CONSUMER_SQL` — indexed
+                               by decompose key (consumer deck key ==
+                               decompose key; no translation needed).
+                             Used by ``stages/decompose.py`` for gap analysis
+                             and by ``export_dataset_commanders.py`` to build
                              per-commander positive sets.
 
 * :mod:`xmage`             — XMage-class producer SQL maps used by
