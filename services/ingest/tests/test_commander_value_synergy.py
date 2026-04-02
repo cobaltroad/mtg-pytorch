@@ -12,7 +12,6 @@ Validates that:
 
 from __future__ import annotations
 
-import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -277,78 +276,3 @@ class TestProducerMapStructure:
                 assert free_score >= score, (
                     f"commander_free_cast score ({free_score}) should be ≥ {event} ({score})"
                 )
-
-
-# ── commander_analysis integration ───────────────────────────────────────────
-
-_pydantic_available = importlib.util.find_spec("pydantic") is not None
-
-
-@pytest.mark.skipif(
-    not _pydantic_available,
-    reason="pydantic (API dependency) not installed — tests run in full inside Docker",
-)
-class TestCommanderAnalysisIntegration:
-    """Tests for the low-MV commander detection in analyze_commander_oracle_text()."""
-
-    def _analyze(self, oracle="", cmc=None, type_line="Legendary Creature — Advisor"):
-        # Import here to keep test isolation clear
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "api"))
-        from ops.commander_analysis import analyze_commander_oracle_text
-        return analyze_commander_oracle_text(
-            oracle_text=oracle,
-            commander_name="Test Commander",
-            cmc=cmc,
-            type_line=type_line,
-        )
-
-    def test_cmc_zero_gives_commander_value_boost(self):
-        """CMC 0 commander (e.g. Rograkh) should emit commander_value boost."""
-        result = self._analyze(oracle="", cmc=0)
-        assert "commander_value" in result.boost_overrides, (
-            f"CMC 0 commander should activate commander_value boost; got {result.boost_overrides}"
-        )
-
-    def test_cmc_one_gives_commander_value_boost(self):
-        """CMC 1 commander (e.g. Yoshimaru) should emit commander_value boost."""
-        result = self._analyze(oracle="", cmc=1)
-        assert "commander_value" in result.boost_overrides
-
-    def test_cmc_two_gives_commander_value_boost(self):
-        """CMC 2 commander (e.g. Thrasios) should emit commander_value boost."""
-        result = self._analyze(oracle="", cmc=2)
-        assert "commander_value" in result.boost_overrides
-
-    def test_cmc_three_no_commander_value_boost(self):
-        """CMC 3 commander should NOT get commander_value boost."""
-        result = self._analyze(oracle="", cmc=3)
-        assert "commander_value" not in result.boost_overrides, (
-            f"CMC 3 commander should NOT activate commander_value; got {result.boost_overrides}"
-        )
-
-    def test_cmc_none_no_commander_value_boost(self):
-        """When CMC is unknown (None), no commander_value boost should be emitted."""
-        result = self._analyze(oracle="", cmc=None)
-        assert "commander_value" not in result.boost_overrides
-
-    def test_archetype_hint_low_mv_commander(self):
-        """Low-MV commander with no other signals should hint at commander-value staples."""
-        result = self._analyze(oracle="", cmc=1)
-        assert result.archetype_hint is not None
-        assert "low-MV" in result.archetype_hint or "commander-value" in result.archetype_hint, (
-            f"Unexpected archetype hint for CMC-1 commander: {result.archetype_hint!r}"
-        )
-
-    def test_archetype_hint_low_mv_plus_tribal(self):
-        """CMC-1 tribal commander should combine both hints."""
-        result = self._analyze(
-            oracle="Whenever Yoshimaru grows, an Elf enters the battlefield.",
-            cmc=1,
-            type_line="Legendary Creature — Dog",
-        )
-        # Both commander_value and tribal boosts should be present
-        assert "commander_value" in result.boost_overrides
-        # Archetype hint should reflect the combination
-        assert result.archetype_hint is not None

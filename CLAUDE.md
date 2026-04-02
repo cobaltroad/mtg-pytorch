@@ -18,9 +18,6 @@ mtg-pytorch/
 │       └── 001_init.sql        # Schema: cards, embeddings, synergy_edges, decks
 ├── services/
 │   ├── api/                    # FastAPI — card search, similarity, deck generation
-│   │   └── ops/
-│   │       ├── commander_analysis.py  # Pure oracle-text signal extractor (no DB)
-│   │       └── decks.py               # Deck generation + tribal/heuristic boosts
 │   ├── ingest/                 # Pipeline: MTGJSON → pgvector embeddings
 │   │   └── stages/             # Focused stage modules (pipeline.py delegates here)
 │   │       ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
@@ -407,7 +404,7 @@ The Streamlit UI (`services/ui/app.py`) has two tabs:
 
 | Tab | Purpose |
 |-----|---------|
-| **Deck Builder** | Search for a commander, run analysis, generate a deck.  On completion shows a progress-complete notice and directs the user to Generated Decks. |
+| **Deck Builder** | Search for a commander, score candidates with CommanderScorer. |
 | **Generated Decks** | Browse and inspect all previously generated decks.  Auto-selects the most recently generated deck when navigating from the builder. |
 
 The `app.py` is **baked into the Docker image** — changes require a rebuild:
@@ -429,56 +426,6 @@ Completed decks are saved as timestamped JSON files under `DECK_SAVE_DIR`
 
 The job result for `GET /decks/jobs/{job_id}` includes a `deck_filename` field
 once the job is complete, so the UI can deep-link directly to the saved file.
-
----
-
-## Commander analysis (`GET /commanders/{oracle_id}/analyze`)
-
-Implemented in `services/api/ops/commander_analysis.py`.  A **pure, DB-free**
-heuristic layer that reads a commander's oracle text and returns structured
-deckbuilding signals before (or alongside) deck generation.
-
-### What it returns (`CommanderAnalysis`)
-
-| Field | Description |
-|-------|-------------|
-| `signals` | List of `SignalResult` — each has `signal_type`, `label`, `confidence` (high/medium/low), matched `phrase`, and `boost_applied` flag |
-| `gaps` | Phrases the parser couldn't interpret — shown to the user as "consider adding decklists" hints |
-| `archetype_hint` | Derived from detected boost keys, e.g. `"elf tribal + elfball (mana-dork matters)"` |
-| `generation_confidence` | `"high"` if ≥3 high-confidence signals with no gaps; `"medium"` otherwise |
-| `boost_overrides` | Sorted list of active boost keys (e.g. `["mana_producers", "tribal"]`) — passed to generation |
-
-### Signal extraction pipeline
-
-1. **Card keywords** from DB (e.g. `["Flying", "Deathtouch"]`) — checked against `RULES_TERM_SIGNALS`
-2. **`RULES_TERM_SIGNALS` dict** — case-insensitive substring scan of oracle text for MTG rules jargon.
-   Key insight: `"mana ability"` maps to mana-dork/elfball; a plain-English parser would miss it.
-   Terms with `boost=None` are recognized but also added to `gaps[]`.
-3. **`_PATTERN_SIGNALS` list** — regex patterns for tribal, combat, evasion, counters, tokens, etc.
-4. **Unrecognized trigger/condition detection** — novel `whenever/if/each` clauses → `gaps[]`
-
-### Extending the dictionary
-
-Add a new entry to `RULES_TERM_SIGNALS` in `commander_analysis.py`:
-
-```python
-"whenever you exert": _RulesTerm(
-    "mechanic", "exert matters",
-    "high", "exert",      # None if no boost implemented yet
-),
-```
-
-That's the entire change needed.  No other files require modification.
-
-### Canonical test case: Tyvar the Bellicose
-
-"mana ability" is an MTG rules term meaning "activated ability that produces mana"
-(mana dorks).  Without the dictionary, a parser would see generic text and miss the
-entire elfball engine.  With it: `mana_producers` boost is applied, archetype hint
-becomes `"elf tribal + elfball (mana-dork matters)"`, confidence `"high"`, no gaps.
-
-Commanders with dungeon/venture mechanics correctly show gaps (recognized, no boost),
-prompting the user to add decklists for that commander.
 
 ---
 

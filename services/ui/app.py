@@ -34,15 +34,6 @@ def score_candidates(oracle_id: str, checkpoint: str = "phase3_best") -> list[di
     return r.json()
 
 
-@st.cache_data(ttl=300)
-def analyze_commander(oracle_id: str) -> dict | None:
-    try:
-        r = httpx.get(f"{API_URL}/commanders/{oracle_id}/analyze", timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return None
-
 
 @st.cache_data(ttl=30)
 def list_generated_decks() -> list[dict]:
@@ -75,10 +66,6 @@ def get_generated_deck(filename: str) -> dict | None:
 
 
 # ── UI constants ──────────────────────────────────────────────────────────────
-
-_CONFIDENCE_ICONS = {"high": "✅", "medium": "⚠️", "low": "❓", "unknown": "❓"}
-_GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}
-
 
 def _checkpoint_label(checkpoint: str) -> str:
     if checkpoint.startswith("cmd_"):
@@ -158,50 +145,6 @@ with tab_deck:
             choice = st.selectbox("Select commander", list(options.keys()))
             commander = options[choice]
 
-    # ── Commander Analysis panel ──────────────────────────────────────────────
-    _analysis: dict | None = None
-    if commander:
-        _analysis = analyze_commander(str(commander["oracle_id"]))
-
-        conf_label = _analysis.get("generation_confidence", "none") if _analysis else "none"
-        conf_icon = _GENERATION_CONF_ICONS.get(conf_label, "❓")
-
-        with st.expander(
-            f"Commander Analysis: {commander['name']}  {conf_icon} generation confidence: {conf_label}",
-            expanded=True,
-        ):
-            if _analysis is None:
-                st.warning("Could not fetch commander analysis (API unavailable).")
-            else:
-                colors = " / ".join(_analysis.get("color_identity") or []) or "Colorless"
-                st.markdown(f"**Colors:** {colors}")
-
-                hint = _analysis.get("archetype_hint")
-                if hint:
-                    st.markdown(f"**Inferred deck goal:** {hint}")
-
-                signals = _analysis.get("signals", [])
-                if signals:
-                    st.markdown("**Detected signals:**")
-                    for sig in signals:
-                        conf = sig.get("confidence", "unknown")
-                        icon = _CONFIDENCE_ICONS.get(conf, "❓")
-                        boost_note = " *(boost applied)*" if sig.get("boost_applied") else ""
-                        phrase = sig.get("phrase", "")
-                        label = sig.get("label", "")
-                        sig_type = sig.get("signal_type", "")
-                        st.markdown(
-                            f"  {icon} **{sig_type}**: {label}"
-                            f'  — `"{phrase}"`  [confidence: {conf}]{boost_note}'
-                        )
-                else:
-                    st.info("No signals detected from oracle text.")
-
-                gaps = _analysis.get("gaps", [])
-                if gaps:
-                    st.markdown("**Gaps** *(mechanics the parser couldn't fully interpret):*")
-                    for gap in gaps:
-                        st.markdown(f"  ❓ {gap}")
 
     # ── Advanced options ──────────────────────────────────────────────────────
     _chosen_checkpoint = "phase3_best"
