@@ -209,7 +209,8 @@ class CandidateOut(BaseModel):
     type_line: str | None = None
     mana_cost: str | None = None
     cmc: float | None = None
-    score: float
+    score: float        # CommanderScorer fit (Phase 3)
+    cosine_sim: float   # Phase 2 encoder cosine similarity
 
 
 @app.get("/commanders/{oracle_id}/candidates", response_model=list[CandidateOut])
@@ -256,16 +257,18 @@ async def score_commander_candidates(
 
     scored = await loop.run_in_executor(
         None,
-        lambda: inference.score_cards(
-            commander_id, [], embeddings, model, legal_color,
-        ),
+        lambda: inference.score_candidates(commander_id, legal_color, embeddings, model),
     )
 
     out = []
-    for cid, score in scored:
+    for cid, score, cosine_sim in scored:
         meta = card_meta.get(cid)
         if meta:
-            out.append(CandidateOut(score=round(score, 6), **meta))
+            out.append(CandidateOut(
+                score=round(score, 6),
+                cosine_sim=round(cosine_sim, 6),
+                **meta,
+            ))
     return out
 
 

@@ -248,6 +248,7 @@ with tab_deck:
                     "mana_cost": r.get("mana_cost") or "",
                     "cmc": r.get("cmc"),
                     "score": round(r["score"], 4),
+                    "cosine_sim": round(r["cosine_sim"], 4),
                 }
                 for r in results
             ])
@@ -256,7 +257,8 @@ with tab_deck:
                 use_container_width=True,
                 height=700,
                 column_config={
-                    "score": st.column_config.NumberColumn("Score", format="%.4f"),
+                    "score": st.column_config.NumberColumn("Fit score", format="%.4f"),
+                    "cosine_sim": st.column_config.NumberColumn("Cosine sim", format="%.4f"),
                     "cmc": st.column_config.NumberColumn("CMC", format="%.0f"),
                 },
             )

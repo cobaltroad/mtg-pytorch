@@ -678,6 +678,45 @@ def score_cards(
     return scores
 
 
+def score_candidates(
+    commander_id: str,
+    candidate_ids: list[str],
+    embeddings: dict[str, np.ndarray],
+    model: _ModelBundle,
+    batch_size: int = 512,
+) -> list[tuple[str, float, float]]:
+    """Return (card_id, scorer_score, cosine_sim) for each candidate.
+
+    Single encoder pass: cosine_sim = z_cand @ z_cmd (dot product of unit
+    vectors = cosine similarity), scorer_score = CommanderScorer output.
+    Sorted descending by scorer_score.
+    """
+    candidate_ids = [cid for cid in candidate_ids if cid in embeddings]
+    if not candidate_ids:
+        return []
+
+    model.eval()
+    cmd_raw = torch.from_numpy(embeddings[commander_id]).unsqueeze(0)
+    with torch.no_grad():
+        z_cmd = model.card_encoder(cmd_raw).squeeze(0)  # (D,) unit vector
+
+    results: list[tuple[str, float, float]] = []
+    with torch.no_grad():
+        for start in range(0, len(candidate_ids), batch_size):
+            batch_ids = candidate_ids[start: start + batch_size]
+            cand_raw = torch.stack([
+                torch.from_numpy(embeddings[cid]) for cid in batch_ids
+            ])
+            z_cand = model.card_encoder(cand_raw)                  # (C, D) unit vectors
+            scorer_scores = model.scorer(z_cmd, z_cand).tolist()   # (C,)
+            cosine_sims   = (z_cand @ z_cmd).tolist()              # (C,)
+            for cid, sc, cos in zip(batch_ids, scorer_scores, cosine_sims):
+                results.append((cid, sc, cos))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+
 # ── Two-phase iterative scoring ───────────────────────────────────────────────
 
 def encode_candidates(
