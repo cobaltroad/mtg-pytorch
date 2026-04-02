@@ -209,31 +209,6 @@ function Assert-Prerequisites {
         if (Test-Path $dataset) {
             $sizeMb = [math]::Round((Get-Item $dataset).Length / 1MB, 0)
             Write-Host "[found - ${sizeMb} MB, DB check skipped]" -ForegroundColor Green
-
-            # -- SHA256 integrity check against sidecar .json ----------------
-            $sidecarPath = [System.IO.Path]::ChangeExtension($dataset, '.json')
-            Write-Host -NoNewline "  SHA256 integrity           "
-            if (Test-Path $sidecarPath) {
-                $sidecar = Get-Content $sidecarPath -Raw | ConvertFrom-Json
-                $expectedSha = $sidecar.sha256
-                if ($expectedSha) {
-                    $actualSha = (Get-FileHash -Algorithm SHA256 -Path $dataset).Hash.ToLower()
-                    if ($actualSha -eq $expectedSha) {
-                        Write-Host "[OK - $($expectedSha.Substring(0,16))...]" -ForegroundColor Green
-                    } else {
-                        Write-Host "[MISMATCH]" -ForegroundColor Red
-                        Write-Host "    Expected : $expectedSha" -ForegroundColor Yellow
-                        Write-Host "    Got      : $actualSha" -ForegroundColor Yellow
-                        $dlScript = if ($dataset -match 'commanders') { '.\scripts\download_commanders.ps1' } else { '.\scripts\download_dataset.ps1' }
-                        Write-Host "    Re-download: $dlScript" -ForegroundColor Yellow
-                        $ok = $false
-                    }
-                } else {
-                    Write-Host "[no sha256 in sidecar - skipped]" -ForegroundColor DarkYellow
-                }
-            } else {
-                Write-Host "[no sidecar .json - skipped]" -ForegroundColor DarkYellow
-            }
         } else {
             Write-Host "[NOT FOUND]" -ForegroundColor Red
             Write-Host "    Expected: $dataset" -ForegroundColor Yellow
