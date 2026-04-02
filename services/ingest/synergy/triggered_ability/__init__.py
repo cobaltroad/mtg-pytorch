@@ -6,6 +6,7 @@ from .lifegain import PATTERNS as _lifegain_patterns
 from .draw import PATTERNS as _draw_patterns
 from .creature_etb import PATTERNS as _creature_etb_patterns
 from .sacrifice import PATTERNS as _sacrifice_patterns
+from .cast import PATTERNS as _cast_patterns
 
 # Aggregated list of all trigger patterns.
 # Tuple shape: (key, label, pattern)
@@ -19,6 +20,7 @@ TRIGGERED_ABILITY_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     *_draw_patterns,
     *_creature_etb_patterns,
     *_sacrifice_patterns,
+    *_cast_patterns,
 ]
 
 # Maps a commander-level mechanic family key to all trigger_event keys that
@@ -27,6 +29,8 @@ TRIGGERED_ABILITY_PATTERNS: list[tuple[str, str, re.Pattern]] = [
 #
 # Convention: the family key matches the triggering module's filename stem
 # suffixed with "_trigger" (attack.py → "attack_trigger").
+# Cast-trigger keys are self-referential (each key is its own family) since
+# each spell type is a distinct mechanic with no sub-grouping needed.
 PATTERNS: dict[str, list[str]] = {
     "attack_trigger":   [key for key, _, _ in _attack_patterns],
     "counter_trigger":  [key for key, _, _ in _counter_patterns],
@@ -34,6 +38,7 @@ PATTERNS: dict[str, list[str]] = {
     "draw_trigger":     [key for key, _, _ in _draw_patterns],
     "creature_etb":     [key for key, _, _ in _creature_etb_patterns],
     "sacrifice_fodder": [key for key, _, _ in _sacrifice_patterns],
+    **{key: [key] for key, _, _ in _cast_patterns},
 }
 
 __all__ = ["TRIGGERED_ABILITY_PATTERNS", "PATTERNS"]

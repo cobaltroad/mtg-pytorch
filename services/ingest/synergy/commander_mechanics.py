@@ -194,6 +194,16 @@ DECK_KEY_LABELS: dict[str, str] = {
 
 
 PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
+    # ── deck keys: cast-trigger amplifiers ────────────────────────────────────
+    # Commander fires a decompose cast-trigger key (e.g. cast_trigger_enchantment).
+    # Deck needs cards that ALSO trigger on the same spell type — amplifying the
+    # effect stack each time you cast a spell of the relevant type.
+    "enchantment_cast":     _family_sql("enchantment_cast"),
+    "creature_cast":        _family_sql("creature_cast"),
+    "artifact_cast":        _family_sql("artifact_cast"),
+    "instant_sorcery_cast": _family_sql("instant_sorcery_cast"),
+    "historic_cast":        _family_sql("historic_cast"),
+    "aura_equipment_cast":  _family_sql("aura_equipment_cast"),
     # ── deck key: lifegain_trigger ────────────────────────────────────────────
     # Commander fires decompose key "lifegain_producer" (outputs life gain).
     # Deck needs cards that consume life-gain triggers:

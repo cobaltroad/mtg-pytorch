@@ -82,11 +82,6 @@ def _family_sql(family_key: str) -> str:
     )
 
 
-def _event_sql(event: str) -> str:
-    """Select cards that have *event* as a trigger_event in card_abilities."""
-    return f"id IN (SELECT card_id FROM card_abilities WHERE trigger_event = '{event}')"
-
-
 # ── DECK_KEY_TO_SQL ────────────────────────────────────────────────────────────
 # Maps every deck key in DECK_KEY_LABELS to a SQL WHERE fragment that selects
 # matching cards from the ``cards`` table.  Built from three sources:
@@ -139,15 +134,13 @@ DECK_KEY_TO_SQL: dict[str, str] = {
     "spell_historic":        _spell_patterns["spell_historic"],
     "spell_aura_equipment":  _spell_patterns["spell_aura_equipment"],
 
-    # Cast-trigger amplifiers — cards with the *same* trigger as the commander;
-    # queried from card_abilities so xmage-parsed and pattern-tagged cards alike
-    # are included
-    "enchantment_cast":      _event_sql("enchantment_cast"),
-    "creature_cast":         _event_sql("creature_cast"),
-    "artifact_cast":         _event_sql("artifact_cast"),
-    "instant_sorcery_cast":  _event_sql("instant_sorcery_cast"),
-    "historic_cast":         _event_sql("historic_cast"),
-    "aura_equipment_cast":   _event_sql("aura_equipment_cast"),
+    # Cast-trigger amplifiers — cards with the *same* trigger as the commander
+    "enchantment_cast":     _family_sql("enchantment_cast"),
+    "creature_cast":        _family_sql("creature_cast"),
+    "artifact_cast":        _family_sql("artifact_cast"),
+    "instant_sorcery_cast": _family_sql("instant_sorcery_cast"),
+    "historic_cast":        _family_sql("historic_cast"),
+    "aura_equipment_cast":  _family_sql("aura_equipment_cast"),
 }
 
 
