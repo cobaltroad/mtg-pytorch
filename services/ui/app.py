@@ -3,13 +3,12 @@
 import json as _json
 import os
 import re
-import time
 
 import httpx
 import pandas as pd
 import streamlit as st
 
-API_URL          = os.environ.get("API_URL", "http://api:8000")
+API_URL = os.environ.get("API_URL", "http://api:8000")
 
 st.set_page_config(page_title="MTG Commander AI", page_icon="🃏", layout="wide")
 st.title("🃏 MTG Commander AI")
@@ -24,48 +23,30 @@ def search_cards(q: str) -> list[dict]:
     return r.json()
 
 
-def submit_deck_job(
-    oracle_id: str,
-    checkpoint: str = "latest",
-    boost_overrides: list[str] | None = None,
-    synergy_alpha: float = 0.4,
-) -> str:
-    """Submit a generation job and return the job_id."""
-    r = httpx.post(
-        f"{API_URL}/decks/generate",
-        json={
-            "commander_oracle_id": oracle_id,
-            "checkpoint": checkpoint,
-            "boost_overrides": boost_overrides or [],
-            "synergy_alpha": synergy_alpha,
-        },
-        timeout=15,
+@st.cache_data(ttl=120)
+def score_candidates(oracle_id: str, checkpoint: str = "phase3_best") -> list[dict]:
+    r = httpx.get(
+        f"{API_URL}/commanders/{oracle_id}/candidates",
+        params={"checkpoint": checkpoint},
+        timeout=60,
     )
-    r.raise_for_status()
-    return r.json()["job_id"]
-
-
-def poll_job(job_id: str) -> dict:
-    """Fetch current job status."""
-    r = httpx.get(f"{API_URL}/decks/jobs/{job_id}", timeout=10)
     r.raise_for_status()
     return r.json()
 
 
+
 @st.cache_data(ttl=300)
-def analyze_commander(oracle_id: str) -> dict | None:
-    """Call the analyze endpoint for a commander (cached 5 min)."""
+def get_commander_decompose(oracle_id: str) -> list[dict]:
     try:
-        r = httpx.get(f"{API_URL}/commanders/{oracle_id}/analyze", timeout=10)
+        r = httpx.get(f"{API_URL}/commanders/{oracle_id}/decompose", timeout=10)
         r.raise_for_status()
         return r.json()
     except Exception:
-        return None
+        return []
 
 
 @st.cache_data(ttl=30)
 def list_generated_decks() -> list[dict]:
-    """List previously generated decks from the API (cached 30 s)."""
     try:
         r = httpx.get(f"{API_URL}/decks/generated", timeout=10)
         r.raise_for_status()
@@ -76,7 +57,6 @@ def list_generated_decks() -> list[dict]:
 
 @st.cache_data(ttl=60)
 def list_checkpoints() -> list[dict]:
-    """List available checkpoints from the API (cached 60 s)."""
     try:
         r = httpx.get(f"{API_URL}/checkpoints", timeout=10)
         r.raise_for_status()
@@ -87,7 +67,6 @@ def list_checkpoints() -> list[dict]:
 
 @st.cache_data(ttl=60)
 def get_generated_deck(filename: str) -> dict | None:
-    """Fetch a specific generated deck by filename (cached 60 s)."""
     try:
         r = httpx.get(f"{API_URL}/decks/generated/{filename}", timeout=10)
         r.raise_for_status()
@@ -98,11 +77,7 @@ def get_generated_deck(filename: str) -> dict | None:
 
 # ── UI constants ──────────────────────────────────────────────────────────────
 
-_CONFIDENCE_ICONS = {"high": "✅", "medium": "⚠️", "low": "❓", "unknown": "❓"}
-_GENERATION_CONF_ICONS = {"high": "🟢", "medium": "🟡", "low": "🟠", "none": "🔴"}
-
 def _checkpoint_label(checkpoint: str) -> str:
-    """Human-readable label for a checkpoint name."""
     if checkpoint.startswith("cmd_"):
         return "👑 Commander"
     return "🎯 Phase"
@@ -115,7 +90,6 @@ def render_deck(deck: dict) -> None:
     st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
     st.markdown(f"**Commander:** {deck['commander']['name']}")
 
-    # ── Download buttons ──────────────────────────────────────────
     _safe_name = re.sub(r"[^\w]", "_", deck['commander']['name'])
     _dl_cols = st.columns(2)
     _dl_cols[0].download_button(
@@ -134,101 +108,6 @@ def render_deck(deck: dict) -> None:
         mime="text/plain",
     )
 
-    # ── Context seed section ──────────────────────────────────────
-    context_cards = deck.get("context_cards", [])
-    is_proxy = deck.get("proxy_context", False)
-    if context_cards and not is_proxy:
-        with st.expander(f"Context seed ({len(context_cards)} archetype staples used to prime the decoder)"):
-            st.write(", ".join(context_cards))
-    elif context_cards and is_proxy:
-        with st.expander(
-            f"⚠️ Proxy context ({len(context_cards)} staples from similar commanders — "
-            "no training decks exist for this commander)",
-            expanded=True,
-        ):
-            st.info(
-                f"No decklists have been imported for **{deck['commander']['name']}**. "
-                "The decoder was seeded with staples from the most embedding-similar "
-                "commanders that *do* have training data. "
-                "Results will improve once you import decklists for this commander."
-            )
-            st.write(", ".join(context_cards))
-    else:
-        st.warning(
-            f"No training decks found for **{deck['commander']['name']}** "
-            f"and no similar commanders with training data were found. "
-            "The model is flying blind — results will be poor."
-        )
-
-    # ── Deck signals ─────────────────────────────────────────────
-    dsig = deck.get("deck_signals", {})
-    if dsig:
-        with st.expander("Deck signals (scoring inputs)", expanded=False):
-            c1, c2 = st.columns(2)
-            c1.markdown(f"**Wants attack:** {'✅' if dsig.get('wants_attack') else '❌'}")
-            tribal = dsig.get("tribal_types", [])
-            c1.markdown(f"**Tribal types:** {', '.join(tribal) if tribal else '—'}")
-            c2.markdown(f"**Colors:** {' '.join(dsig.get('real_colors', [])) or 'colorless'}")
-            boosts = dsig.get("active_boosts", [])
-            c2.markdown(f"**Active boosts:** {', '.join(boosts) if boosts else '—'}")
-
-    # ── Role breakdown ────────────────────────────────────────────
-    archetype = deck.get("archetype", "")
-    win_conditions = deck.get("win_conditions", [])
-    if archetype:
-        arch_label = archetype
-        if win_conditions:
-            arch_label += "  —  win cons: " + ", ".join(f"`{w}`" for w in win_conditions)
-        st.markdown(f"**Archetype:** `{arch_label}`")
-
-    role_counts = deck.get("role_counts", {})
-    if role_counts:
-        rc_cols = st.columns(len(role_counts))
-        for col, (role, cnt) in zip(rc_cols, sorted(role_counts.items())):
-            col.metric(role, cnt)
-
-    # ── Deck summary stats ────────────────────────────────────────
-    land_count = sum(
-        c.get("count", 1) for c in deck["cards"]
-        if "Land" in c.get("type_line", "")
-    )
-    total_count = sum(c.get("count", 1) for c in deck["cards"])
-    ramp_count = sum(
-        c.get("count", 1) for c in deck["cards"]
-        if c.get("is_ramp", False)
-    )
-    syn_density = deck.get("synergy_density")
-    syn_baseline = deck.get("synergy_baseline")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Lands", f"{land_count} / {total_count + 1}")  # +1 for commander
-    col2.metric("Ramp", str(ramp_count))
-    col3.metric("Non-land spells", f"{total_count - land_count} / {total_count + 1}")
-    if syn_density is not None:
-        delta = round(syn_density - syn_baseline, 4) if syn_baseline else None
-        col4.metric(
-            "Synergy density",
-            f"{syn_density:.4f}",
-            delta=f"{delta:+.4f} vs baseline" if delta is not None else None,
-        )
-
-    # ── Mana curve bar chart ──────────────────────────────────────
-    spells = [
-        c for c in deck["cards"]
-        if "Land" not in c.get("type_line", "")
-    ]
-    curve: dict[str, int] = {}
-    for c in spells:
-        cmc = float(c.get("cmc") or 0)
-        label = f"{int(cmc)}+" if cmc >= 6 else str(int(cmc))
-        curve[label] = curve.get(label, 0) + c.get("count", 1)
-    if curve:
-        curve_df = pd.DataFrame(
-            sorted(curve.items(), key=lambda x: int(x[0].rstrip("+"))),
-            columns=["CMC", "Cards"],
-        )
-        st.bar_chart(curve_df.set_index("CMC"))
-
-    # ── Deck table sorted by score ────────────────────────────────
     rows = [
         {
             "count": c.get("count", 1),
@@ -236,30 +115,17 @@ def render_deck(deck: dict) -> None:
             "type_line": c.get("type_line", ""),
             "mana_cost": c.get("mana_cost", ""),
             "cmc": c.get("cmc", ""),
-            "roles": " | ".join(
-                r["role"] for r in c.get("roles", [])
-            ) or "—",
-            "effects": " | ".join(
-                r["effect_class"] for r in c.get("roles", [])
-                if r.get("effect_class")
-            ) or "—",
-            "score_tags": " | ".join(c.get("score_tags", [])) or "—",
             "score": round(s, 4),
         }
         for c, s in zip(deck["cards"], deck["scores"])
     ]
-    df = pd.DataFrame(rows).sort_values(
-        ["score"], ascending=False
-    ).reset_index(drop=True)
+    df = pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
     st.dataframe(
         df,
         use_container_width=True,
         height=600,
         column_config={
             "count": st.column_config.NumberColumn("#", width="small"),
-            "roles": st.column_config.TextColumn("roles", width="medium"),
-            "effects": st.column_config.TextColumn("effect tags", width="medium"),
-            "score_tags": st.column_config.TextColumn("score boosts", width="medium"),
             "score": st.column_config.NumberColumn("Score", format="%.4f"),
         },
     )
@@ -269,14 +135,14 @@ def render_deck(deck: dict) -> None:
 
 tab_deck, tab_history = st.tabs(["Deck Builder", "Generated Decks"])
 
-# ── Deck Builder tab ─────────────────────────────────────────────────────────
+# ── Deck Builder tab ──────────────────────────────────────────────────────────
 
 with tab_deck:
-    st.subheader("Commander deck builder")
+    st.subheader("Commander candidate scoring")
     st.markdown(
-        "Search for a commander, then let the model construct the remaining 99 cards."
+        "Search for a commander to see all color-identity-legal cards ranked by "
+        "commander-card fit score (Phase 3 CommanderScorer)."
     )
-
 
     cmd_query = st.text_input("Commander name", placeholder="Atraxa, Praetors' Voice")
     commander = None
@@ -289,67 +155,19 @@ with tab_deck:
             choice = st.selectbox("Select commander", list(options.keys()))
             commander = options[choice]
 
-    # ── Commander Analysis panel ───────────────────────────────────────────────
-    _analysis: dict | None = None
-    _boost_overrides: list[str] = []
+
+    # ── Commander decompose signals ───────────────────────────────────────────
     if commander:
-        _analysis = analyze_commander(str(commander["oracle_id"]))
-        if _analysis:
-            _boost_overrides = _analysis.get("boost_overrides", [])
-
-        conf_label = _analysis.get("generation_confidence", "none") if _analysis else "none"
-        conf_icon = _GENERATION_CONF_ICONS.get(conf_label, "❓")
-
-        with st.expander(
-            f"Commander Analysis: {commander['name']}  {conf_icon} generation confidence: {conf_label}",
-            expanded=True,
-        ):
-            if _analysis is None:
-                st.warning("Could not fetch commander analysis (API unavailable).")
+        _signals = get_commander_decompose(str(commander["oracle_id"]))
+        with st.expander(f"Decompose signals: {commander['name']}", expanded=True):
+            if not _signals:
+                st.info("No decompose signals found. Run the decompose pipeline stage first.")
             else:
-                # Color identity
-                colors = " / ".join(_analysis.get("color_identity") or []) or "Colorless"
-                st.markdown(f"**Colors:** {colors}")
+                for sig in _signals:
+                    phrase = f'  — `"{sig["raw_text"]}"` ' if sig.get("raw_text") else ""
+                    st.markdown(f"- **{sig['ability_name']}**  `{sig['trigger_event']}`{phrase}")
 
-                # Archetype hint
-                hint = _analysis.get("archetype_hint")
-                if hint:
-                    st.markdown(f"**Inferred deck goal:** {hint}")
-
-                # Signals
-                signals = _analysis.get("signals", [])
-                if signals:
-                    st.markdown("**Detected signals:**")
-                    for sig in signals:
-                        conf = sig.get("confidence", "unknown")
-                        icon = _CONFIDENCE_ICONS.get(conf, "❓")
-                        boost_note = " *(boost applied)*" if sig.get("boost_applied") else ""
-                        phrase = sig.get("phrase", "")
-                        label = sig.get("label", "")
-                        sig_type = sig.get("signal_type", "")
-                        st.markdown(
-                            f"  {icon} **{sig_type}**: {label}"
-                            f'  — `"{phrase}"`  [confidence: {conf}]{boost_note}'
-                        )
-                else:
-                    st.info("No signals detected from oracle text.")
-
-                # Gaps
-                gaps = _analysis.get("gaps", [])
-                if gaps:
-                    st.markdown("**Gaps** *(mechanics the parser couldn't fully interpret):*")
-                    for gap in gaps:
-                        st.markdown(f"  ❓ {gap}")
-                    st.caption(
-                        "These mechanics may reduce generation quality. "
-                        "Adding decklists for this commander will improve results."
-                    )
-
-                if _boost_overrides:
-                    st.caption(f"Score boosts active: {', '.join(_boost_overrides)}")
-
-    # ── Advanced options ───────────────────────────────────────────────────────
-    _synergy_alpha = 0.4
+    # ── Advanced options ──────────────────────────────────────────────────────
     _chosen_checkpoint = "phase3_best"
     if commander:
         with st.expander("Advanced options", expanded=False):
@@ -366,84 +184,48 @@ with tab_deck:
                     "Checkpoint",
                     _ckpt_options,
                     index=_default_ckpt_idx,
-                    help="Select a checkpoint to use for deck generation.",
+                    help="Select a checkpoint to use for candidate scoring.",
                 )
             else:
                 _chosen_checkpoint = _default_ckpt
                 st.caption(f"Checkpoint: `{_chosen_checkpoint}` (not yet uploaded)")
 
-            _synergy_alpha = st.slider(
-                "Synergy alpha (α)",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.4,
-                step=0.05,
-                help=(
-                    "Blend weight between model score and intra-deck synergy score. "
-                    "0.0 = model-only (original behaviour), "
-                    "1.0 = synergy-only, "
-                    "0.4 = recommended default (40% synergy, 60% model)."
-                ),
+    # ── Candidate scoring table ───────────────────────────────────────────────
+    if commander:
+        oracle_id = str(commander["oracle_id"])
+        with st.spinner("Scoring candidates…"):
+            try:
+                results = score_candidates(oracle_id, _chosen_checkpoint)
+            except httpx.HTTPStatusError as e:
+                st.error(f"Scoring failed ({e.response.status_code}): {e.response.text}")
+                results = []
+            except Exception as e:
+                st.error(f"Scoring failed: {e}")
+                results = []
+
+        if results:
+            st.caption(f"{len(results)} color-identity-legal candidates scored")
+            df = pd.DataFrame([
+                {
+                    "name": r["name"],
+                    "type_line": r.get("type_line") or "",
+                    "mana_cost": r.get("mana_cost") or "",
+                    "cmc": r.get("cmc"),
+                    "score": round(r["score"], 4),
+                    "cosine_sim": round(r["cosine_sim"], 4),
+                }
+                for r in results
+            ])
+            st.dataframe(
+                df,
+                use_container_width=True,
+                height=700,
+                column_config={
+                    "score": st.column_config.NumberColumn("Fit score", format="%.4f"),
+                    "cosine_sim": st.column_config.NumberColumn("Cosine sim", format="%.4f"),
+                    "cmc": st.column_config.NumberColumn("CMC", format="%.0f"),
+                },
             )
-
-    # ── Generate button + async polling ───────────────────────────────────────
-    if commander and st.button("Generate deck", type="primary"):
-        try:
-            job_id = submit_deck_job(
-                str(commander["oracle_id"]), _chosen_checkpoint, _boost_overrides, _synergy_alpha
-            )
-            st.session_state["gen_job_id"] = job_id
-            st.session_state["gen_start_time"] = time.time()
-            st.session_state.pop("last_deck_filename", None)
-            st.rerun()
-        except httpx.HTTPError as e:
-            st.error(f"Failed to submit job: {e}")
-
-    # Poll while a job is in flight
-    if "gen_job_id" in st.session_state:
-        job_id = st.session_state["gen_job_id"]
-        job = None
-        try:
-            job = poll_job(job_id)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                st.error("Generation job was lost (API restarted). Please generate again.")
-                del st.session_state["gen_job_id"]
-            else:
-                st.warning(f"Transient poll error ({e.response.status_code}), retrying…")
-                time.sleep(2)
-                st.rerun()
-        except httpx.HTTPError:
-            time.sleep(2)
-            st.rerun()
-
-        if job:
-            status = job.get("status", "unknown")
-            if status in ("queued", "running"):
-                elapsed = int(time.time() - st.session_state.get("gen_start_time", time.time()))
-                msg = job.get("message", "Working…")
-                pct = int(job.get("progress", 0.0) * 100)
-                st.progress(
-                    job.get("progress", 0.0),
-                    text=f"{msg}  ({pct}%  —  {elapsed}s elapsed)",
-                )
-                time.sleep(1)
-                st.rerun()
-            elif status == "error":
-                st.error(f"Generation failed: {job.get('error', 'unknown error')}")
-                del st.session_state["gen_job_id"]
-            elif status == "complete":
-                filename = job["result"].get("deck_filename")
-                st.session_state["last_deck_filename"] = filename
-                del st.session_state["gen_job_id"]
-                # Bust the list cache so the new deck appears immediately
-                list_generated_decks.clear()
-                st.rerun()
-
-    # Show completion notice after a successful generation
-    if "last_deck_filename" in st.session_state and "gen_job_id" not in st.session_state:
-        st.progress(1.0, text="Generation complete!")
-        st.info("Your deck is ready. Open the **Generated Decks** tab to view it.")
 
 
 # ── Generated Decks tab ───────────────────────────────────────────────────────
@@ -454,7 +236,7 @@ with tab_history:
     decks_list = list_generated_decks()
 
     if not decks_list:
-        st.info("No generated decks yet. Use the Deck Builder tab to generate one.")
+        st.info("No generated decks on record.")
     else:
         def _deck_label(d: dict) -> str:
             badge = _checkpoint_label(d.get("checkpoint", ""))
@@ -463,7 +245,6 @@ with tab_history:
         options_map = {_deck_label(d): d["filename"] for d in decks_list}
         labels = list(options_map.keys())
 
-        # Auto-select the most recently generated deck if available
         default_idx = 0
         last_fn = st.session_state.get("last_deck_filename")
         if last_fn:

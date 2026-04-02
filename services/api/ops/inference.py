@@ -60,6 +60,7 @@ _ramp_cache: dict[str, tuple[frozenset, dict]] = {}         # keyed by db_url
 _land_staple_cache: dict[str, dict[str, str]] = {}          # keyed by db_url
 _legal_ids_cache: dict[str, frozenset[str]] = {}            # keyed by db_url
 _recall_cache: dict[str, tuple[float, dict]] = {}           # keyed by checkpoint name
+_card_metadata_cache: dict[str, dict[str, dict]] = {}       # keyed by db_url
 # Sparse adjacency dict: {card_id: {neighbour_id: weight}}.
 # At ~100k edges × 8 bytes ≈ 800 KB — safe to keep in memory.
 _synergy_adj_cache: dict[str, dict[str, dict[str, float]]] = {}  # keyed by db_url
@@ -241,6 +242,34 @@ def get_cmc_map(db_url: str) -> dict[str, float]:
     result: dict[str, float] = {card_id: float(cmc or 0) for card_id, cmc in rows}
     log.info("Loaded CMC for %d cards", len(result))
     _cmc_cache[db_url] = result
+    return result
+
+
+def get_card_metadata(db_url: str) -> dict[str, dict]:
+    """Return {card_id: {oracle_id, name, type_line, mana_cost, cmc}} for all cards. Cached."""
+    if db_url in _card_metadata_cache:
+        return _card_metadata_cache[db_url]
+
+    log.info("Loading card metadata from DB…")
+    with _get_conn(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id::text, oracle_id::text, name, type_line, mana_cost, cmc FROM cards"
+            )
+            rows = cur.fetchall()
+
+    result: dict[str, dict] = {
+        card_id: {
+            "oracle_id": oracle_id,
+            "name": name,
+            "type_line": type_line,
+            "mana_cost": mana_cost,
+            "cmc": float(cmc) if cmc is not None else None,
+        }
+        for card_id, oracle_id, name, type_line, mana_cost, cmc in rows
+    }
+    log.info("Loaded metadata for %d cards", len(result))
+    _card_metadata_cache[db_url] = result
     return result
 
 
@@ -647,6 +676,45 @@ def score_cards(
 
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores
+
+
+def score_candidates(
+    commander_id: str,
+    candidate_ids: list[str],
+    embeddings: dict[str, np.ndarray],
+    model: _ModelBundle,
+    batch_size: int = 512,
+) -> list[tuple[str, float, float]]:
+    """Return (card_id, scorer_score, cosine_sim) for each candidate.
+
+    Single encoder pass: cosine_sim = z_cand @ z_cmd (dot product of unit
+    vectors = cosine similarity), scorer_score = CommanderScorer output.
+    Sorted descending by scorer_score.
+    """
+    candidate_ids = [cid for cid in candidate_ids if cid in embeddings]
+    if not candidate_ids:
+        return []
+
+    model.eval()
+    cmd_raw = torch.from_numpy(embeddings[commander_id]).unsqueeze(0)
+    with torch.no_grad():
+        z_cmd = model.card_encoder(cmd_raw).squeeze(0)  # (D,) unit vector
+
+    results: list[tuple[str, float, float]] = []
+    with torch.no_grad():
+        for start in range(0, len(candidate_ids), batch_size):
+            batch_ids = candidate_ids[start: start + batch_size]
+            cand_raw = torch.stack([
+                torch.from_numpy(embeddings[cid]) for cid in batch_ids
+            ])
+            z_cand = model.card_encoder(cand_raw)                  # (C, D) unit vectors
+            scorer_scores = model.scorer(z_cmd, z_cand).tolist()   # (C,)
+            cosine_sims   = (z_cand @ z_cmd).tolist()              # (C,)
+            for cid, sc, cos in zip(batch_ids, scorer_scores, cosine_sims):
+                results.append((cid, sc, cos))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
 
 
 # ── Two-phase iterative scoring ───────────────────────────────────────────────
