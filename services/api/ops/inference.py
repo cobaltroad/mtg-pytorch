@@ -28,6 +28,12 @@ log = logging.getLogger(__name__)
 
 CHECKPOINT_DIR = Path(os.environ.get("MODEL_CHECKPOINT_DIR", "/app/checkpoints"))
 
+# Expected dimensionality of card embeddings stored in the DB.
+# Must match the EMBEDDING_MODEL used during ingest (currently all-mpnet-base-v2 → 768).
+# If a checkpoint's encoder input_dim doesn't match this, inference will silently
+# produce wrong scores.  get_model() raises immediately on a mismatch instead.
+EXPECTED_EMBEDDING_DIM: int = 768
+
 # ── Module-level caches ───────────────────────────────────────────────────────
 
 _model_cache: dict[str, DeckConstructor] = {}
@@ -73,6 +79,24 @@ def get_model(checkpoint_name: str = "phase4_best") -> Optional[DeckConstructor]
     if ckpt_path.exists():
         log.info("Loading checkpoint: %s", ckpt_path)
         state = torch.load(ckpt_path, map_location=device)
+        # Detect encoder input_dim from the first linear layer weight.
+        # The key is "card_encoder.net.0.weight" in a DeckConstructor checkpoint
+        # or "net.0.weight" in a bare CardEncoder checkpoint.
+        enc_weight_key = (
+            "card_encoder.net.0.weight"
+            if "card_encoder.net.0.weight" in state
+            else "net.0.weight"
+        )
+        if enc_weight_key in state:
+            ckpt_input_dim = state[enc_weight_key].shape[1]
+            if ckpt_input_dim != EXPECTED_EMBEDDING_DIM:
+                log.error(
+                    "Checkpoint %s encoder input_dim=%d does not match DB embedding "
+                    "dim=%d — re-export artifact with the correct embedding model "
+                    "(current: sentence-transformers/all-mpnet-base-v2) and retrain",
+                    ckpt_path, ckpt_input_dim, EXPECTED_EMBEDDING_DIM,
+                )
+                return None
         model.load_state_dict(state)
         _model_cache[checkpoint_name] = model
         return model
@@ -83,6 +107,22 @@ def get_model(checkpoint_name: str = "phase4_best") -> Optional[DeckConstructor]
     if phase3_path.exists():
         log.info("Warm-starting card_encoder from phase3_best")
         state = torch.load(phase3_path, map_location=device)
+        # Check encoder input_dim before warm-starting.
+        enc_weight_key = (
+            "card_encoder.net.0.weight"
+            if "card_encoder.net.0.weight" in state
+            else "net.0.weight"
+        )
+        if enc_weight_key in state:
+            ckpt_input_dim = state[enc_weight_key].shape[1]
+            if ckpt_input_dim != EXPECTED_EMBEDDING_DIM:
+                log.error(
+                    "phase3_best encoder input_dim=%d does not match DB embedding "
+                    "dim=%d — re-export artifact with the correct embedding model "
+                    "(current: sentence-transformers/all-mpnet-base-v2) and retrain",
+                    ckpt_input_dim, EXPECTED_EMBEDDING_DIM,
+                )
+                return None
         # State dict may be a full DeckConstructor or a bare CardEncoder
         model_keys = set(model.card_encoder.state_dict().keys())
         ckpt_keys = set(state.keys())
