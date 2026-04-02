@@ -8,11 +8,11 @@
 
 .PARAMETER File
     Path to the .pt file to upload.
-    Defaults to .\checkpoints\phase4_best.pt
+    Defaults to .\checkpoints\phase3_best.pt
 
 .PARAMETER Name
     Name to save the checkpoint as on the server (without .pt extension).
-    Defaults to phase4_best.
+    Defaults to phase3_best.
 
 .PARAMETER ApiHost
     API hostname (without scheme).  Defaults to API_HOST from .env or edh-api.cardtrak.app.
@@ -54,14 +54,14 @@ if (Test-Path $envFile) {
 
 # -- Resolve parameters --------------------------------------------------------
 
-if (-not $Name) { $Name = 'phase4_best' }
+if (-not $Name) { $Name = 'phase3_best' }
 
 if (-not $File) {
     $File = Join-Path $RepoRoot "checkpoints\${Name}.pt"
 }
 
 if (-not (Test-Path $File)) {
-    throw "Checkpoint not found: $File`nTrain first with: .\scripts\run.ps1 -Train 4"
+    throw "Checkpoint not found: $File`nTrain first with: .\scripts\run.ps1 -Train 3"
 }
 
 if (-not $ApiHost) {

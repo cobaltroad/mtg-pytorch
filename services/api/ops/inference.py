@@ -1,4 +1,4 @@
-"""Inference helpers for the DeckConstructor model.
+"""Inference helpers for the CardEncoder + CommanderScorer model.
 
 Manages lazy-loaded singletons for the model and card embeddings, plus
 core inference functions (scoring, recall evaluation).  All DB access
@@ -22,15 +22,30 @@ import torch
 
 from mtg_sql import commanders
 from mtg_sql.staples.ramp import SQL as _RAMP_SQL
-from ops.model import CardEncoder, DeckConstructor
+from ops.model import CardEncoder, CommanderScorer
 
 log = logging.getLogger(__name__)
 
 CHECKPOINT_DIR = Path(os.environ.get("MODEL_CHECKPOINT_DIR", "/app/checkpoints"))
 
+# ── Model bundle ─────────────────────────────────────────────────────────────
+
+class _ModelBundle:
+    """Holds the frozen encoder and trained scorer together."""
+
+    def __init__(self, card_encoder: CardEncoder, scorer: CommanderScorer):
+        self.card_encoder = card_encoder
+        self.scorer = scorer
+
+    def eval(self) -> "_ModelBundle":
+        self.card_encoder.eval()
+        self.scorer.eval()
+        return self
+
+
 # ── Module-level caches ───────────────────────────────────────────────────────
 
-_model_cache: dict[str, DeckConstructor] = {}
+_model_cache: dict[str, _ModelBundle] = {}
 _embeddings_cache: dict[str, dict[str, np.ndarray]] = {}   # keyed by db_url
 _color_cache: dict[str, dict[str, frozenset]] = {}          # keyed by db_url
 _type_line_cache: dict[str, dict[str, str]] = {}            # keyed by db_url
@@ -55,56 +70,48 @@ def _get_conn(db_url: str):
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 
-def get_model(checkpoint_name: str = "phase4_best") -> Optional[DeckConstructor]:
-    """Lazy-load and cache a DeckConstructor by checkpoint name.
+def get_model(checkpoint_name: str = "phase3_best") -> Optional[_ModelBundle]:
+    """Lazy-load and cache a CardEncoder + CommanderScorer bundle.
 
-    Falls back to warm-starting the card_encoder from phase3_best if the
-    requested checkpoint is not found.  Returns None if no checkpoint is
-    available at all.
+    The encoder is always loaded from ``phase2_best.pt`` (frozen Phase 2
+    weights).  The scorer head is loaded from ``{checkpoint_name}.pt``.
+    Returns None if the scorer checkpoint is not found.
     """
     if checkpoint_name in _model_cache:
         return _model_cache[checkpoint_name]
 
     device = torch.device("cpu")
-    model = DeckConstructor()
-    model.eval()
 
-    ckpt_path = CHECKPOINT_DIR / f"{checkpoint_name}.pt"
-    if ckpt_path.exists():
-        log.info("Loading checkpoint: %s", ckpt_path)
-        state = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(state)
-        _model_cache[checkpoint_name] = model
-        return model
+    # ── Load encoder from phase2_best ────────────────────────────────────────
+    phase2_path = CHECKPOINT_DIR / "phase2_best.pt"
+    if not phase2_path.exists():
+        log.error("phase2_best.pt not found at %s — cannot load model", phase2_path)
+        return None
+    log.info("Loading encoder from %s", phase2_path)
+    enc_state = torch.load(phase2_path, map_location=device)
+    # Infer input_dim and output_dim from the saved weights.
+    input_dim = enc_state["net.0.weight"].shape[1]
+    output_dim = enc_state["net.4.weight"].shape[0]
+    encoder = CardEncoder(input_dim=input_dim, output_dim=output_dim)
+    encoder.load_state_dict(enc_state)
+    encoder.eval()
 
-    # phase4_best not found — try warm-starting encoder from phase3_best
-    log.warning("Checkpoint %s not found, trying phase3_best for card_encoder", ckpt_path)
-    phase3_path = CHECKPOINT_DIR / "phase3_best.pt"
-    if phase3_path.exists():
-        log.info("Warm-starting card_encoder from phase3_best")
-        state = torch.load(phase3_path, map_location=device)
-        # State dict may be a full DeckConstructor or a bare CardEncoder
-        model_keys = set(model.card_encoder.state_dict().keys())
-        ckpt_keys = set(state.keys())
-        # If keys match card_encoder directly
-        if model_keys.issubset(ckpt_keys):
-            model.card_encoder.load_state_dict(
-                {k: v for k, v in state.items() if k in model_keys}
-            )
-        else:
-            # Keys prefixed with "card_encoder."
-            prefix = "card_encoder."
-            extracted = {k[len(prefix):]: v for k, v in state.items() if k.startswith(prefix)}
-            if extracted:
-                model.card_encoder.load_state_dict(extracted)
-            else:
-                # Bare CardEncoder checkpoint
-                model.card_encoder.load_state_dict(state)
-        _model_cache[checkpoint_name] = model
-        return model
+    # ── Load scorer head ─────────────────────────────────────────────────────
+    scorer_path = CHECKPOINT_DIR / f"{checkpoint_name}.pt"
+    if not scorer_path.exists():
+        log.error("Scorer checkpoint not found: %s", scorer_path)
+        return None
+    log.info("Loading scorer from %s", scorer_path)
+    scr_state = torch.load(scorer_path, map_location=device)
+    # Infer embed_dim from the saved weights (net.0: Linear(embed_dim*2 → embed_dim)).
+    embed_dim = scr_state["net.0.weight"].shape[0]
+    scorer = CommanderScorer(embed_dim=embed_dim)
+    scorer.load_state_dict(scr_state)
+    scorer.eval()
 
-    log.error("No checkpoint available (tried %s and phase3_best)", checkpoint_name)
-    return None
+    bundle = _ModelBundle(encoder, scorer)
+    _model_cache[checkpoint_name] = bundle
+    return bundle
 
 
 # ── Embeddings loading ────────────────────────────────────────────────────────
@@ -572,19 +579,17 @@ def score_cards(
     commander_id: str,
     context_ids: list[str],
     embeddings: dict[str, np.ndarray],
-    model: DeckConstructor,
+    model: _ModelBundle,
     all_ids: list[str],
     color_identities: dict[str, frozenset] | None = None,
     batch_size: int = 512,
     partner_ids: list[str] | None = None,
-    progress_fn=None,  # optional callable(fraction: float, message: str)
+    progress_fn=None,  # optional callable(batch_num, total_batches, n_candidates)
 ) -> list[tuple[str, float]]:
-    """Score color-legal cards given commander + context, return sorted (card_id, score).
+    """Score color-legal cards for a commander, return sorted (card_id, score).
 
     Strictly filters to cards whose color identity is a subset of the commander's.
     Excludes the commander itself and any cards already in context_ids.
-    If context is empty, uses the commander embedding as the single context token
-    (the DeckConstructor requires at least 1 token in the sequence).
     Pass partner_ids for partner-commander pairs to use the union color identity.
     """
     exclude = {commander_id} | set(context_ids)
@@ -605,27 +610,12 @@ def score_cards(
     if not candidate_ids:
         return []
 
-    device = torch.device("cpu")
     model.eval()
 
-    # Build commander and context tensors
-    cmd_raw = torch.from_numpy(embeddings[commander_id]).unsqueeze(0)  # (1, 384)
+    cmd_raw = torch.from_numpy(embeddings[commander_id]).unsqueeze(0)
     with torch.no_grad():
-        z_cmd = model.card_encoder(cmd_raw)  # (1, 256)
+        z_cmd = model.card_encoder(cmd_raw).squeeze(0)  # (256,)
 
-    if context_ids:
-        ctx_raw = torch.stack([
-            torch.from_numpy(embeddings[cid])
-            for cid in context_ids
-            if cid in embeddings
-        ])  # (T, 384)
-        with torch.no_grad():
-            z_ctx = model.card_encoder(ctx_raw).unsqueeze(0)  # (1, T, 256)
-    else:
-        # Fall back: use commander embedding as single context token
-        z_ctx = z_cmd.unsqueeze(0)  # (1, 1, 256)
-
-    # Pre-project all candidates in batches
     scores: list[tuple[str, float]] = []
     total_batches = max(1, (len(candidate_ids) + batch_size - 1) // batch_size)
     for batch_num, start in enumerate(range(0, len(candidate_ids), batch_size)):
@@ -634,15 +624,10 @@ def score_cards(
         batch_ids = candidate_ids[start: start + batch_size]
         cand_raw = torch.stack([
             torch.from_numpy(embeddings[cid]) for cid in batch_ids
-        ])  # (C, 384)
+        ])  # (C, 768)
         with torch.no_grad():
-            z_cand = model.card_encoder(cand_raw).unsqueeze(0)  # (1, C, 256)
-            # Expand commander and context to match batch
-            batch_scores = model(
-                z_cmd,   # (1, 256)
-                z_ctx,   # (1, T, 256)
-                z_cand,  # (1, C, 256)
-            ).squeeze(0)  # (C,)
+            z_cand = model.card_encoder(cand_raw)    # (C, 256)
+            batch_scores = model.scorer(z_cmd, z_cand)  # (C,)
         for cid, sc in zip(batch_ids, batch_scores.tolist()):
             scores.append((cid, sc))
 
@@ -656,12 +641,12 @@ def encode_candidates(
     commander_id: str,
     candidate_ids: list[str],
     embeddings: dict[str, np.ndarray],
-    model: DeckConstructor,
+    model: _ModelBundle,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Pre-encode commander and all candidates for iterative re-scoring.
 
     Called once before the greedy selection loop.  The returned tensors are
-    reused at every step; only the context (deck_so_far) changes.
+    reused at every step.
 
     Returns
     -------
@@ -694,23 +679,21 @@ def rescore_with_context(
     z_cand: torch.Tensor,
     context_ids: list[str],
     embeddings: dict[str, np.ndarray],
-    model: DeckConstructor,
+    model: _ModelBundle,
     batch_size: int = 512,
 ) -> np.ndarray:
-    """Re-score all pre-encoded candidates with updated deck context.
+    """Re-score all pre-encoded candidates.
 
-    Encodes ``context_ids`` (deck_so_far) into z_ctx, then runs the
-    DeckConstructor decoder over the pre-computed z_cand in batches —
-    skipping re-encoding of the full candidate pool each step.
+    The CommanderScorer head does not use deck context — scores depend only
+    on the commander and each candidate.  ``context_ids`` and ``embeddings``
+    are kept in the signature so callers in generate.py need no changes.
 
     Parameters
     ----------
-    z_cmd       : (1, 256) commander projection from ``encode_candidates()``.
-    z_cand      : (N, 256) candidate projections from ``encode_candidates()``.
-    context_ids : card IDs currently in the deck (deck_so_far).
-    embeddings  : raw embedding dict for encoding context.
-    model       : DeckConstructor instance.
-    batch_size  : candidates per decoder batch.
+    z_cmd    : (1, 256) commander projection from ``encode_candidates()``.
+    z_cand   : (N, 256) candidate projections from ``encode_candidates()``.
+    model    : _ModelBundle instance.
+    batch_size : candidates per scoring batch.
 
     Returns
     -------
@@ -722,23 +705,12 @@ def rescore_with_context(
         return np.zeros(0, dtype=np.float32)
 
     model.eval()
+    z_cmd_1d = z_cmd.squeeze(0)  # (256,)
+    raw: list[float] = []
     with torch.no_grad():
-        if context_ids:
-            valid_ctx = [cid for cid in context_ids if cid in embeddings]
-            if valid_ctx:
-                ctx_raw = torch.stack([
-                    torch.from_numpy(embeddings[cid]) for cid in valid_ctx
-                ])
-                z_ctx = model.card_encoder(ctx_raw).unsqueeze(0)  # (1, T, 256)
-            else:
-                z_ctx = z_cmd.unsqueeze(0)
-        else:
-            z_ctx = z_cmd.unsqueeze(0)  # (1, 1, 256)
-
-        raw: list[float] = []
         for start in range(0, n, batch_size):
-            z_batch = z_cand[start: start + batch_size].unsqueeze(0)  # (1, C, 256)
-            batch_scores = model(z_cmd, z_ctx, z_batch).squeeze(0)    # (C,)
+            z_batch = z_cand[start: start + batch_size]  # (C, 256)
+            batch_scores = model.scorer(z_cmd_1d, z_batch)  # (C,)
             raw.extend(batch_scores.tolist())
 
     return np.array(raw, dtype=np.float32)
@@ -748,7 +720,7 @@ def rescore_with_context(
 
 def recall_at_k(
     db_url: str,
-    checkpoint_name: str = "phase4_best",
+    checkpoint_name: str = "phase3_best",
     ks: tuple[int, ...] = (1, 5, 10, 20, 50),
     n_decks: int = 50,
     positions_per_deck: int = 5,
@@ -819,35 +791,26 @@ def recall_at_k(
             n_pos = min(positions_per_deck, K - 1)
             positions = random.sample(range(1, K), n_pos)
 
+            cmd_raw = torch.from_numpy(embeddings[cmd_id]).unsqueeze(0)
+            z_cmd = model.card_encoder(cmd_raw).squeeze(0)  # (256,)
+
             for pos in positions:
                 target_id = card_ids[pos]
-                context = card_ids[:pos]
 
-                # Build candidate pool: target + n_neg random cards (excluding context/commander)
-                exclude = {cmd_id, target_id} | set(context)
+                # Build candidate pool: target + n_neg random cards (excluding commander)
+                exclude = {cmd_id, target_id}
                 pool = [cid for cid in all_ids if cid not in exclude]
                 if len(pool) < n_neg:
                     continue
                 negatives = random.sample(pool, n_neg)
                 candidates = [target_id] + negatives
 
-                # Score candidates
-                cmd_raw = torch.from_numpy(embeddings[cmd_id]).unsqueeze(0)
-                z_cmd = model.card_encoder(cmd_raw)  # (1, 256)
-
-                if context:
-                    ctx_raw = torch.stack([torch.from_numpy(embeddings[c]) for c in context])
-                    z_ctx = model.card_encoder(ctx_raw).unsqueeze(0)  # (1, T, 256)
-                else:
-                    z_ctx = z_cmd.unsqueeze(0)  # (1, 1, 256)
-
                 cand_raw = torch.stack([torch.from_numpy(embeddings[c]) for c in candidates])
-                z_cand = model.card_encoder(cand_raw).unsqueeze(0)  # (1, C, 256)
+                z_cand = model.card_encoder(cand_raw)        # (C, 256)
+                scores = model.scorer(z_cmd, z_cand)         # (C,)
 
-                scores = model(z_cmd, z_ctx, z_cand).squeeze(0)  # (C,)
-                # Rank: argsort descending
+                # Rank: argsort descending; target is at index 0
                 ranked_indices = scores.argsort(descending=True).tolist()
-                # target is at index 0 in candidates
                 rank = ranked_indices.index(0) + 1  # 1-based rank
 
                 rr_sum += 1.0 / rank
