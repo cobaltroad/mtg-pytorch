@@ -350,11 +350,11 @@ with tab_deck:
 
     # ── Advanced options ───────────────────────────────────────────────────────
     _synergy_alpha = 0.4
-    _chosen_checkpoint = "phase4_best"
+    _chosen_checkpoint = "phase3_best"
     if commander:
         with st.expander("Advanced options", expanded=False):
             _available = list_checkpoints()
-            _default_ckpt = "phase4_best"
+            _default_ckpt = "phase3_best"
             if _available:
                 _ckpt_options = [c["name"] for c in _available]
                 _default_ckpt_idx = (
