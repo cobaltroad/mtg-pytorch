@@ -28,6 +28,12 @@ log = logging.getLogger(__name__)
 
 CHECKPOINT_DIR = Path(os.environ.get("MODEL_CHECKPOINT_DIR", "/app/checkpoints"))
 
+# Expected dimensionality of card embeddings stored in the DB.
+# Must match the EMBEDDING_MODEL used during ingest (currently all-mpnet-base-v2 → 768).
+# If a checkpoint's encoder input_dim doesn't match this, inference will silently
+# produce wrong scores.  get_model() returns None immediately on a mismatch instead.
+EXPECTED_EMBEDDING_DIM: int = 768
+
 # ── Model bundle ─────────────────────────────────────────────────────────────
 
 class _ModelBundle:
@@ -91,6 +97,14 @@ def get_model(checkpoint_name: str = "phase3_best") -> Optional[_ModelBundle]:
     enc_state = torch.load(phase2_path, map_location=device)
     # Infer input_dim and output_dim from the saved weights.
     input_dim = enc_state["net.0.weight"].shape[1]
+    if input_dim != EXPECTED_EMBEDDING_DIM:
+        log.error(
+            "phase2_best encoder input_dim=%d does not match DB embedding dim=%d — "
+            "re-export artifact with the correct embedding model "
+            "(current: sentence-transformers/all-mpnet-base-v2) and retrain",
+            input_dim, EXPECTED_EMBEDDING_DIM,
+        )
+        return None
     output_dim = enc_state["net.4.weight"].shape[0]
     encoder = CardEncoder(input_dim=input_dim, output_dim=output_dim)
     encoder.load_state_dict(enc_state)
