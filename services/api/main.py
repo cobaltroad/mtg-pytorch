@@ -394,7 +394,7 @@ async def get_generated_deck(filename: str):
 
 @app.get("/decks/metrics")
 async def deck_metrics():
-    """Return cached Recall@K metrics for the current phase4_best checkpoint."""
+    """Return cached Recall@K metrics for the current phase3_best checkpoint."""
     if not DATABASE_URL:
         raise HTTPException(503, "DATABASE_URL not configured")
 
@@ -403,7 +403,7 @@ async def deck_metrics():
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: inference.recall_at_k(DATABASE_URL, checkpoint_name="phase4_best"),
+            lambda: inference.recall_at_k(DATABASE_URL, checkpoint_name="phase3_best"),
         )
         return result
     except Exception as exc:
@@ -500,7 +500,7 @@ async def list_checkpoints():
 async def upload_checkpoint(
     file: UploadFile = File(...),
     x_admin_token: str = Header(default=""),
-    name: str = "phase4_best",
+    name: str = "phase3_best",
 ):
     """Upload a .pt checkpoint file and hot-swap it into the model cache."""
     if ADMIN_TOKEN and x_admin_token != ADMIN_TOKEN:

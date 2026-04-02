@@ -1,12 +1,12 @@
 param(
     # Shorthand: -Train N sets -Mode train -Phase N -Dataset .\ingest_cache\mtg_dataset.pt
-    [ValidateScript({ $_ -eq $null -or $_ -in 1,2,3,4 })]
+    [ValidateScript({ $_ -eq $null -or $_ -in 1,2,3 })]
     [Nullable[int]]$Train = $null,
 
     [ValidateSet('train', 'ingest')]
     [string]$Mode = 'train',
 
-    [ValidateSet(1, 2, 3, 4)]
+    [ValidateSet(1, 2, 3)]
     [int]$Phase = 3,
 
     # Path to a pre-built training artifact (.pt from export_dataset stage).
@@ -21,10 +21,8 @@ param(
     [Nullable[int]]$BatchSize = $null,
 
     [Nullable[bool]]$Resume = $null,
-    [string]$FreezeEncoder = 'true',
-    [double]$EncoderLrScale = 0.01,
     # Phase 2: scale factor applied to lr for all encoder parameters.
-    # Default 0.1 protects Phase 1 geometry — encoder drifts 10x slower.
+    # Default 0.1 protects Phase 1 geometry - encoder drifts 10x slower.
     [double]$Phase2EncoderLrScale = 0.1,
     # Phase 1: weight applied to the staple role-pair NT-Xent loss term.
     # 0 disables staple pairs; default 0.5 = half weight of noise-aug term.
@@ -33,21 +31,6 @@ param(
     # Start high for soft gradients, end near Phase 1 value to sharpen clusters.
     [double]$Phase2TempStart = 0.3,
     [double]$Phase2TempEnd = 0.07,
-    [int]$Patience = 10,
-    [double]$TempStart = 0.1,
-    [double]$TempEnd = 0.05,
-    # Phase 4: use artifact deck positions (default $false).
-    # Set -SynergyOnly $true to load 630k synergy positions from DB instead —
-    # this causes encoder collapse even at low lr_scale; avoid unless testing.
-    [bool]$SynergyOnly = $false,
-    [int]$SynBatchSize = 256,
-
-    # Phase 4 synergy-guided training weights
-    [int]$SynPerEpoch = 1000,
-    [double]$ComboWeight = 3.0,
-    [double]$AbilityWeight = 2.0,
-    [double]$TribalWeight = 1.5,
-    [int]$P4SynergyLimit = 300,
 
     [int]$Sample = 500000,
     [int]$RoleDemandSample = 100000,
@@ -62,8 +45,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
-#   Phase 1-2 → mtg_dataset.pt       (text equivalence + ability-trigger synergy)
-#   Phase 3-4 → mtg_commanders.pt    (commander BPR from synergy_edges)
+#   Phase 1-2 -> mtg_dataset.pt       (text equivalence + ability-trigger synergy)
+#   Phase 3-4 -> mtg_commanders.pt    (commander BPR from synergy_edges)
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
@@ -135,11 +118,11 @@ function Show-PostTrainingGuidance {
 
     $dsArg   = if ($Dataset) { ' -Dataset "' + $Dataset + '"' } else { '' }
     $ckpt    = $CheckpointsDir
-    $sep     = '─────────────────────────────────────────────────────────────'
+    $sep     = '-------------------------------------------------------------'
 
     Write-Host ''
     Write-Host $sep -ForegroundColor DarkGray
-    Write-Host (' Phase ' + $Phase + ' complete — evaluation guidance') -ForegroundColor Cyan
+    Write-Host (' Phase ' + $Phase + ' complete - evaluation guidance') -ForegroundColor Cyan
     Write-Host $sep -ForegroundColor DarkGray
 
     switch ($Phase) {
@@ -156,7 +139,7 @@ function Show-PostTrainingGuidance {
             Write-Host ' Regression check: if mana-dork neighbors diverge after staple-pair'
             Write-Host ' training, reduce -StaplePairWeight (default 0.5) and re-run Phase 1.'
             Write-Host ''
-            Write-Host ' Next step — train Phase 2:'
+            Write-Host ' Next step -train Phase 2:'
             Write-Host ('   .\scripts\run.ps1 -Train 2' + $dsArg)
             Write-Host ''
             Write-Host ' Phase 2 NT-Xent loss benchmarks (batch_size=512, ceiling=6.93):'
@@ -168,14 +151,14 @@ function Show-PostTrainingGuidance {
         2 {
             Write-Host ''
             Write-Host ' NT-Xent loss scale  (batch_size=512, random ceiling = ln(1024) = 6.93):' -ForegroundColor White
-            Write-Host '   > 6.5       barely learning — check synergy_edges row count'
+            Write-Host '   > 6.5       barely learning - check synergy_edges row count'
             Write-Host '   5.0-6.2     good'
             Write-Host '   3.5-5.0     excellent'
-            Write-Host '   < 3.5       overfit risk — shorten training'
+            Write-Host '   < 3.5       overfit risk - shorten training'
             Write-Host ''
             Write-Host ' Most learning happens in the second half of training as temperature'
             Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
-            Write-Host ' epoch 30 in the 5.5-6.2 range is normal — evaluate geometry,'
+            Write-Host ' epoch 30 in the 5.5-6.2 range is normal - evaluate geometry,'
             Write-Host ' not just loss:'
             Write-Host ''
             Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
@@ -186,47 +169,21 @@ function Show-PostTrainingGuidance {
             Write-Host ''
             Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
             Write-Host ''
-            Write-Host ' Next step — download commanders artifact then train Phase 3:'
+            Write-Host ' Next step -download commanders artifact then train Phase 3:'
             Write-Host '   .\scripts\download_commanders.ps1'
             Write-Host '   .\scripts\run.ps1 -Train 3'
         }
         3 {
             Write-Host ''
             Write-Host ('   Checkpoint: ' + $ckpt + '\phase3_best.pt') -ForegroundColor White
+            Write-Host '   (CommanderScorer head only — Phase 2 encoder frozen)'
             Write-Host ''
-            Write-Host ' Upload to API and run a test deck generation:'
+            Write-Host ' Upload scorer and encoder to API:'
             Write-Host '   curl -X POST $API_HOST/admin/checkpoint'
             Write-Host '        -H "x-admin-token: $ADMIN_TOKEN"'
             Write-Host ('        -F "file=@' + $ckpt + '\phase3_best.pt"')
             Write-Host '        -F "name=phase3_best"'
             Write-Host '   # Then open the UI or POST /decks/generate to verify output.'
-            Write-Host ''
-            Write-Host ' Watch for score compression: if all cosine similarities converge'
-            Write-Host ' toward 1.0, the encoder over-updated.  Re-run with -FreezeEncoder'
-            Write-Host ' true, or lower -Phase2EncoderLrScale.'
-            Write-Host ''
-            Write-Host ' Next step — train Phase 4:'
-            Write-Host '   .\scripts\run.ps1 -Train 4'
-        }
-        4 {
-            Write-Host ''
-            Write-Host ('   Checkpoint: ' + $ckpt + '\phase4_best.pt') -ForegroundColor White
-            Write-Host ''
-            Write-Host ' Evaluate deck quality:'
-            Write-Host '   cd services\trainer'
-            Write-Host ('   ..\..\. venv\Scripts\python.exe eval_deck.py' +
-                        ' --checkpoint "' + $ckpt + '\phase4_best.pt"' +
-                        ' --dataset "' + $Dataset + '"')
-            Write-Host ''
-            Write-Host ' Upload and hot-swap the model (no restart needed):'
-            Write-Host '   curl -X POST $API_HOST/admin/checkpoint'
-            Write-Host '        -H "x-admin-token: $ADMIN_TOKEN"'
-            Write-Host ('        -F "file=@' + $ckpt + '\phase4_best.pt"')
-            Write-Host '        -F "name=phase4_best"'
-            Write-Host ''
-            Write-Host ' If early-stopping fired before the epoch limit and loss was still'
-            Write-Host ' falling, resume training:'
-            Write-Host ('   .\scripts\run.ps1 -Train 4' + $dsArg + ' -Resume:$true')
         }
     }
 
@@ -291,23 +248,16 @@ function Assert-Prerequisites {
         }
     }
 
-    # -- Warm-start checkpoint (train phase 3/4 with --resume) ------------
-    if ($mode -eq 'train' -and $phase -ge 3) {
-        # Mirror the default-resume logic from the train block
-        $resolvedResume = if ($null -ne $resume) { [bool]$resume } else { $true }
-        if ($resolvedResume) {
-            $ckptMap = @{ 3 = "phase2_best.pt"; 4 = "phase3_best.pt" }
-            $needed  = $ckptMap[$phase]
-            if ($needed) {
-                Write-Host -NoNewline "  Checkpoint $needed"
-                if (Test-Path (Join-Path $checkpointsDir $needed)) {
-                    Write-Host "[found]" -ForegroundColor Green
-                } else {
-                    Write-Host "[missing - will cold-start]" -ForegroundColor Yellow
-                    Write-Host "    Expected: $checkpointsDir\$needed" -ForegroundColor Yellow
-                    Write-Host "    Use -Resume:$false to suppress this warning." -ForegroundColor Yellow
-                }
-            }
+    # -- Phase 3 requires phase2_best (encoder is frozen, not optional) ------
+    if ($mode -eq 'train' -and $phase -eq 3) {
+        Write-Host -NoNewline "  Checkpoint phase2_best.pt  "
+        if (Test-Path (Join-Path $checkpointsDir 'phase2_best.pt')) {
+            Write-Host "[found]" -ForegroundColor Green
+        } else {
+            Write-Host "[MISSING]" -ForegroundColor Red
+            Write-Host "    Phase 3 requires a phase2_best checkpoint." -ForegroundColor Yellow
+            Write-Host "    Run Phase 2 first: .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
+            $ok = $false
         }
     }
 
@@ -322,11 +272,7 @@ Assert-Prerequisites -mode $Mode -phase $Phase -resume $Resume -checkpointsDir $
 $env:PYTHONUNBUFFERED = '1'
 
 if ($Mode -eq 'train') {
-    # DATABASE_URL is only required when no artifact is provided, OR for
-    # Phase 4 synergy-only mode: the commanders artifact has no synergy_positions
-    # key, so train.py falls back to computing them from the DB at runtime.
-    # All other artifact-based phases are fully self-contained.
-    $needsDb = (-not $Dataset) -or ($Phase -eq 4 -and $SynergyOnly)
+    $needsDb = -not $Dataset
     if ($needsDb) {
         $env:DATABASE_URL = Ensure-SyncDbUrl
     }
@@ -335,8 +281,7 @@ if ($Mode -eq 'train') {
     if ($null -eq $Epochs) {
         if ($Phase -eq 1)    { $Epochs = 50 }
         elseif ($Phase -eq 2) { $Epochs = 60 }
-        elseif ($Phase -eq 3) { $Epochs = 50 }
-        else                  { $Epochs = 30 }
+        else                  { $Epochs = 50 }
     }
 
     if ($null -eq $LearningRate) {
@@ -345,9 +290,8 @@ if ($Mode -eq 'train') {
     }
 
     if ($null -eq $Resume) {
-        if ($Phase -le 1) { $Resume = $false }
-        elseif ($Phase -eq 4) { $Resume = $false }
-        else { $Resume = $true }
+        # Phase 2 warm-starts from phase1_best; Phases 1 and 3 do not use --resume.
+        if ($Phase -eq 2) { $Resume = $true } else { $Resume = $false }
     }
 
     if ($null -eq $BatchSize) {
@@ -381,42 +325,7 @@ if ($Mode -eq 'train') {
         $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
     }
 
-    # Phase 3: protect Phase 2 geometry.
-    # --freeze-encoder skips BPR training entirely and copies Phase 2 weights
-    # forward as phase3_best — use this when the encoder must be preserved
-    # verbatim.  Otherwise encoder_lr_scale throttles the update rate; the
-    # commanders artifact generates far more gradient updates per epoch than
-    # human decklists, so even 0.1× can cause collapse over 50 epochs.
-    if ($Phase -eq 3) {
-        $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
-        if ($resolvedFreezeEncoder) {
-            $cmd += '--freeze-encoder'
-        } else {
-            $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $Phase2EncoderLrScale)
-        }
-    }
-
-    if ($Phase -eq 4) {
-        $resolvedFreezeEncoder = $FreezeEncoder -notin @('false', '0', 'no', '$false')
-        if ($resolvedFreezeEncoder) {
-            $cmd += '--freeze-encoder'
-        } else {
-            $cmd += @('--no-freeze-encoder', '--encoder-lr-scale', $EncoderLrScale)
-        }
-        $cmd += @('--patience', $Patience)
-        $cmd += @(
-            '--temp-start', $TempStart, '--temp-end', $TempEnd,
-            '--ability-weight', $AbilityWeight,
-            '--tribal-weight', $TribalWeight,
-            '--synergy-limit', $P4SynergyLimit
-        )
-        if ($SynergyOnly) {
-            $cmd += @('--synergy-only', '--syn-batch-size', $SynBatchSize)
-        } else {
-            $cmd += @('--no-synergy-only', '--syn-per-epoch', $SynPerEpoch,
-                      '--combo-weight', $ComboWeight)
-        }
-    }
+    # Phase 3: encoder is frozen in train.py — no extra flags needed.
 
     Write-Host "Running trainer with args: $($cmd -join ' ')"
     Set-Location (Join-Path $RepoRoot 'services\trainer')

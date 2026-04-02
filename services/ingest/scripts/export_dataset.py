@@ -52,11 +52,12 @@ from __future__ import annotations
 import csv
 import itertools
 import json
-import hashlib
+
 import logging
 import math
 import os
 import random
+import subprocess
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +83,21 @@ OUTPUT_PATH              = Path(os.environ.get("DATASET_OUTPUT", "/data/mtg_data
 MAX_PER_CLASS            = int(os.environ.get("COMP_MAX_PER_CLASS", "500"))
 STAPLE_MAX_PER_CATEGORY  = int(os.environ.get("STAPLE_MAX_PER_CATEGORY", "2000"))
 _MANA_ARTIFACTS_CSV      = Path(os.environ.get("MANA_ARTIFACTS_CSV", "/app/edhrec/mana-artifacts.csv"))
+
+try:
+    GIT_COMMIT = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    log.info("git_commit: %s", GIT_COMMIT)
+except (FileNotFoundError, subprocess.CalledProcessError):
+    GIT_COMMIT = os.environ.get("GIT_COMMIT", "")
+    if not GIT_COMMIT:
+        log.error(
+            "git not available in container and GIT_COMMIT env var is not set. "
+            "Re-run with: docker compose run -e GIT_COMMIT=$(git rev-parse HEAD) ..."
+        )
+        raise SystemExit(1)
+    log.info("git_commit (from env): %s", GIT_COMMIT)
 
 
 def _type_bucket(type_line: str) -> str:
@@ -197,17 +213,44 @@ def _build_functional_pairs(
 def _cmc_weight(cmc_a: float, cmc_b: float) -> float:
     """Pair weight based on CMC proximity.
 
-    Same CMC → 1.0 (full signal).  3+ CMC apart → 0.5 (soft signal; cards
+    Same CMC → 1.0 (full signal).  2+ CMC apart → 0.5 (soft signal; cards
     probably occupy different deck slots even if they share a role).
     """
     delta = abs(cmc_a - cmc_b)
     if delta == 0:
         return 1.0
     elif delta <= 1:
-        return 0.85
-    elif delta <= 2:
-        return 0.70
+        return 0.75
     return 0.50
+
+
+def _primary_type(type_line: str) -> str:
+    """Extract the primary card type for pair-weight comparisons.
+
+    Multi-type cards (e.g. Artifact Creature) use the most play-relevant type:
+    Creature beats Artifact so that mana dorks are grouped with creatures, not
+    artifacts.  Instant beats Sorcery is moot since they're mutually exclusive.
+    """
+    tl = type_line.lower()
+    for t in ("instant", "sorcery", "creature", "enchantment", "planeswalker", "artifact", "battle", "land"):
+        if t in tl:
+            return t
+    return "other"
+
+
+def _pair_weight(cmc_a: float, cmc_b: float, type_a: str, type_b: str) -> float:
+    """Combined pair weight: CMC proximity × type-match factor.
+
+    Same primary type → full CMC weight.  Different primary type → 0.75×.
+    This downweights cross-type pairs within a role bin (e.g. Swords to
+    Plowshares (Instant) paired with Profane Procession (Enchantment) or
+    Utter End (Instant) paired with Grasp of Fate (Enchantment)) while
+    still keeping them as soft positives.
+    """
+    w = _cmc_weight(cmc_a, cmc_b)
+    if type_a != type_b:
+        w *= 0.75
+    return w
 
 
 def _build_staple_pairs(
@@ -254,6 +297,9 @@ def _build_staple_pairs(
     def _cmc(cid: str) -> float:
         return float(card_meta.get(cid, {}).get("cmc") or 0.0)
 
+    def _ptype(cid: str) -> str:
+        return _primary_type(card_meta.get(cid, {}).get("type_line", ""))
+
     categories: dict[str, list[str]] = {}
 
     # 1. mana_rocks from EDHREC CSV (high-precision mana-artifact category)
@@ -286,7 +332,7 @@ def _build_staple_pairs(
                     categories[category] = ids
                     log.info("Staple pairs: %s → %d cards", category, len(ids))
 
-    # Generate CMC-weighted pairs with a proportional cap per category
+    # Generate weighted pairs with a proportional cap per category
     a_list: list[int] = []
     b_list: list[int] = []
     w_list: list[float] = []
@@ -304,7 +350,7 @@ def _build_staple_pairs(
         for a, b in all_pairs:
             a_list.append(id_to_idx[a])
             b_list.append(id_to_idx[b])
-            w_list.append(_cmc_weight(_cmc(a), _cmc(b)))
+            w_list.append(_pair_weight(_cmc(a), _cmc(b), _ptype(a), _ptype(b)))
 
     log.info(
         "Staple pairs: %d total across %d categories",
@@ -368,6 +414,13 @@ def main() -> None:
         "synergy_count":          int(len(a_idx)),
         "effect_peer_count":      int(len(ep_a)),
         "training_path":          "compositional",
+        "signal_config": {
+            "include_ability_trigger": False,
+            "include_effect_peer":     True,
+            "include_commander_value": False,
+            "phase2_signal":           "combo+effect_peer",
+        },
+        "git_commit":             GIT_COMMIT,
         "created_at":             datetime.now(timezone.utc).isoformat(),
     }
 
@@ -399,10 +452,6 @@ def main() -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     log.info("Saving artifact → %s", OUTPUT_PATH)
     torch.save(artifact, OUTPUT_PATH)
-
-    sha256 = hashlib.sha256(OUTPUT_PATH.read_bytes()).hexdigest()
-    meta["sha256"] = sha256
-    log.info("SHA256: %s", sha256)
 
     meta_path = OUTPUT_PATH.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2))

@@ -73,11 +73,12 @@ Environment variables
 
 from __future__ import annotations
 
-import hashlib
+
 import json
 import logging
 import os
 import random
+import subprocess
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,6 +109,21 @@ from mtg_sql import commanders
 OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
 MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
 MAX_POSITIVES = int(os.environ.get("COMMANDERS_MAX_POS", "300"))
+
+try:
+    GIT_COMMIT = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    log.info("git_commit: %s", GIT_COMMIT)
+except (FileNotFoundError, subprocess.CalledProcessError):
+    GIT_COMMIT = os.environ.get("GIT_COMMIT", "")
+    if not GIT_COMMIT:
+        log.error(
+            "git not available in container and GIT_COMMIT env var is not set. "
+            "Re-run with: docker compose run -e GIT_COMMIT=$(git rev-parse HEAD) ..."
+        )
+        raise SystemExit(1)
+    log.info("git_commit (from env): %s", GIT_COMMIT)
 
 
 # ── Step 4: Legal commanders ──────────────────────────────────────────────────
@@ -382,6 +398,7 @@ def main() -> None:
         "max_positives":  MAX_POSITIVES,
         "source":             "decompose+staples",
         "synergy_pos_count":  len(synergy_positions),
+        "git_commit":         GIT_COMMIT,
         "created_at":         datetime.now(timezone.utc).isoformat(),
     }
 
@@ -398,10 +415,6 @@ def main() -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     log.info("Saving artifact → %s", OUTPUT_PATH)
     torch.save(artifact, OUTPUT_PATH)
-
-    sha256 = hashlib.sha256(OUTPUT_PATH.read_bytes()).hexdigest()
-    meta["sha256"] = sha256
-    log.info("SHA256: %s", sha256)
 
     meta_path = OUTPUT_PATH.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2))

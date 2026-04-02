@@ -225,7 +225,7 @@ async def generate(
 
         loop = asyncio.get_event_loop()
 
-        ckpt_name = checkpoint if checkpoint != "latest" else "phase4_best"
+        ckpt_name = checkpoint if checkpoint != "latest" else "phase3_best"
         _progress(0.05, "Loading model…")
         model = await loop.run_in_executor(None, inference.get_model, ckpt_name)
 

@@ -56,6 +56,12 @@ DAMAGE: str = (
 
 EXILE: str = (
     f"oracle_text ILIKE '%%exile target%%'"
+    # Exclude graveyard-hate / graveyard-cost cards.  Two templates appear:
+    #   "exile target card from a graveyard"  (Shadowfeed — targeted GY hate)
+    #   "exile a card from your graveyard"    (Stonerise Spirit — GY cost)
+    # Both operate on the graveyard, not the battlefield, and should never
+    # be positive peers of Swords to Plowshares / Path to Exile.
+    f" AND oracle_text NOT ILIKE '%%exile%%card%%from%%graveyard%%'"
     f" AND {_NOT_LAND}"
 )
 

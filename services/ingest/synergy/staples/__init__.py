@@ -41,23 +41,31 @@ Environment variables
 Inclusion rates (at INCLUSION_FACTOR=1.0, INCLUDE_LANDS=true) reflect a
 real 99-card Commander deck infrastructure split:
 
-  ramp          0.12  → 36 cards  (mana rocks + land ramp + dorks)
-  removal       0.12  → 36 cards  (targeted destroy/exile/bounce/-X/-X)
-  sweeper       0.06  → 18 cards  (board wipes)
-  draw_engine   0.08  → 24 cards  (repeatable draw permanents)
-  draw_spell    0.06  → 18 cards  (one-shot draw instants/sorceries)
-  interaction   0.06  → 18 cards  (counterspells + protection)
-  manabase      0.16  → 48 cards  (colored-mana lands)
-  utilityland   0.06  → 18 cards  (fetch lands + utility lands)
-  ─────────────────────────────────
-  total         0.72  → 216 / 300 MAX_POSITIVES
+  mana_rocks      0.05  → 15 cards  (artifact mana producers)
+  land_ramp       0.04  → 12 cards  (non-creature land-fetch spells)
+  mana_dorks      0.03  →  9 cards  (creature mana producers)
+  removal_exile   0.03  →  9 cards  (exile target — bypasses graveyard)
+  removal_destroy 0.04  → 12 cards  (destroy target — fires death triggers)
+  removal_damage  0.03  →  9 cards  (targeted damage / -X/-X)
+  removal_bounce  0.02  →  6 cards  (return target to hand)
+  sweeper         0.06  → 18 cards  (board wipes)
+  draw_engine     0.08  → 24 cards  (repeatable draw permanents)
+  draw_spell      0.06  → 18 cards  (one-shot draw instants/sorceries)
+  interaction     0.06  → 18 cards  (counterspells + protection)
+  manabase        0.16  → 48 cards  (colored-mana lands)
+  utilityland     0.06  → 18 cards  (fetch lands + utility lands)
+  ──────────────────────────────────
+  total           0.72  → 216 / 300 MAX_POSITIVES
 """
 
 from __future__ import annotations
 
 import os
 
-from mtg_sql.staples import ramp, removal, sweeper, draw_engine, draw_spell, interaction
+from mtg_sql.staples import (
+    removal, sweeper, draw_engine, draw_spell, interaction,
+    mana_rocks, mana_dorks, land_ramp,
+)
 
 from . import manabase, utilityland
 
@@ -67,16 +75,33 @@ INCLUSION_FACTOR: float = float(os.environ.get("STAPLES_INCLUSION_FACTOR", "1.0"
 INCLUDE_LANDS: bool = os.environ.get("STAPLES_INCLUDE_LANDS", "true").lower() != "false"
 
 # ── Category registry ─────────────────────────────────────────────────────────
+#
+# Ramp is split into three sub-bins so mana rocks, land ramp, and mana dorks
+# cluster separately — Sol Ring should not be a positive peer of Llanowar Elves.
+#
+# Removal is split into four sub-bins matching the MTG rules distinction:
+#   removal_exile   — bypasses graveyard; death triggers do NOT fire
+#   removal_destroy — creature goes to graveyard; death triggers fire
+#   removal_damage  — targeted damage / -X/-X; death triggers fire
+#   removal_bounce  — soft removal; creature returns to hand
+# These sub-bins must stay separate so that death-trigger commanders (Syr Konrad,
+# Teysa) receive only destroy/damage removal as positives, not exile/bounce.
+# Rates within each group sum to the original combined rate (ramp=0.12, removal=0.12).
 
 _BASE: dict[str, tuple[str, float]] = {
-    "ramp":        (ramp.SQL,        ramp.RATE),
-    "removal":     (removal.SQL,     removal.RATE),
-    "sweeper":     (sweeper.SQL,     sweeper.RATE),
-    "draw_engine": (draw_engine.SQL, draw_engine.RATE),
-    "draw_spell":  (draw_spell.SQL,  draw_spell.RATE),
-    "interaction": (interaction.SQL, interaction.RATE),
-    "manabase":    (manabase.SQL,    manabase.RATE),
-    "utilityland": (utilityland.SQL, utilityland.RATE),
+    "mana_rocks":      (mana_rocks.SQL,    0.05),
+    "land_ramp":       (land_ramp.SQL,     0.04),
+    "mana_dorks":      (mana_dorks.SQL,    0.03),
+    "removal_exile":   (removal.EXILE,     0.03),
+    "removal_destroy": (removal.DESTROY,   0.04),
+    "removal_damage":  (removal.DAMAGE,    0.03),
+    "removal_bounce":  (removal.BOUNCE,    0.02),
+    "sweeper":         (sweeper.SQL,       sweeper.RATE),
+    "draw_engine":     (draw_engine.SQL,   draw_engine.RATE),
+    "draw_spell":      (draw_spell.SQL,    draw_spell.RATE),
+    "interaction":     (interaction.SQL,   interaction.RATE),
+    "manabase":        (manabase.SQL,      manabase.RATE),
+    "utilityland":     (utilityland.SQL,   utilityland.RATE),
 }
 
 STAPLE_CATEGORIES: dict[str, tuple[str, float]] = {

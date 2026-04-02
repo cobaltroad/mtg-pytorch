@@ -1,6 +1,6 @@
 """Model architecture definitions for inference.
 
-These are the CardEncoder and DeckConstructor nn.Module classes copied from
+These are the CardEncoder and CommanderScorer nn.Module classes copied from
 services/trainer/train.py — no training code, no data loading, just the
 architecture needed to load a checkpoint and run inference.
 """
@@ -29,34 +29,27 @@ class CardEncoder(nn.Module):
         return F.normalize(self.net(x), dim=-1)
 
 
-class DeckConstructor(nn.Module):
-    """
-    Given a commander embedding + partial deck state, scores candidate cards.
+class CommanderScorer(nn.Module):
+    """Scores a card relative to a commander.
 
-    Architecture: transformer decoder over the partial deck sequence,
-    attending to the commander as a prefix token.
+    Takes the frozen Phase 2 encoder projections of both cards and returns
+    a scalar compatibility score.  The encoder is never updated by this head.
     """
 
-    def __init__(self, embed_dim: int = 256, n_heads: int = 4, n_layers: int = 3):
+    def __init__(self, embed_dim: int = 256):
         super().__init__()
-        self.card_encoder = CardEncoder(output_dim=embed_dim)
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=embed_dim, nhead=n_heads, dim_feedforward=embed_dim * 4,
-            dropout=0.1, batch_first=True,
+        self.net = nn.Sequential(
+            nn.Linear(embed_dim * 2, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, 1),
         )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
-        self.scorer = nn.Linear(embed_dim, 1)
-        # Learnable query token used during Phase 4 training (not used at inference).
-        # Included here so state_dict keys match the trainer checkpoint.
-        self.query_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
-    def forward(
-        self,
-        commander_emb: torch.Tensor,    # (B, D)
-        deck_embs: torch.Tensor,         # (B, T, D)  partial deck so far
-        candidate_embs: torch.Tensor,    # (B, C, D)  cards to score
-    ) -> torch.Tensor:
-        memory = commander_emb.unsqueeze(1)             # (B, 1, D)
-        deck_ctx = self.decoder(deck_embs, memory)      # (B, T, D)
-        ctx = deck_ctx.mean(dim=1, keepdim=True)        # (B, 1, D)
-        return (ctx * candidate_embs).sum(dim=-1)       # (B, C)
+    def forward(self, z_cmd: torch.Tensor, z_card: torch.Tensor) -> torch.Tensor:
+        """
+        z_cmd  : (D,) or (N, D) — commander projection.
+        z_card : (N, D) — candidate card projections.
+        Returns: (N,) scores.
+        """
+        if z_cmd.dim() == 1:
+            z_cmd = z_cmd.unsqueeze(0).expand_as(z_card)
+        return self.net(torch.cat([z_cmd, z_card], dim=-1)).squeeze(-1)
