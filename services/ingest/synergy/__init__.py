@@ -1,64 +1,84 @@
 """Synergy pattern registry for the MTG ingest pipeline.
 
-Sub-modules, each covering one broad theme:
+Sub-packages and modules
+------------------------
 
-* :mod:`events`           — core event triggers (ETB, dies, attacks, cast, phase,
-                            landfall, landfall_draw, discard, token, counter,
-                            combat_damage, sacrifice, sac_outlet,
-                            cast_creature_spell) and their producer SQL fragments.
-* :mod:`lifegain`         — four lifegain consumer patterns (``lifegain``,
-                            ``lifegain_threshold``, ``lifegain_replacement``,
-                            ``lifegain_total``) and their producer SQL fragments.
-* :mod:`archetypes`       — commander-agnostic archetype engines (skullclamp
-                            mini-combo, graveyard reanimator/fill, artifact
-                            matters, modified, aura/enchantress, play_from_exile /
-                            cascade).  Written as ``score_type='card_synergy'``
-                            so they flow into the dataset artifact, not the
-                            commander artifact.
-* :mod:`tribal`           — dynamically generated tribal patterns for all tribes
-                            in :data:`TRIBES`, including Zombie/Angel cross-synergy
-                            overrides.
-* :mod:`utility`          — utility-role patterns present in most Commander decks:
-                            draw engines (``spell_draw``, ``creature_draw``,
-                            ``wheel``), removal (``targeted_removal``, ``burn``,
-                            ``wither``, ``bounce``, ``sweeper``), tutors
-                            (``tutor_creature``, ``tutor_artifact``, ``tutor_any``),
-                            interaction (``counterspell_hard``,
-                            ``counterspell_conditional``, ``counterspell_redirect``,
-                            ``protection``), and combat tricks (``evasion_grant``,
-                            ``combat_tricks``).
-* :mod:`commander_value`  — "free-if-commander" and persistent-bonus cards that
-                            reward having a commander in play (Deflecting Swat,
-                            Fierce Guardianship, Loyal Apprentice, Jeska's Will,
-                            Mox Amber, …).  Producers are low-MV (CMC ≤ 2)
-                            legendary creatures/planeswalkers.  These edges use
-                            ``score_type = 'commander_value'`` and are built by
-                            the dedicated ``compute_commander_value_synergy()``
-                            stage in ``pipeline.py``.
-* :mod:`roles`            — functional deck-role patterns (``ramp``, ``draw_one``,
-                            ``repeatable_draw``, ``removal``, ``sweeper``, ``tutor``,
-                            ``protection``, ``win_condition``, ``anthem``,
-                            ``token_generator``, ``recursion``, ``interaction``,
-                            ``combat_trick``, ``aura_equipment``, ``etb_trigger``,
-                            ``wide_payoff``, ``sac_outlet``, ``discard_trigger``,
-                            ``mana_land``, ``utility_land``).
-                            Stored as ``ability_type = 'role'`` rows in
-                            ``card_abilities``.
+* :mod:`triggered_ability` — oracle-text patterns for triggered abilities,
+                             aggregated as ``TRIGGERED_ABILITY_PATTERNS``.
+                             Sub-modules: ``attack``, ``counter``, ``lifegain``,
+                             ``draw``, ``creature_etb``, ``sacrifice``.
 
-* :mod:`commander_mechanics` — producer SQL for commander-specific
-                            pattern keys (``goad``, ``extra_combat``, ``monarch``,
-                            ``initiative``, ``forced_attack``, ``poison_infect``,
-                            ``group_hug``, ``second_spell``, etc.).  Merged into
-                            :data:`PRODUCER_MAP` so ``compute_textmatch_synergy`` builds
-                            edges for commanders tagged by ``decompose_commanders.py``.
-                            Also used by that script directly for gap analysis.
+* :mod:`activated_ability` — oracle-text patterns for activated abilities,
+                             aggregated as ``ACTIVATED_ABILITY_PATTERNS``.
+                             Sub-modules: ``mana_producer``, ``sac_outlet``.
 
-``pipeline.py`` imports :data:`TRIGGER_PATTERNS`, :data:`PRODUCER_MAP`,
-:data:`CONSUMER_MAP`, :data:`TRIBES`, :data:`ROLE_PATTERNS`,
-:data:`LAND_ROLE_PATTERNS`, and :data:`CARD_SYNERGY_MAP` from this package —
-no other changes to the pipeline are needed when a sub-module is extended.
-Commander-specific maps (``commander_value``) are imported directly by
-``stages/commander.py``.
+* :mod:`combat`            — oracle-text patterns for combat-enabler cards,
+                             aggregated as ``COMBAT_PATTERNS``.
+                             Sub-module: ``combat``.
+
+* :mod:`tribal`            — dynamically generated tribal patterns for all
+                             supported tribes in :data:`TRIBES`.
+                             Exports ``TRIBAL_PATTERNS``, ``TRIBES``,
+                             ``tribal_sql``, ``oracle_mention_sql``.
+
+* :mod:`staples`           — color-identity-gated Commander staple categories
+                             (mana rocks, land ramp, mana dorks, removal,
+                             sweeper, draw, interaction, lands).  Exports
+                             :data:`STAPLE_CATEGORIES` used by
+                             ``export_dataset_commanders.py``.
+
+* :mod:`commander_mechanics` — producer and consumer SQL fragments keyed by
+                             mechanic pattern key (e.g. ``counter_placement``,
+                             ``attack_trigger``, ``tribal_elf``).  Exports
+                             :data:`PATTERN_KEY_TO_PRODUCER_SQL` and
+                             :data:`PATTERN_KEY_TO_CONSUMER_SQL`.  Used by
+                             ``stages/decompose.py`` for gap analysis and by
+                             ``export_dataset_commanders.py`` to build
+                             per-commander positive sets.
+
+* :mod:`xmage`             — XMage-class producer SQL maps used by
+                             ``compute_xmage_synergy``.  Exports
+                             :data:`XMAGE_PRODUCER_MAP` and
+                             :data:`SPELLCAST_TRIGGER_PRODUCER_MAP`.
+
+* :mod:`mechanic_keys`     — ``MechanicKey`` StrEnum: single source of truth
+                             for all mechanic/synergy key strings.
+
+Package-level exports
+---------------------
+
+:data:`PRODUCER_MAP`
+    Merged dict of ``PATTERN_KEY_TO_PRODUCER_SQL`` (from
+    ``commander_mechanics``) plus ``"mana_rock"`` SQL.  Consumed by
+    ``stages/dataset.py::compute_textmatch_synergy`` to build
+    ``ability_trigger`` synergy edges.
+
+:data:`CONSUMER_MAP`
+    Alias for ``PATTERN_KEY_TO_CONSUMER_SQL`` from ``commander_mechanics``.
+
+:data:`XMAGE_PRODUCER_MAP`, :data:`SPELLCAST_TRIGGER_PRODUCER_MAP`
+    Re-exported from ``xmage`` for use by ``compute_xmage_synergy``.
+
+Typical import pattern by stage
+--------------------------------
+``stages/tag.py``
+    imports ``TRIGGERED_ABILITY_PATTERNS``, ``ACTIVATED_ABILITY_PATTERNS``,
+    ``COMBAT_PATTERNS`` from the sub-packages, and ``TRIBAL_PATTERNS`` from
+    ``synergy.tribal``.
+
+``stages/dataset.py``
+    imports ``PRODUCER_MAP``, ``XMAGE_PRODUCER_MAP``,
+    ``SPELLCAST_TRIGGER_PRODUCER_MAP`` from this package.
+
+``stages/decompose.py``
+    imports ``PATTERN_KEY_TO_PRODUCER_SQL``, ``PATTERN_KEY_TO_CONSUMER_SQL``
+    from ``synergy.commander_mechanics``, and ``TRIBES`` from
+    ``synergy.tribal``.
+
+``export_dataset_commanders.py``
+    imports ``PATTERN_KEY_TO_PRODUCER_SQL``, ``PATTERN_KEY_TO_CONSUMER_SQL``
+    from ``synergy.commander_mechanics``, and ``STAPLE_CATEGORIES`` from
+    ``synergy.staples``.
 """
 
 from __future__ import annotations
