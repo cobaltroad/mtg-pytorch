@@ -360,6 +360,34 @@ class CardEncoder(nn.Module):
         return F.normalize(self.net(x), dim=-1)
 
 
+class CommanderScorer(nn.Module):
+    """Phase 3 scoring head trained on top of a frozen Phase 2 CardEncoder.
+
+    Takes a pair of projected embeddings (commander, candidate card) and
+    produces a scalar affinity score.  The encoder is kept strictly frozen
+    during Phase 3 so that Phase 2's card-similarity geometry is preserved
+    exactly — Phase 3 learns how to *read* that geometry for commander-specific
+    scoring rather than overwriting it.
+    """
+
+    def __init__(self, embed_dim: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(embed_dim * 2, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, 1),
+        )
+
+    def forward(
+        self,
+        z_cmd: torch.Tensor,   # (D,) or (K, D)
+        z_card: torch.Tensor,  # (K, D)
+    ) -> torch.Tensor:          # (K,)
+        if z_cmd.dim() == 1:
+            z_cmd = z_cmd.unsqueeze(0).expand_as(z_card)
+        return self.net(torch.cat([z_cmd, z_card], dim=-1)).squeeze(-1)
+
+
 # ── Datasets ──────────────────────────────────────────────────────────────────
 
 
@@ -686,20 +714,24 @@ def train_synergy_phase(
 
 
 def train_deck_phase(
-    model: CardEncoder,
+    encoder: CardEncoder,
+    scorer: CommanderScorer,
     data: dict,
     embeddings: dict[str, np.ndarray],
     epochs: int,
     lr: float,
     batch_size: int = 32,
-    encoder_lr_scale: float = 1.0,
     checkpoint_prefix: str = "phase",
 ):
     """Phase 3: BPR ranking loss on the commanders artifact deck entries.
 
-    For each (commander, positive_card, negative_card) triple, push the
-    commander embedding closer to synergy-positive cards than to random
-    color-legal cards.
+    The Phase 2 encoder is frozen — its card-similarity geometry is preserved
+    exactly.  Only the CommanderScorer head is trained, learning to read that
+    geometry for commander-specific card scoring.
+
+    All card embeddings are projected through the frozen encoder once at the
+    start of training and cached.  Per-step cost is purely the scorer forward
+    and backward pass.
 
     BPR loss: -log(sigmoid(score_pos - score_neg))
     """
@@ -709,28 +741,31 @@ def train_deck_phase(
         return {"phase": 3, "best_loss": None, "best_epoch": None,
                 "final_epoch": 0, "stopped_early": False}
 
-    device = next(model.parameters()).device
+    device = next(encoder.parameters()).device
 
+    # Freeze encoder and pre-project the full card pool once.
+    encoder.requires_grad_(False)
+    encoder.eval()
     all_ids = list(embeddings.keys())
-    all_embs = torch.from_numpy(
+    id_to_idx = {cid: i for i, cid in enumerate(all_ids)}
+    all_raw = torch.from_numpy(
         np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
     ).to(device)
+    log.info("Phase 3: pre-projecting %d cards through frozen encoder…", len(all_ids))
+    with torch.no_grad():
+        all_proj = torch.cat(
+            [encoder(all_raw[i: i + 512]) for i in range(0, all_raw.size(0), 512)],
+            dim=0,
+        )  # (N, D')
+    log.info("Phase 3: %d deck entries, scorer only", len(decks))
 
-    effective_lr = lr * encoder_lr_scale
-    if encoder_lr_scale != 1.0:
-        log.info(
-            "Phase 3: encoder_lr_scale=%.2f → effective lr=%.2e (base lr=%.2e)",
-            encoder_lr_scale, effective_lr, lr,
-        )
-    optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(scorer.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-
-    log.info("Phase 3: %d deck entries from artifact", len(decks))
 
     best_loss = float("inf")
     best_epoch = 0
     for epoch in range(epochs):
-        model.train()
+        scorer.train()
         total_loss = 0.0
         n_batches = 0
 
@@ -743,20 +778,16 @@ def train_deck_phase(
             card_ids = deck["card_ids"]
             legal_neg_idx = deck["legal_neg_indices"]
 
-            if cmd_id not in embeddings or len(card_ids) < 2:
+            if cmd_id not in id_to_idx or len(card_ids) < 2:
                 continue
 
-            cmd_raw = torch.from_numpy(embeddings[cmd_id]).to(device)  # (D,)
-            card_raw = torch.stack(
-                [torch.from_numpy(embeddings[c]) for c in card_ids if c in embeddings]
-            ).to(device)  # (K, D)
-
-            K = card_raw.size(0)
-            if K < 2:
+            pos_indices = [id_to_idx[c] for c in card_ids if c in id_to_idx]
+            if len(pos_indices) < 2:
                 continue
 
-            z_cmd = model(cmd_raw.unsqueeze(0))  # (1, D')
-            z_pos = model(card_raw)  # (K, D')
+            z_cmd = all_proj[id_to_idx[cmd_id]]          # (D',)
+            z_pos = all_proj[torch.tensor(pos_indices, device=device)]  # (K, D')
+            K = z_pos.size(0)
 
             neg_pool = (
                 legal_neg_idx.numpy()
@@ -764,15 +795,15 @@ def train_deck_phase(
                 else legal_neg_idx
             )
             chosen = np.random.choice(neg_pool, size=K, replace=True)
-            z_neg = model(all_embs[torch.from_numpy(chosen).to(device)])  # (K, D')
+            z_neg = all_proj[torch.from_numpy(chosen).to(device)]  # (K, D')
 
-            score_pos = (z_cmd * z_pos).sum(dim=-1)  # (K,)
-            score_neg = (z_cmd * z_neg).sum(dim=-1)  # (K,)
+            score_pos = scorer(z_cmd, z_pos)   # (K,)
+            score_neg = scorer(z_cmd, z_neg)   # (K,)
             loss = -F.logsigmoid(score_pos - score_neg).mean()
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(scorer.parameters(), 1.0)
             optimizer.step()
 
             total_loss += loss.item()
@@ -782,28 +813,21 @@ def train_deck_phase(
         avg = total_loss / max(n_batches, 1)
         log.info(
             "Phase 3  epoch %d/%d  loss=%.4f  lr=%.2e",
-            epoch + 1,
-            epochs,
-            avg,
-            scheduler.get_last_lr()[0],
+            epoch + 1, epochs, avg, scheduler.get_last_lr()[0],
         )
 
         if WANDB_ENABLED:
-            _wandb_log(
-                {
-                    "phase": 3,
-                    "epoch": epoch + 1,
-                    "loss": avg,
-                    "lr": scheduler.get_last_lr()[0],
-                }
-            )
+            _wandb_log({
+                "phase": 3, "epoch": epoch + 1,
+                "loss": avg, "lr": scheduler.get_last_lr()[0],
+            })
 
         if avg < best_loss:
             best_loss = avg
             best_epoch = epoch + 1
-            save_checkpoint(model, checkpoint_prefix + "3_best")
+            save_checkpoint(scorer, checkpoint_prefix + "3_best")
 
-    save_checkpoint(model, f"{checkpoint_prefix}3_epoch{epochs}")
+    save_checkpoint(scorer, f"{checkpoint_prefix}3_epoch{epochs}")
     return {"phase": 3, "best_loss": best_loss, "best_epoch": best_epoch,
             "final_epoch": epochs, "stopped_early": False}
 
@@ -830,22 +854,6 @@ def load_checkpoint(model: nn.Module, name: str, device: torch.device) -> nn.Mod
         return model
 
     state = torch.load(path, map_location=device)
-
-    # If we're loading a DeckConstructor checkpoint into a CardEncoder, extract
-    # just the card_encoder sub-module weights (keys prefixed "card_encoder.").
-    model_keys = set(model.state_dict().keys())
-    if not model_keys.issubset(set(state.keys())):
-        prefix = "card_encoder."
-        extracted = {
-            k[len(prefix) :]: v for k, v in state.items() if k.startswith(prefix)
-        }
-        if extracted and model_keys.issubset(set(extracted.keys())):
-            log.info(
-                "Extracting card_encoder weights from DeckConstructor checkpoint: %s",
-                path,
-            )
-            state = extracted
-
     model.load_state_dict(state, strict=False)
     log.info("Loaded checkpoint: %s", path)
     return model
@@ -1150,8 +1158,8 @@ def main():
         "--encoder-lr-scale",
         type=float,
         default=0.1,
-        help="Phase 2/3: lr scale factor for all encoder parameters (default 0.1 — "
-        "encoder drifts 10× slower to protect Phase 1/2 geometry).",
+        help="Phase 2: lr scale factor for encoder parameters (default 0.1 — "
+        "encoder drifts 10× slower to protect Phase 1 geometry).",
     )
     args = parser.parse_args()
 
@@ -1281,24 +1289,24 @@ def main():
             return
 
         input_dim = len(next(iter(embeddings.values())))
-        model = CardEncoder(input_dim=input_dim).to(device)
-        if args.resume:
-            warm = "phase2_best"
-            if (CHECKPOINT_DIR / (warm + ".pt")).exists():
-                load_checkpoint(model, warm, device)
-            else:
-                fallback = pfx + "2_best"
-                log.info("No %s found -- loading %s as warm start", warm, fallback)
-                load_checkpoint(model, fallback, device)
+        encoder = CardEncoder(input_dim=input_dim).to(device)
+        warm = "phase2_best"
+        if not (CHECKPOINT_DIR / (warm + ".pt")).exists():
+            log.error("Phase 3 requires a phase2_best checkpoint — run Phase 2 first.")
+            return
+        load_checkpoint(encoder, warm, device)
+
+        embed_dim = encoder.net[-1].out_features
+        scorer = CommanderScorer(embed_dim=embed_dim).to(device)
 
         summary = train_deck_phase(
-            model,
+            encoder,
+            scorer,
             _artifact,
             embeddings,
             args.epochs,
             args.lr,
             args.batch_size,
-            encoder_lr_scale=args.encoder_lr_scale,
             checkpoint_prefix=pfx,
         )
         _wandb_summary(summary)
