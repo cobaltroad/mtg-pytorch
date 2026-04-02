@@ -9,8 +9,9 @@ process    -- Embed cards, tag abilities, compute synergy edges, export training
               Re-run after download or after model/pattern changes.
 
 Commander artifact pipeline (run after process):
-  python pipeline.py --stage compute_commander_value_synergy
-  python pipeline.py --stage export_dataset_commanders
+  python pipeline.py --stage decompose_commanders             Step 0: write card_abilities rows (source='decompose')
+  python pipeline.py --stage compute_commander_value_synergy  Step 1: commander-value synergy edges
+  python pipeline.py --stage export_dataset_commanders        Step 2: export mtg_commanders.pt
 
 Run both:           python pipeline.py
 Run download only:  python pipeline.py --stage download
@@ -19,7 +20,7 @@ Run process only:   python pipeline.py --stage process
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan],
   compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy,
-  compute_commander_value_synergy,
+  decompose_commanders, compute_commander_value_synergy,
   export_dataset, export_dataset_commanders
 
 Data sources
@@ -45,10 +46,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts"))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-from stages.download import download as _download          # noqa: E402
-from stages.tag import embed_cards, tag_abilities          # noqa: E402
-from stages.dataset import compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy  # noqa: E402
-from stages.export import (                                # noqa: E402
+from stages.download import download as _download  # noqa: E402
+from stages.tag import embed_cards, tag_abilities  # noqa: E402
+from stages.dataset import (
+    compute_textmatch_synergy,
+    compute_xmage_synergy,
+    compute_xmage_effect_synergy,
+)  # noqa: E402
+from stages.export import (  # noqa: E402
     export_dataset_stage,
     export_dataset_commanders_stage,
     composition_profile_stage,
@@ -56,6 +61,7 @@ from stages.export import (                                # noqa: E402
 
 
 # -- Orchestrators ------------------------------------------------------------
+
 
 async def download() -> None:
     """Fetch card data + combos and load into the database.
@@ -97,13 +103,23 @@ if __name__ == "__main__":
         "--stage",
         choices=[
             # Grouped stages
-            "download", "process",
+            "download",
+            "process",
             # Tag sub-stages
-            "embed_cards", "tag_abilities", "tag_abilities_xmage",
+            "embed_cards",
+            "tag_abilities",
+            "tag_abilities_xmage",
             # Synergy sub-stages
-            "compute_textmatch_synergy", "compute_xmage_synergy", "compute_xmage_effect_synergy",
+            "compute_textmatch_synergy",
+            "compute_xmage_synergy",
+            "compute_xmage_effect_synergy",
+            # Commander artifact sub-stages
+            "decompose_commanders",
+            "compute_commander_value_synergy",
             # Export sub-stages
-            "export_dataset", "export_dataset_commanders", "composition_profile",
+            "export_dataset",
+            "export_dataset_commanders",
+            "composition_profile",
         ],
         default=None,
         help=(
@@ -136,6 +152,7 @@ if __name__ == "__main__":
         from xmage_parse import tag_abilities_xmage as _xmage_tag
         import os as _os
         from pathlib import Path as _Path
+
         asyncio.run(_xmage_tag(_Path(_os.environ.get("XMAGE_DIR", "/mage"))))
     elif args.stage == "compute_textmatch_synergy":
         asyncio.run(compute_textmatch_synergy())
@@ -143,6 +160,10 @@ if __name__ == "__main__":
         asyncio.run(compute_xmage_synergy())
     elif args.stage == "compute_xmage_effect_synergy":
         asyncio.run(compute_xmage_effect_synergy())
+    elif args.stage == "decompose_commanders":
+        from stages.decompose import write_commander_abilities as _decompose
+
+        _decompose()
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":

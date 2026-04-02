@@ -77,14 +77,15 @@ docker compose run --rm ingest python pipeline.py --stage export_dataset
 # These stages are NOT part of process — run them explicitly after process
 # before building mtg_commanders.pt.
 
-# Step 1: decompose commanders → writes card_abilities rows (source='decompose')
-#   required by compute_textmatch_synergy to build producer→commander ability_trigger edges.
-#   Must run BEFORE compute_textmatch_synergy when building the commander artifact.
-docker compose run --rm ingest python scripts/decompose_commanders.py
+# Step 0: write decompose signals to card_abilities (source='decompose')
+#   prerequisite for export_dataset_commanders; also fixes the UI decompose panel.
+docker compose run --rm ingest python pipeline.py --stage decompose_commanders
 
-# Step 2: commander-value synergy edges
+# Step 1: commander-value synergy edges
 # (tribal edges are built by compute_textmatch_synergy via commander_mechanics.py)
 docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy
+
+# Step 2: export artifact (reads card_abilities instead of calling _detect directly)
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
 # Spot-check the decomposition output with eval_commander.py:
@@ -509,28 +510,25 @@ Cards with no recognised `StaticFilters` argument keep `trigger_event='spell_cas
 
 ---
 
-## Commander decomposition (`scripts/decompose_commanders.py`)
+## Commander decomposition (`stages/decompose.py`)
 
-Decomposes all ~3,000 legal commanders into structured synergy signals.  **Required pipeline step** — writes `card_abilities` rows with `source='decompose'` that `compute_textmatch_synergy` needs to build producer→commander `ability_trigger` edges.  Without it, commanders have zero edges and are skipped by `export_dataset_commanders`.  Also writes a JSON file for spot-checking and gap analysis.
+Decomposes all ~3,000 legal commanders into structured synergy signals.  **Required pipeline step** — writes `card_abilities` rows with `source='decompose'` that `export_dataset_commanders` reads when building per-commander positive sets.  Also drives the UI decompose panel (`GET /commanders/{oracle_id}/decompose`).
 
-Run after `process` (requires populated `cards` and `card_abilities` tables and the `mage/` XMage mount), and before `compute_commander_value_synergy`.
+Run after `process` (requires populated `cards` and `card_abilities` tables), and before `compute_commander_value_synergy`.
 
 ```bash
-docker compose run --rm ingest python scripts/decompose_commanders.py
+docker compose run --rm ingest python pipeline.py --stage decompose_commanders
 ```
 
-Output: `/data/commander_decomposition.json` (backed by the `ingest_cache` volume).
+Detection logic lives in `stages/decompose.py` (`ORACLE_PATTERNS`, `_detect()`).  `export_dataset_commanders.py` reads the resulting `card_abilities` rows — it does **not** call `_detect()` directly.  This ensures the UI and the training artifact are always consistent.
 
 ### Signal sources
 
-Each commander entry contains two lists of signals:
+Each `card_abilities` row written by `decompose_commanders` comes from:
 
 | Source | How it works |
 |--------|-------------|
-| `oracle_text` | ~32 regex patterns against the commander's rules text.  Each match produces a `pattern_key`, `matched_phrase`, and `score`. |
-| `xmage` | Java ability/effect class names from `xmage_parse.parse_java_file()` translated via `ABILITY_CLASS_TO_EVENT` / `EFFECT_CLASS_TO_EFFECT`.  Includes `SpellCastControllerTriggeredAbility` filter refinement (see XMage section above). |
-
-Entries also include `unmatched_triggers[]` — oracle trigger clauses (sentences starting with `when/whenever/if/each`) that fired no pattern.  Use these for gap analysis.
+| `oracle_text` | ~32 regex patterns in `ORACLE_PATTERNS` against the commander's rules text.  Each match produces a `pattern_key` (`trigger_event`), human-readable label (`ability_name`), and matched phrase (`raw_text`). |
 
 ### Pattern library (oracle text)
 
@@ -601,13 +599,12 @@ docker compose run --rm ingest python scripts/eval_commander.py --pattern goad -
 
 ### Adding a new pattern
 
-Add one entry to `ORACLE_PATTERNS` in `decompose_commanders.py`:
+Add one entry to `ORACLE_PATTERNS` in `stages/decompose.py`:
 
 ```python
 ("pattern_key",
  "Human-readable label",
- re.compile(r"your regex here", re.I),
- 0.9),   # score: 1.0 exact keyword, 0.9 strong trigger, 0.8 broad/static
+ re.compile(r"your regex here", re.I)),
 ```
 
-Then re-run `decompose_commanders.py` and spot-check with `eval_commander.py --pattern <key>`.  No other files require modification.
+Then re-run `decompose_commanders` and spot-check with `eval_commander.py --pattern <key>`.  No other files require modification.

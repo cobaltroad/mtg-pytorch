@@ -10,9 +10,10 @@ Human decklists introduce representation collapse in BPR training because
 every commander needs the same generic roles (draw, ramp, removal), driving
 all commander embeddings toward an indistinct high-similarity cluster.
 
-This artifact builds per-commander positive sets by decomposing each
-commander's oracle text into mechanic pattern keys, then executing SQL
-from commander_mechanics.py to find the relevant producer/consumer cards.
+This artifact builds per-commander positive sets by reading pattern keys from
+``card_abilities`` rows written by ``pipeline.py --stage decompose_commanders``
+(source='decompose'), then executing SQL from commander_mechanics.py to find
+the relevant producer/consumer cards.
 
   PRODUCER keys  commander *needs* these cards (e.g. tribal_elf → Elf creatures,
                  mana_dork → mana-ability creatures for Tyvar)
@@ -23,12 +24,18 @@ Because each commander decomposes into a distinct set of pattern keys, the
 positive sets are genuinely distinct across commanders, giving BPR a
 meaningful gradient.
 
+Prerequisite
+------------
+Run ``pipeline.py --stage decompose_commanders`` before this script.
+Pattern detection lives exclusively in ``stages/decompose.py``; this script
+reads the DB output so the UI and training artifact are always consistent.
+
 Data flow
 ---------
 1. Load embeddings + card metadata from the database.
 2. Load all embedded legal commanders.
-3. Decompose each commander via ORACLE_PATTERNS (_detect):
-   a. Match pattern keys from oracle_text.
+3. Read pattern keys from card_abilities WHERE source='decompose':
+   a. Group trigger_event values by commander card_id.
    b. Execute PRODUCER / CONSUMER SQL once per unique key (cached).
    c. Apply color-identity filter: card_ci ⊆ commander_ci.
 4. Per commander:
@@ -98,7 +105,6 @@ from export_db_helpers import (
     _load_color_identities,
     get_conn,
 )
-from stages.decompose import _detect
 from synergy.commander_mechanics import (
     PATTERN_KEY_TO_PRODUCER_SQL,
     PATTERN_KEY_TO_CONSUMER_SQL,
@@ -106,13 +112,16 @@ from synergy.commander_mechanics import (
 from synergy.staples import STAPLE_CATEGORIES
 from mtg_sql import commanders
 
-OUTPUT_PATH   = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
+OUTPUT_PATH = Path(os.environ.get("COMMANDERS_OUTPUT", "/data/mtg_commanders.pt"))
 MIN_POSITIVES = int(os.environ.get("COMMANDERS_MIN_POS", "10"))
 MAX_POSITIVES = int(os.environ.get("COMMANDERS_MAX_POS", "300"))
 
 try:
     GIT_COMMIT = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     log.info("git_commit: %s", GIT_COMMIT)
 except (FileNotFoundError, subprocess.CalledProcessError):
@@ -128,6 +137,7 @@ except (FileNotFoundError, subprocess.CalledProcessError):
 
 # ── Step 4: Legal commanders ──────────────────────────────────────────────────
 
+
 def _load_commander_ids(id_to_idx: dict[str, int]) -> set[str]:
     """Return all embedded cards that are legal commanders."""
     with get_conn() as conn:
@@ -141,15 +151,20 @@ def _load_commander_ids(id_to_idx: dict[str, int]) -> set[str]:
 
 # ── Step 5: Decompose-based positives ────────────────────────────────────────
 
+
 def _load_commander_positives(
     commander_ids: set[str],
     id_to_idx: dict[str, int],
     color_ids: dict[str, frozenset],
 ) -> dict[str, tuple[set[str], list[str]]]:
-    """Return {commander_id: (pos_card_ids, pattern_keys)} using decompose patterns.
+    """Return {commander_id: (pos_card_ids, pattern_keys)} using decompose signals.
+
+    Pattern keys are read from card_abilities rows written by
+    ``pipeline.py --stage decompose_commanders`` (source='decompose').
+    Run that stage before calling this function.
 
     For each commander:
-    1. Detect pattern keys from oracle_text via ORACLE_PATTERNS (_detect).
+    1. Read trigger_event values from card_abilities WHERE source='decompose'.
     2. For each matched key, look up PRODUCER or CONSUMER SQL from
        commander_mechanics.py and execute it once (results are cached by key).
     3. Apply color-identity filter: card_ci ⊆ commander_ci.
@@ -162,28 +177,34 @@ def _load_commander_positives(
         cid: (set(), []) for cid in commander_ids
     }
 
-    # ── Load oracle_text + type_line for all commanders ───────────────────────
+    # ── Read pattern keys from card_abilities (source='decompose') ────────────
     cmd_list = list(commander_ids)
-    cmd_oracle: dict[str, tuple[str, str]] = {}
+    cmd_patterns: dict[str, list[str]] = defaultdict(list)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id::text, COALESCE(oracle_text, ''), COALESCE(type_line, '')
-                FROM cards
-                WHERE id::text = ANY(%s)
-            """, (cmd_list,))
-            for cid, oracle_text, type_line in cur.fetchall():
-                cmd_oracle[cid] = (oracle_text, type_line)
+            cur.execute(
+                """
+                SELECT card_id::text, trigger_event
+                FROM card_abilities
+                WHERE source = 'decompose'
+                  AND trigger_event IS NOT NULL
+                  AND card_id::text = ANY(%s)
+            """,
+                (cmd_list,),
+            )
+            for card_id, trigger_event in cur.fetchall():
+                cmd_patterns[card_id].append(trigger_event)
 
-    # ── Detect patterns for each commander ───────────────────────────────────
-    cmd_patterns: dict[str, list[str]] = {}
-    all_keys: set[str] = set()
-    for cid in commander_ids:
-        oracle_text, type_line = cmd_oracle.get(cid, ("", ""))
-        hits = _detect(oracle_text, type_line)
-        keys = [k for k, _, _ in hits]
-        cmd_patterns[cid] = keys
-        all_keys.update(keys)
+    zero_signal = [cid for cid in commander_ids if not cmd_patterns.get(cid)]
+    if zero_signal:
+        log.warning(
+            "%d commanders have no source='decompose' rows in card_abilities — "
+            "run 'pipeline.py --stage decompose_commanders' first. "
+            "These commanders will be skipped.",
+            len(zero_signal),
+        )
+
+    all_keys: set[str] = {k for keys in cmd_patterns.values() for k in keys}
 
     # ── Execute SQL for each unique key (cached) ──────────────────────────────
     # A key may appear in PRODUCER, CONSUMER, or both — union the card sets.
@@ -208,7 +229,9 @@ def _load_commander_positives(
             key_cards[key] = cards_for_key
             log.debug("  key=%-30s  %d cards", key, len(cards_for_key))
 
-    log.info("Executed SQL for %d/%d unique pattern keys", len(key_cards), len(all_keys))
+    log.info(
+        "Executed SQL for %d/%d unique pattern keys", len(key_cards), len(all_keys)
+    )
 
     # ── Execute staple SQL once per category (results cached) ─────────────────
     staple_cards: dict[str, set[str]] = {}
@@ -248,7 +271,8 @@ def _load_commander_positives(
         # Staple positives — rate-capped, color-filtered, not added to key_list
         for category, (_, rate) in STAPLE_CATEGORIES.items():
             eligible = [
-                card_id for card_id in staple_cards[category]
+                card_id
+                for card_id in staple_cards[category]
                 if color_ids.get(card_id, frozenset()) <= cmd_ci
             ]
             n_take = round(rate * MAX_POSITIVES)
@@ -258,13 +282,17 @@ def _load_commander_positives(
             pos_ids.update(eligible)
 
     total_pos = sum(len(v[0]) for v in result.values())
-    covered   = sum(1 for v in result.values() if v[0])
-    log.info("Positives loaded: %d commanders with ≥1 positive, %d total cards",
-             covered, total_pos)
+    covered = sum(1 for v in result.values() if v[0])
+    log.info(
+        "Positives loaded: %d commanders with ≥1 positive, %d total cards",
+        covered,
+        total_pos,
+    )
     return result
 
 
 # ── Step 6: Build synthetic decks ─────────────────────────────────────────────
+
 
 def _build_commander_decks(
     commander_ids: set[str],
@@ -279,8 +307,11 @@ def _build_commander_decks(
     def _legal_indices(cmd_ci: frozenset) -> np.ndarray:
         if cmd_ci not in _legal_cache:
             idx = np.array(
-                [i for i, cid in enumerate(card_ids)
-                 if color_ids.get(cid, frozenset()) <= cmd_ci],
+                [
+                    i
+                    for i, cid in enumerate(card_ids)
+                    if color_ids.get(cid, frozenset()) <= cmd_ci
+                ],
                 dtype=np.int64,
             )
             _legal_cache[cmd_ci] = idx if len(idx) > 0 else np.arange(n, dtype=np.int64)
@@ -302,11 +333,11 @@ def _build_commander_decks(
             random.shuffle(pos_list)
             pos_list = pos_list[:MAX_POSITIVES]
 
-        pos_idxs   = [id_to_idx[pid] for pid in pos_list if pid in id_to_idx]
-        cmd_ci     = color_ids.get(commander_id, frozenset())
-        legal      = _legal_indices(cmd_ci)
+        pos_idxs = [id_to_idx[pid] for pid in pos_list if pid in id_to_idx]
+        cmd_ci = color_ids.get(commander_id, frozenset())
+        legal = _legal_indices(cmd_ci)
         pos_idx_set = set(pos_idxs)
-        cmd_idx    = id_to_idx[commander_id]
+        cmd_idx = id_to_idx[commander_id]
 
         neg_legal = np.array(
             [i for i in legal if i not in pos_idx_set and i != cmd_idx],
@@ -319,26 +350,31 @@ def _build_commander_decks(
         event_counts: dict[str, int] = defaultdict(int)
         for e in trigger_events:
             event_counts[e] += 1
-        archetype = ", ".join(k for k, _ in sorted(
-            event_counts.items(), key=lambda x: -x[1]
-        )[:5])
+        archetype = ", ".join(
+            k for k, _ in sorted(event_counts.items(), key=lambda x: -x[1])[:5]
+        )
 
-        decks.append({
-            "commander_idx":     cmd_idx,
-            "card_idxs":         pos_idxs,
-            "color_identity":    sorted(cmd_ci),
-            "legal_neg_indices": torch.from_numpy(neg_legal),
-            "archetype":         archetype,
-        })
+        decks.append(
+            {
+                "commander_idx": cmd_idx,
+                "card_idxs": pos_idxs,
+                "color_identity": sorted(cmd_ci),
+                "legal_neg_indices": torch.from_numpy(neg_legal),
+                "archetype": archetype,
+            }
+        )
 
     log.info(
         "Built %d synthetic decks  (skipped %d with < %d positives)",
-        len(decks), skipped_few, MIN_POSITIVES,
+        len(decks),
+        skipped_few,
+        MIN_POSITIVES,
     )
     return decks
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     # 1. Embeddings
@@ -346,8 +382,8 @@ def main() -> None:
     id_to_idx = {cid: i for i, cid in enumerate(card_ids)}
 
     # 2. Card metadata + color identities
-    card_meta  = _load_card_meta(id_to_idx)
-    color_ids  = _load_color_identities(id_to_idx)
+    card_meta = _load_card_meta(id_to_idx)
+    color_ids = _load_color_identities(id_to_idx)
 
     # 3. Legal commanders (embedded subset)
     commander_ids = _load_commander_ids(id_to_idx)
@@ -357,7 +393,11 @@ def main() -> None:
 
     # 5. Build synthetic decks
     decks = _build_commander_decks(
-        commander_ids, id_to_idx, card_ids, color_ids, positives,
+        commander_ids,
+        id_to_idx,
+        card_ids,
+        color_ids,
+        positives,
     )
 
     if not decks:
@@ -374,41 +414,45 @@ def main() -> None:
     synergy_positions = []
     for deck in decks:
         cmd_idx = deck["commander_idx"]
-        legal   = deck["legal_neg_indices"]
+        legal = deck["legal_neg_indices"]
         for card_idx in deck["card_idxs"]:
-            synergy_positions.append({
-                "commander_idx":    cmd_idx,
-                "context_card_idxs": [],
-                "target_card_idx":  card_idx,
-                "weight":           ABILITY_WEIGHT,
-                "legal_neg_indices": legal,
-            })
-    log.info("Built %d synergy_positions from %d decks", len(synergy_positions), len(decks))
+            synergy_positions.append(
+                {
+                    "commander_idx": cmd_idx,
+                    "context_card_idxs": [],
+                    "target_card_idx": card_idx,
+                    "weight": ABILITY_WEIGHT,
+                    "legal_neg_indices": legal,
+                }
+            )
+    log.info(
+        "Built %d synergy_positions from %d decks", len(synergy_positions), len(decks)
+    )
 
     # 7. Assemble and save
     commander_count = len(decks)
     avg_pos = sum(len(d["card_idxs"]) for d in decks) / max(commander_count, 1)
     meta = {
-        "model":          EMBEDDING_MODEL,
-        "dim":            int(emb_matrix.shape[1]),
-        "card_count":     len(card_ids),
-        "deck_count":     commander_count,
-        "avg_positives":  round(avg_pos, 1),
-        "min_positives":  MIN_POSITIVES,
-        "max_positives":  MAX_POSITIVES,
-        "source":             "decompose+staples",
-        "synergy_pos_count":  len(synergy_positions),
-        "git_commit":         GIT_COMMIT,
-        "created_at":         datetime.now(timezone.utc).isoformat(),
+        "model": EMBEDDING_MODEL,
+        "dim": int(emb_matrix.shape[1]),
+        "card_count": len(card_ids),
+        "deck_count": commander_count,
+        "avg_positives": round(avg_pos, 1),
+        "min_positives": MIN_POSITIVES,
+        "max_positives": MAX_POSITIVES,
+        "source": "decompose+staples",
+        "synergy_pos_count": len(synergy_positions),
+        "git_commit": GIT_COMMIT,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     artifact = {
-        "meta":              meta,
-        "card_ids":          card_ids,
-        "embeddings":        torch.from_numpy(emb_matrix),
-        "card_meta":         card_meta,
-        "color_identities":  {cid: sorted(ci) for cid, ci in color_ids.items()},
-        "decks":             decks,
+        "meta": meta,
+        "card_ids": card_ids,
+        "embeddings": torch.from_numpy(emb_matrix),
+        "card_meta": card_meta,
+        "color_identities": {cid: sorted(ci) for cid, ci in color_ids.items()},
+        "decks": decks,
         "synergy_positions": synergy_positions,
     }
 
@@ -423,7 +467,10 @@ def main() -> None:
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
         "Done. %.1f MB  |  %d cards  |  %d commanders  |  avg %.0f producers/commander",
-        size_mb, len(card_ids), commander_count, avg_pos,
+        size_mb,
+        len(card_ids),
+        commander_count,
+        avg_pos,
     )
 
 
