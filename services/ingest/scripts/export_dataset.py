@@ -52,7 +52,7 @@ from __future__ import annotations
 import csv
 import itertools
 import json
-import hashlib
+
 import logging
 import math
 import os
@@ -452,10 +452,6 @@ def main() -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     log.info("Saving artifact → %s", OUTPUT_PATH)
     torch.save(artifact, OUTPUT_PATH)
-
-    sha256 = hashlib.sha256(OUTPUT_PATH.read_bytes()).hexdigest()
-    meta["sha256"] = sha256
-    log.info("SHA256: %s", sha256)
 
     meta_path = OUTPUT_PATH.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=2))
