@@ -57,11 +57,14 @@ from mtg_sql.staples.removal import (
 PATTERNS = {**_triggered_abilities, **_activated_abilities, **_combat_tricks}
 
 
-def _family_sql(family_key: str) -> str:
+def family_sql(family_key: str) -> str:
     """Generate SQL that selects cards tagged with any pattern in *family_key*.
 
     Queries card_abilities.trigger_event so the result is driven entirely by
     what tag.py wrote — no oracle_text LIKE chains needed here.
+
+    Public so that other modules (e.g. stages/mechanic_tags.py) can import
+    this as the single canonical implementation rather than duplicating it.
     """
     keys = PATTERNS[family_key]
     in_list = ", ".join(f"'{k}'" for k in keys)
@@ -71,6 +74,10 @@ def _family_sql(family_key: str) -> str:
         f"  WHERE trigger_event IN ({in_list})"
         f")"
     )
+
+
+# Internal alias used throughout this module
+_family_sql = family_sql
 
 
 # ── Producer → deck-key translation ─────────────────────────────────────────

@@ -45,10 +45,8 @@ from synergy.commander_mechanics import (
     DECK_KEY_LABELS,
     PATTERN_KEY_TO_CONSUMER_SQL,
     PATTERN_KEY_TO_PRODUCER_SQL,
+    family_sql,
 )
-from synergy.triggered_ability import PATTERNS as _triggered_patterns
-from synergy.activated_ability import PATTERNS as _activated_patterns
-from synergy.combat import PATTERNS as _combat_patterns
 from synergy.spell import PATTERNS as _spell_patterns
 from synergy.staples.treasure import SQL as _TREASURE_SQL
 from synergy.staples.token import SQL as _TOKEN_SQL
@@ -59,28 +57,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").replace(
 )
 
 log = logging.getLogger(__name__)
-
-# ── Family SQL helper ──────────────────────────────────────────────────────────
-# Mirrors commander_mechanics._family_sql() — selects cards tagged with any
-# trigger_event key in the given family group.
-
-_FAMILY_PATTERNS: dict[str, list[str]] = {
-    **_triggered_patterns,
-    **_activated_patterns,
-    **_combat_patterns,
-}
-
-
-def _family_sql(family_key: str) -> str:
-    keys = _FAMILY_PATTERNS[family_key]
-    in_list = ", ".join(f"'{k}'" for k in keys)
-    return (
-        f"id IN ("
-        f"  SELECT card_id FROM card_abilities"
-        f"  WHERE trigger_event IN ({in_list})"
-        f")"
-    )
-
 
 # ── DECK_KEY_TO_SQL ────────────────────────────────────────────────────────────
 # Maps every deck key in DECK_KEY_LABELS to a SQL WHERE fragment that selects
@@ -108,11 +84,11 @@ DECK_KEY_TO_SQL: dict[str, str] = {
 
     # ── 3. Supplementary deck keys ────────────────────────────────────────────
     # Combat tricks — evasion grants, pump spells, damage keywords
-    "combat_tricks":         _family_sql("combat_tricks"),
+    "combat_tricks":         family_sql("combat_tricks"),
 
     # Sacrifice
-    "sac_outlet":            _family_sql("sac_outlet"),
-    "sacrifice_fodder":      _family_sql("sacrifice_fodder"),
+    "sac_outlet":            family_sql("sac_outlet"),
+    "sacrifice_fodder":      family_sql("sacrifice_fodder"),
 
     # Removal modes (death-trigger commanders want DESTROY + DAMAGE; the
     # labels in DECK_KEY_LABELS match these specific modes, not generic removal)
@@ -135,12 +111,12 @@ DECK_KEY_TO_SQL: dict[str, str] = {
     "spell_aura_equipment":  _spell_patterns["spell_aura_equipment"],
 
     # Cast-trigger amplifiers — cards with the *same* trigger as the commander
-    "enchantment_cast":     _family_sql("enchantment_cast"),
-    "creature_cast":        _family_sql("creature_cast"),
-    "artifact_cast":        _family_sql("artifact_cast"),
-    "instant_sorcery_cast": _family_sql("instant_sorcery_cast"),
-    "historic_cast":        _family_sql("historic_cast"),
-    "aura_equipment_cast":  _family_sql("aura_equipment_cast"),
+    "enchantment_cast":     family_sql("enchantment_cast"),
+    "creature_cast":        family_sql("creature_cast"),
+    "artifact_cast":        family_sql("artifact_cast"),
+    "instant_sorcery_cast": family_sql("instant_sorcery_cast"),
+    "historic_cast":        family_sql("historic_cast"),
+    "aura_equipment_cast":  family_sql("aura_equipment_cast"),
 }
 
 
