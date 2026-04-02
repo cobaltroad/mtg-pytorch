@@ -9,9 +9,10 @@ process    -- Embed cards, tag abilities, compute synergy edges, export training
               Re-run after download or after model/pattern changes.
 
 Commander artifact pipeline (run after process):
-  python pipeline.py --stage decompose_commanders             Step 0: write card_abilities rows (source='decompose')
-  python pipeline.py --stage compute_commander_value_synergy  Step 1: commander-value synergy edges
-  python pipeline.py --stage export_dataset_commanders        Step 2: export mtg_commanders.pt
+  python pipeline.py --stage decompose_commanders             Step 0:  write card_abilities rows (source='decompose')
+  python pipeline.py --stage tag_mechanic_tags               Step 0b: tag candidate cards with deck-key role labels
+  python pipeline.py --stage compute_commander_value_synergy  Step 1:  commander-value synergy edges
+  python pipeline.py --stage export_dataset_commanders        Step 2:  export mtg_commanders.pt
 
 Run both:           python pipeline.py
 Run download only:  python pipeline.py --stage download
@@ -20,7 +21,7 @@ Run process only:   python pipeline.py --stage process
 Individual sub-stages (rarely needed):
   embed_cards, tag_abilities [--rescan],
   compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy,
-  decompose_commanders, compute_commander_value_synergy,
+  decompose_commanders, tag_mechanic_tags [--rescan], compute_commander_value_synergy,
   export_dataset, export_dataset_commanders
 
 Data sources
@@ -115,6 +116,7 @@ if __name__ == "__main__":
             "compute_xmage_effect_synergy",
             # Commander artifact sub-stages
             "decompose_commanders",
+            "tag_mechanic_tags",
             "compute_commander_value_synergy",
             # Export sub-stages
             "export_dataset",
@@ -127,6 +129,7 @@ if __name__ == "__main__":
             "process: embed + tag + compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy + export_dataset. "
             "tag_abilities_xmage: supplement card_abilities from XMage source tree "
             "(requires XMAGE_DIR env var; mount mage/ read-only). "
+            "tag_mechanic_tags: write deck-key role tags to candidate cards (source='mechanic'). "
             "Omit to run both download and process."
         ),
     )
@@ -164,6 +167,10 @@ if __name__ == "__main__":
         from stages.decompose import write_commander_abilities as _decompose
 
         _decompose()
+    elif args.stage == "tag_mechanic_tags":
+        from stages.mechanic_tags import tag_mechanic_tags as _tag_mechanic_tags
+
+        _tag_mechanic_tags(rescan=args.rescan)
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":
