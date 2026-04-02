@@ -110,6 +110,38 @@ async def similar_cards(
 
 
 
+# ── Commander decomposition ───────────────────────────────────────────────────
+
+class DecomposeSignal(BaseModel):
+    ability_name: str   # human-readable label, e.g. "Attack trigger"
+    trigger_event: str  # pattern key, e.g. "attack_trigger"
+    raw_text: str | None = None  # matched oracle phrase
+
+
+@app.get("/commanders/{oracle_id}/decompose", response_model=list[DecomposeSignal])
+async def get_commander_decompose(
+    oracle_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return decompose pipeline signals for a commander (source='decompose' card_abilities rows)."""
+    result = await db.execute(
+        text("""
+            SELECT ca.ability_name, ca.trigger_event, ca.raw_text
+            FROM card_abilities ca
+            JOIN cards c ON c.id = ca.card_id
+            WHERE c.oracle_id = :oid
+              AND ca.source = 'decompose'
+              AND ca.ability_name NOT LIKE '%(XMage)%'
+            ORDER BY ca.ability_type, ca.ability_name
+        """),
+        {"oid": str(oracle_id)},
+    )
+    return [
+        DecomposeSignal(ability_name=row[0], trigger_event=row[1] or "", raw_text=row[2])
+        for row in result.fetchall()
+    ]
+
+
 # ── Synergy ──────────────────────────────────────────────────────────────────
 
 class SynergyPair(BaseModel):

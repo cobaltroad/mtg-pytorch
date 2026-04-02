@@ -35,6 +35,16 @@ def score_candidates(oracle_id: str, checkpoint: str = "phase3_best") -> list[di
 
 
 
+@st.cache_data(ttl=300)
+def get_commander_decompose(oracle_id: str) -> list[dict]:
+    try:
+        r = httpx.get(f"{API_URL}/commanders/{oracle_id}/decompose", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=30)
 def list_generated_decks() -> list[dict]:
     try:
@@ -145,6 +155,17 @@ with tab_deck:
             choice = st.selectbox("Select commander", list(options.keys()))
             commander = options[choice]
 
+
+    # ── Commander decompose signals ───────────────────────────────────────────
+    if commander:
+        _signals = get_commander_decompose(str(commander["oracle_id"]))
+        with st.expander(f"Decompose signals: {commander['name']}", expanded=True):
+            if not _signals:
+                st.info("No decompose signals found. Run the decompose pipeline stage first.")
+            else:
+                for sig in _signals:
+                    phrase = f'  — `"{sig["raw_text"]}"` ' if sig.get("raw_text") else ""
+                    st.markdown(f"- **{sig['ability_name']}**  `{sig['trigger_event']}`{phrase}")
 
     # ── Advanced options ──────────────────────────────────────────────────────
     _chosen_checkpoint = "phase3_best"
