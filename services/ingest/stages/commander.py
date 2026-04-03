@@ -136,11 +136,26 @@ def compute_commander_value_synergy() -> None:
             )
         log.info("Deleted existing decomposed_candidates edges")
 
-        # ── 5. Build (commander, card) pairs with color filter ────────────────
-        rows: list[dict] = []
+        # ── 5. Build and flush per commander ─────────────────────────────────
+        # Flush every FLUSH_EVERY commanders to avoid holding millions of rows
+        # in memory.  Each flush commits so progress survives an interruption.
+        FLUSH_EVERY = 50
+        total_inserted = 0
+        commanders_done = 0
+        buf: list[dict] = []
+
+        def _flush(cur_conn) -> None:
+            nonlocal total_inserted
+            if not buf:
+                return
+            with cur_conn.cursor() as cur:
+                psycopg2.extras.execute_batch(cur, _UPSERT, buf, page_size=1000)
+            cur_conn.commit()
+            total_inserted += len(buf)
+            buf.clear()
+
         for cmd_id, keys in cmd_patterns.items():
             cmd_ci = color_ids.get(cmd_id, frozenset())
-            # Accumulate matched pattern keys per candidate card
             card_keys: dict[str, list[str]] = defaultdict(list)
             for key in keys:
                 if key not in key_cards:
@@ -152,7 +167,7 @@ def compute_commander_value_synergy() -> None:
                         card_keys[card_id].append(key)
 
             for card_id, matched_keys in card_keys.items():
-                rows.append(
+                buf.append(
                     {
                         "card_a": cmd_id,
                         "card_b": card_id,
@@ -163,17 +178,23 @@ def compute_commander_value_synergy() -> None:
                     }
                 )
 
-        log.info("Built %d (commander, card) candidate pairs", len(rows))
+            commanders_done += 1
+            if commanders_done % FLUSH_EVERY == 0:
+                _flush(conn)
+                log.info(
+                    "  flushed %d / %d commanders  (%d edges so far)",
+                    commanders_done,
+                    len(cmd_patterns),
+                    total_inserted,
+                )
 
-        # ── 6. Bulk insert ────────────────────────────────────────────────────
-        if rows:
-            with conn.cursor() as cur:
-                psycopg2.extras.execute_batch(cur, _UPSERT, rows, page_size=1000)
-            conn.commit()
+        _flush(conn)  # final partial batch
+
+        if total_inserted:
             log.info(
                 "Inserted %d decomposed_candidates edges across %d commanders",
-                len(rows),
-                len({r["card_a"] for r in rows}),
+                total_inserted,
+                commanders_done,
             )
         else:
             log.warning("No edges generated — check pattern key coverage in commander_mechanics.py")
