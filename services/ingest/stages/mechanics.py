@@ -159,6 +159,9 @@ DECK_KEY_TO_SQL: dict[str, str] = {
     "spell_instant_sorcery": _spell_patterns["spell_instant_sorcery"],
     "spell_historic":        _spell_patterns["spell_historic"],
     "spell_aura_equipment":  _spell_patterns["spell_aura_equipment"],
+    # Color spell fodder — for color-based cast-trigger commanders (K'rrik, Aragorn, etc.)
+    **{f"spell_{c}": _spell_patterns[f"spell_{c}"]
+       for c in ("white", "blue", "black", "red", "green", "colorless")},
 
     # Cast-trigger amplifiers — cards with the *same* trigger as the commander
     **_CAST_SQL,
@@ -175,6 +178,7 @@ DECK_KEY_TO_SQL: dict[str, str] = {
 _CARD_CHAR_KEYS: frozenset[str] = frozenset({
     "spell_enchantment", "spell_creature", "spell_artifact",
     "spell_instant_sorcery", "spell_historic", "spell_aura_equipment",
+    "spell_white", "spell_blue", "spell_black", "spell_red", "spell_green", "spell_colorless",
     "toughness_1_creatures",
 } | {k for k in DECK_KEY_TO_SQL if k.startswith("tribal_")})
 
