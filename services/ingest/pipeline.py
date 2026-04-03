@@ -166,6 +166,10 @@ if __name__ == "__main__":
         from stages.decompose import write_commander_abilities as _decompose
 
         _decompose()
+    elif args.stage == "compute_commander_value_synergy":
+        from stages.commander import compute_commander_value_synergy as _ccvs
+
+        _ccvs()
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":

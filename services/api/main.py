@@ -390,26 +390,35 @@ async def score_commander_candidates(
     embeddings = await loop.run_in_executor(
         None, inference.get_embeddings, DATABASE_URL
     )
-    legal_ids = await loop.run_in_executor(None, inference.get_legal_ids, DATABASE_URL)
-    color_ids = await loop.run_in_executor(
-        None, inference.get_color_identities, DATABASE_URL
-    )
     card_meta = await loop.run_in_executor(
         None, inference.get_card_metadata, DATABASE_URL
     )
 
-    legal_color = [
-        cid
-        for cid in legal_ids
-        if cid in embeddings
-        and color_ids.get(cid, frozenset()) <= color_identity
-        and cid != commander_id
+    decomposed_rows = await db.execute(
+        text(
+            "SELECT card_b::text FROM synergy_edges"
+            " WHERE score_type = 'decomposed_candidates' AND card_a = :cmd_id::uuid"
+        ),
+        {"cmd_id": commander_id},
+    )
+    candidates = [
+        row[0]
+        for row in decomposed_rows.fetchall()
+        if row[0] in embeddings and row[0] != commander_id
     ]
+
+    if not candidates:
+        raise HTTPException(
+            503,
+            "No decomposed_candidates found for this commander. "
+            "Run pipeline.py --stage decompose_commanders then "
+            "--stage compute_commander_value_synergy first.",
+        )
 
     scored = await loop.run_in_executor(
         None,
         lambda: inference.score_candidates(
-            commander_id, legal_color, embeddings, model
+            commander_id, candidates, embeddings, model
         ),
     )
 
