@@ -168,14 +168,32 @@ These two must always agree or deck generation will silently fail:
 
 ```powershell
 .\scripts\run.ps1 -Mode train -Phase 1 -Dataset .\ingest_cache\mtg_dataset.pt
-.\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt
+.\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt   # bilinear (default)
 .\scripts\run.ps1 -Mode train -Phase 3 -Dataset .\ingest_cache\mtg_commanders.pt
 .\scripts\run.ps1 -Mode train -Phase 4 -Dataset .\ingest_cache\mtg_commanders.pt
 ```
 
-5. Upload the resulting checkpoint to the Docker host via the UI, or:
+Phase 2 trains `BilinearSynergyHead` (saves `phase2_bilinear_best.pt`) with the
+encoder frozen at `phase1_best.pt`.  `phase2_best.pt` is **not** written by the
+bilinear path — Phase 3 still loads the encoder from `phase1_best.pt`.  Upload
+both checkpoints to the API after training:
+
+5. Upload checkpoints to the Docker host via the UI, or:
 
 ```bash
+# Phase 1 encoder (required by Phase 3 and as fallback encoder)
+curl -X POST https://$API_HOST/admin/checkpoint \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -F "file=@phase1_best.pt" \
+  -F "name=phase1_best"
+
+# Phase 2 bilinear head (enables relation-aware inference scoring)
+curl -X POST https://$API_HOST/admin/checkpoint \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -F "file=@phase2_bilinear_best.pt" \
+  -F "name=phase2_bilinear_best"
+
+# Phase 3/4 CommanderScorer (primary deck-building scorer)
 curl -X POST https://$API_HOST/admin/checkpoint \
   -H "x-admin-token: $ADMIN_TOKEN" \
   -F "file=@phase4_best.pt" \
@@ -195,16 +213,29 @@ The model is trained in four phases, each building on the last:
    reprints are positive pairs.  Baseline: cards with identical rules text
    should be nearest neighbours.
 
-2. **Ability-trigger synergy** — binary classifier: does card B synergise with
-   card A?  Ground truth comes from `synergy_edges` (ability_trigger type)
-   built by the ingest pipeline's rule-matching stage.
+2. **Relational bilinear scoring** — learns one weight matrix W_r per relation
+   type (`effect_peer`, `ability_trigger`, `combo`, `decomposed_candidates`).
+   The Phase 1 encoder is **frozen**; only the W_r matrices move.  Score:
+   `score(A, B, r) = A^T W_r B`.  Trained with asymmetric InfoNCE per relation.
+   Replaces the previous NT-Xent formulation which corrupted Phase 1 geometry
+   by conflating complementary relations (producer→consumer, combo) with
+   similarity relations (functional peers).
 
-3. **Deck co-occurrence** — multi-label ranking: given a commander, which cards
-   appear in human-built decks?  Data from EDHREC / Moxfield snapshots stored
-   in the `decks` table.
+3. **Commander-card ranking** — BPR loss on the commanders artifact: given a
+   commander, rank its synergy-positive cards above random legal cards.
+   Trains `CommanderScorer` (a joint MLP over `[z_cmd; z_card]`) on top of
+   the frozen Phase 1 encoder.  Adds per-commander non-linear discrimination
+   that the Phase 2 bilinear head cannot represent (W_r is a single global
+   matrix; the MLP sees each commander–card pair jointly).  **Empirically
+   validate** that Phase 3 re-ranks the top-20 candidates differently from the
+   bilinear head alone before treating it as load-bearing — if the candidate
+   pre-filter and bilinear signal are already tight, Phase 3 may provide
+   diminishing returns.
 
 4. **Generative deck construction** — transformer decoder; given commander +
    partial deck, predict next card.  Sampled freely at inference — not greedy.
+   The only phase that models deck-level coherence: no scoring function over a
+   fixed (commander, card) pair can account for what is already in the deck.
 
 ## Key data sources
 
@@ -293,29 +324,33 @@ docker compose run --rm \
 
 ## Training notes
 
-### Phase 2 — loss benchmarks
+### Phase 2 — bilinear loss benchmarks
 
-Phase 2 uses **NT-Xent (InfoNCE)** loss, not BCE.  The loss scale depends on
-batch size: the random (no-learning) ceiling is `ln(2 × batch_size)`.
+Phase 2 uses **asymmetric InfoNCE** per relation, not symmetric NT-Xent.  The
+random ceiling is `ln(batch_size)` (asymmetric form, not `ln(2 × batch_size)`).
 
 | batch_size | Random ceiling | Barely learning | Good | Excellent | Overfit risk |
 |-----------|---------------|-----------------|------|-----------|--------------|
-| 256 | ln(512) ≈ 6.24 | > 5.8 | 4.5 – 5.5 | 3.0 – 4.5 | < 3.0 |
-| 512 | ln(1024) ≈ 6.93 | > 6.5 | 5.0 – 6.2 | 3.5 – 5.0 | < 3.5 |
+| 256 | ln(256) ≈ 5.55 | > 5.2 | 3.5 – 5.0 | 2.0 – 3.5 | < 2.0 |
+| 512 | ln(512) ≈ 6.24 | > 6.0 | 4.0 – 5.5 | 2.5 – 4.0 | < 2.5 |
 
-The default run.ps1 batch size for Phase 2 is 512.  A final loss of ~6.1 at the
-midpoint of training (epoch 30/60, temperature still at 0.15) is normal — most
-learning happens in the second half as temperature anneals toward `--temp-end`
-(default 0.07).  Evaluate geometry with `eval_neighbors.ps1`, not raw loss alone.
+The reported loss is averaged across all active relations each epoch.  Individual
+relations converge at different rates: `effect_peer` typically converges fastest
+(symmetric functional equivalence is the cleanest signal); `decomposed_candidates`
+converges slowest (directed commander → card relevance is a harder task).
 
-> **Note:** benchmarks prior to this entry were calibrated for the old BCE
-> formulation (loss in [0, 1]).  They are no longer applicable.
+The encoder is **frozen** throughout Phase 2 bilinear — there is no temperature
+annealing and no encoder drift to monitor.  Verify Phase 1 geometry is intact
+after training with `eval_neighbors.ps1 -Checkpoint phase1_best`.
 
-The trainer uses `TABLESAMPLE SYSTEM(10) LIMIT 500_000` to sample positives from
-`synergy_edges` — never `ORDER BY random()` on the full table.  The `--sample`
-flag controls the positive count; `--neg-ratio` (default 3×) controls negatives.
-`compute_textmatch_synergy` runs inside Postgres with `SYNERGY_CHUNK=200` and
-`SYNERGY_LIMIT=100_000` rows per trigger event — keep the cap in place.
+To fall back to the old NT-Xent encoder-update path:
+```powershell
+.\scripts\run.ps1 -Train 2 -Bilinear:$false
+```
+
+> **Historical note:** NT-Xent benchmarks (`ln(2 × batch_size)` ceiling) and BCE
+> benchmarks (loss in [0, 1]) documented in earlier commits are no longer
+> applicable to the default bilinear training path.
 
 ### Phase 4 — encoder stability
 
@@ -348,17 +383,21 @@ Changing land embeddings invalidates all checkpoints — retrain from Phase 1.
 
 ### Training artifacts
 
-| Phases | Artifact | Checkpoint prefix |
-|--------|----------|--------------------|
-| 1–2 | `mtg_dataset.pt` | `phase*` |
-| 3–4 | `mtg_commanders.pt` | `phase*` |
+| Phases | Artifact | Checkpoints produced |
+|--------|----------|----------------------|
+| 1 | `mtg_dataset.pt` | `phase1_best.pt` — CardEncoder |
+| 2 (bilinear) | `mtg_dataset.pt` | `phase2_bilinear_best.pt` — BilinearSynergyHead |
+| 3–4 | `mtg_commanders.pt` | `phase3_best.pt` / `phase4_best.pt` — CommanderScorer |
+
+Phase 3 loads the encoder from `phase1_best.pt` (not `phase2_best.pt`, which is
+only written by the legacy NT-Xent path).
 
 ```powershell
 .\scripts\download_dataset.ps1      # downloads mtg_dataset.pt (Phases 1-2)
 .\scripts\download_commanders.ps1   # downloads mtg_commanders.pt (Phases 3-4)
 
 .\scripts\run.ps1 -Train 1
-.\scripts\run.ps1 -Train 2
+.\scripts\run.ps1 -Train 2          # bilinear (default); use -Bilinear:$false for NT-Xent
 .\scripts\run.ps1 -Train 3
 .\scripts\run.ps1 -Train 4
 ```
@@ -396,6 +435,134 @@ The artifact schema is identical to `mtg_dataset.pt` for the `decks` key
 so the existing `DeckDataset` and `train_deck_phase` in `train.py` work unchanged.
 The `archetype` field contains the top-5 most frequent `trigger_event` values from
 the commander's edges (e.g. `"creature_etb, death_trigger, tribal_zombie_typeline"`).
+
+---
+
+## Phase 2 bilinear — relation types (`BilinearSynergyHead`)
+
+Phase 2 trains one `W_r` matrix per relation type using asymmetric InfoNCE.
+Each relation type has distinct semantics; keeping them separate prevents
+contradictory gradients that would corrupt Phase 1 embedding geometry.
+
+### Relation types
+
+| Relation | Semantics | Source in artifact | Direction |
+|---|---|---|---|
+| `effect_peer` | Functional equivalence — cards that do the same thing | `effect_peer` key | symmetric |
+| `ability_trigger` | Producer → consumer — card A enables card B's trigger | `ability_trigger` key | directed |
+| `combo` | Game-state interaction — cards that win together | `synergy` key (label > 0.5) | undirected |
+| `decomposed_candidates` | Commander → deck candidate — card B fits A's strategy | `decomposed_candidates` key | directed |
+
+At inference, `score_candidates()` uses the `decomposed_candidates` W_r matrix
+to score how well each candidate fits a given commander, blended with the Phase 3
+`CommanderScorer` score (default weight 30% bilinear / 70% scorer).  Tune via
+`bilinear_weight` in `inference.py:score_candidates()`.
+
+**Limitation of W_decomposed_candidates:** it is a single 256×256 matrix applied
+uniformly to every (commander, card) pair.  It learns a global answer to "does
+this card's embedding sit in a useful directional relation to this commander's
+embedding?" but cannot specialise per commander archetype.  A Prossh embedding
+and an Atraxa embedding pass through the same W.  The Phase 3 `CommanderScorer`
+MLP sees `[z_cmd; z_card]` jointly and is trained with BPR on per-commander
+positive/negative sets, giving it the per-commander discrimination that a single
+matrix structurally cannot represent.
+
+**When Phase 3 may be redundant:** if the synergy candidate pre-filter is already
+selecting the high-synergy cards and the bilinear signal generalises well, the
+CommanderScorer may only re-rank within a pool that is already well-ordered.
+Validate empirically: compare the top-20 candidates for several commanders scored
+by bilinear alone vs. bilinear + CommanderScorer.  If the ranking does not change
+meaningfully, the commanders artifact pipeline is doing the real work and Phase 3
+is not earning its compute.
+
+### How relation pairs flow into training
+
+```
+ingest pipeline (Docker host)
+  │
+  ├── compute_textmatch_synergy  → synergy_edges (ability_trigger rows)
+  ├── compute_xmage_synergy      → synergy_edges (xmage_ability_trigger rows)
+  ├── compute_xmage_effect_synergy → synergy_edges (effect_peer rows)
+  ├── decompose_commanders       → card_abilities (source='decompose')
+  └── compute_commander_value_synergy → synergy_edges (decomposed_candidates rows)
+           │
+           ▼
+  export_dataset  (export_dataset.py)
+           │
+           ├── ability_trigger key  ← _load_ability_trigger_pairs()
+           ├── effect_peer key      ← _load_effect_peer_pairs()
+           ├── synergy key          ← _load_synergy_pairs() (combo only)
+           └── decomposed_candidates key ← _load_decomposed_candidate_pairs()
+           │
+           ▼
+  mtg_dataset.pt  (downloaded to GPU machine)
+           │
+           ▼
+  load_relation_pairs_from_artifact()  (train.py)
+           │
+           ▼
+  train_bilinear_phase()  → phase2_bilinear_best.pt
+```
+
+### Updating pairs for an existing relation
+
+After any ingest-side change that affects a relation's edges, re-export and
+retrain:
+
+```bash
+# On the Docker host — re-run the relevant synergy stage, then re-export
+docker compose run --rm ingest python pipeline.py --stage compute_textmatch_synergy
+docker compose run --rm ingest python pipeline.py --stage export_dataset
+
+# On the GPU machine
+.\scripts\download_dataset.ps1
+.\scripts\run.ps1 -Train 2          # retrains bilinear head from phase1_best
+```
+
+Phase 2 bilinear does not update the encoder, so Phase 1 does **not** need to be
+re-run when only relation pair data changes.
+
+### Adding a new relation type
+
+**Step 1 — ingest side:** produce the new edge rows in `synergy_edges` (or a new
+table) and export them as a new key in `mtg_dataset.pt`.
+
+  a. Add the ingest logic in the relevant `stages/` module.
+
+  b. In `export_db_helpers.py`, add a `_load_<relation>_pairs()` function that
+     queries the new rows and returns `(a_idx, b_idx)` numpy arrays.
+
+  c. In `export_dataset.py` → `main()`:
+     - Call the new loader.
+     - Add the key to the `artifact` dict: `"<relation>": {"a_idx": ..., "b_idx": ...}`.
+     - Update `meta` counts and the log line.
+
+**Step 2 — training side:**
+
+  a. Add the relation name to `BilinearSynergyHead.RELATIONS` in **both**:
+     - `services/trainer/train.py`
+     - `services/api/ops/model.py`
+
+     Position in the list determines the index stored in checkpoints — always
+     append to the end; never reorder existing entries, or all saved W_r
+     matrices will be misaligned.
+
+  b. In `load_relation_pairs_from_artifact()` (`train.py`), add a block that
+     reads the new artifact key and appends to `result`.
+
+**Step 3 — verify:**
+
+```powershell
+# Spot-check that the new relation loads correctly and has enough pairs
+.\scripts\run.ps1 -Train 2 -Epochs 1 -Dataset .\ingest_cache\mtg_dataset.pt
+# Look for: "Phase 2 bilinear: <relation> → N pairs"
+# N must be >= batch_size (default 512) for the relation to be active
+```
+
+> **Checkpoint compatibility:** adding a relation appends a new `W[i]` entry to
+> the `ParameterList`.  Old checkpoints (fewer relations) load cleanly via
+> `strict=False` — the new W_r starts from identity.  Removing or reordering
+> relations breaks all existing checkpoints and requires retraining from Phase 2.
 
 ---
 

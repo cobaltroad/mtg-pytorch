@@ -274,7 +274,7 @@ def tag_mechanics(rescan: bool = False) -> None:
             with conn.cursor() as cur:
                 cur.execute(
                     "DELETE FROM card_abilities"
-                    " WHERE source IN ('oracle_text', 'card_characteristic')"
+                    " WHERE source IN ('oracle_text', 'card_characteristic', 'mechanic')"
                 )
                 deleted = cur.rowcount
             conn.commit()

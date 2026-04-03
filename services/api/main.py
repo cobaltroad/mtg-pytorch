@@ -611,9 +611,34 @@ async def stop_training(container_id: str):
 # ── Checkpoint management ─────────────────────────────────────────────────────
 
 
+def _is_scorer_checkpoint(path) -> bool:
+    """Return True only if the checkpoint contains a CommanderScorer state dict.
+
+    CommanderScorer.net.0 is Linear(embed_dim * 2, embed_dim), so its weight
+    has shape (embed_dim, embed_dim * 2) — i.e. dim1 == 2 * dim0.
+
+    BilinearSynergyHead checkpoints have keys like "W.0", "W.1", …
+    CardEncoder checkpoints have net.0.weight with a large input dim (768).
+    Neither should appear in the scorer dropdown.
+    """
+    try:
+        import torch
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        w = state.get("net.0.weight")
+        return w is not None and w.shape[1] == w.shape[0] * 2
+    except Exception:
+        return False
+
+
 @app.get("/checkpoints")
 async def list_checkpoints():
-    """List available checkpoint files."""
+    """List available CommanderScorer checkpoint files.
+
+    Only checkpoints whose state dict matches the CommanderScorer architecture
+    are returned.  Encoder checkpoints (phase1_best, phase2_best) and the
+    bilinear head (phase2_bilinear_best) are excluded — selecting them as a
+    scorer would cause a 500 error.
+    """
     from ops import inference
 
     if not inference.CHECKPOINT_DIR.exists():
@@ -630,6 +655,7 @@ async def list_checkpoints():
             "size_bytes": f.stat().st_size,
         }
         for f in files
+        if _is_scorer_checkpoint(f)
     ]
 
 

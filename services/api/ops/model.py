@@ -53,3 +53,46 @@ class CommanderScorer(nn.Module):
         if z_cmd.dim() == 1:
             z_cmd = z_cmd.unsqueeze(0).expand_as(z_card)
         return self.net(torch.cat([z_cmd, z_card], dim=-1)).squeeze(-1)
+
+
+class BilinearSynergyHead(nn.Module):
+    """Phase 2 (Option B) inference head: relation-specific bilinear scoring.
+
+    score(A, B, r) = A^T W_r B
+
+    At inference the ``decomposed_candidates`` relation is used to score how
+    well a candidate card fits a given commander's strategy.  W matrices are
+    loaded from the ``phase2_bilinear_best.pt`` checkpoint.
+    """
+
+    RELATIONS: list[str] = [
+        "effect_peer",
+        "ability_trigger",
+        "combo",
+        "decomposed_candidates",
+    ]
+
+    def __init__(self, embed_dim: int = 256):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.rel_to_idx: dict[str, int] = {r: i for i, r in enumerate(self.RELATIONS)}
+        self.W = nn.ParameterList(
+            [nn.Parameter(torch.eye(embed_dim)) for _ in self.RELATIONS]
+        )
+
+    def _rel_idx(self, relation: int | str) -> int:
+        if isinstance(relation, str):
+            return self.rel_to_idx[relation]
+        return relation
+
+    def score(
+        self, z_a: torch.Tensor, z_b: torch.Tensor, relation: int | str
+    ) -> torch.Tensor:
+        """Return (B,) pairwise bilinear scores.
+
+        score[i] = z_a[i]^T W_r z_b[i]
+
+        z_a, z_b: (B, D) L2-normalised encoder outputs.
+        """
+        W = self.W[self._rel_idx(relation)]
+        return (z_a @ W * z_b).sum(dim=-1)  # (B,)
