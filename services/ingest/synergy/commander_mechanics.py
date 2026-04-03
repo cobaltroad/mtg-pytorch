@@ -63,7 +63,7 @@ def family_sql(family_key: str) -> str:
     Queries card_abilities.trigger_event so the result is driven entirely by
     what tag.py wrote — no oracle_text LIKE chains needed here.
 
-    Public so that other modules (e.g. stages/mechanic_tags.py) can import
+    Public so that other modules (e.g. stages/mechanics.py) can import
     this as the single canonical implementation rather than duplicating it.
     """
     keys = PATTERNS[family_key]

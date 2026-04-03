@@ -27,13 +27,13 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("mana_ability", "Mana ability: rules term",     p(r"\bmana ability\b")),
 ]
 
-# Direct oracle_text SQL for mana-producing abilities — used by
-# stages/mechanic_tags.py to tag mana_dork cards (combined with a type_line
-# Creature filter by the caller) without depending on card_abilities rows from
-# tag_abilities.  mana_rock is artifact-specific and excluded since the caller
-# already filters to Creature type_line.
-SQL: str = (
-    "(oracle_text ~* '[{]T[}][^.]*add [{]'"
-    " OR oracle_text ~* 'add (one |an amount of |that much )?mana'"
-    " OR oracle_text ILIKE '%%mana ability%%')"
-)
+# Direct oracle_text SQL for mana-producing abilities.  Each sub-key maps to its
+# own WHERE fragment so stages/mechanics.py can write fine-grained role rows.
+# mana_rock is artifact-specific (multiline type_line pattern) and excluded;
+# the caller adds a Creature type_line filter for mana_dork tagging.
+MANA_PRODUCER_SQL: dict[str, str] = {
+    "mana_tap":     "oracle_text ~* '[{]T[}][^.]*add [{]'",
+    "mana_add":     "oracle_text ~* 'add (one |an amount of |that much )?mana'",
+    "mana_ability": "oracle_text ILIKE '%%mana ability%%'",
+}
+SQL: str = "(" + " OR ".join(MANA_PRODUCER_SQL.values()) + ")"
