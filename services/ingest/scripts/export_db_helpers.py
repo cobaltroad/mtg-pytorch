@@ -26,15 +26,16 @@ log = logging.getLogger(__name__)
 DATABASE_URL    = os.environ["DATABASE_URL"]
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2")
 
-SAMPLE_PER_EVENT  = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
-                         os.environ.get("DATASET_SAMPLE", "100000")))
-COMBO_SAMPLE      = int(os.environ.get("DATASET_COMBO_SAMPLE",      "200000"))
-CV_SAMPLE         = int(os.environ.get("DATASET_CV_SAMPLE",         "200000"))
-EFFECT_PEER_SAMPLE = int(os.environ.get("DATASET_EFFECT_PEER_SAMPLE", "200000"))
-NEG_RATIO         = int(os.environ.get("DATASET_NEG_RATIO",    "3"))
-HARD_NEG_FRAC     = float(os.environ.get("DATASET_HARD_NEG_FRAC", "0.5"))
-SYN_LIMIT         = int(os.environ.get("DATASET_SYN_LIMIT",    "300"))
-
+SAMPLE_PER_EVENT         = int(os.environ.get("DATASET_SAMPLE_PER_EVENT",
+                              os.environ.get("DATASET_SAMPLE", "100000")))
+COMBO_SAMPLE             = int(os.environ.get("DATASET_COMBO_SAMPLE",             "200000"))
+CV_SAMPLE                = int(os.environ.get("DATASET_CV_SAMPLE",                "200000"))
+EFFECT_PEER_SAMPLE       = int(os.environ.get("DATASET_EFFECT_PEER_SAMPLE",       "200000"))
+ABILITY_TRIGGER_SAMPLE   = int(os.environ.get("DATASET_ABILITY_TRIGGER_SAMPLE",   "200000"))
+DECOMPOSED_SAMPLE        = int(os.environ.get("DATASET_DECOMPOSED_SAMPLE",        "200000"))
+NEG_RATIO                = int(os.environ.get("DATASET_NEG_RATIO",    "3"))
+HARD_NEG_FRAC            = float(os.environ.get("DATASET_HARD_NEG_FRAC", "0.5"))
+SYN_LIMIT                = int(os.environ.get("DATASET_SYN_LIMIT",    "300"))
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
@@ -158,6 +159,100 @@ def _load_effect_peer_pairs(
         log.info("    %-55s  %6d pairs  (pool %d)", bucket, n_added, len(bucket_rows))
 
     log.info("  %d effect_peer pairs across %d buckets", len(a_list), len(ep_by_bucket))
+    return (
+        np.array(a_list, dtype=np.int32),
+        np.array(b_list, dtype=np.int32),
+    )
+
+
+def _load_ability_trigger_pairs(
+    id_to_idx: dict[str, int],
+    sample: int = ABILITY_TRIGGER_SAMPLE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (a_idx, b_idx) int32 arrays for fine-grained ability_trigger edges.
+
+    Only trigger_events written by tag_mechanics' fine-grained and oracle-pattern
+    phases are included.  Coarse card-characteristic keys (``spell_*``, ``tribal_*``,
+    ``toughness_1_creatures``) are excluded via SQL filter — they pair every card of
+    a given type/color, which collapses Phase 2 geometry the same way the old 89M
+    broad-producer edges did.
+
+    Stratified by trigger_event so high-volume events (creature_etb, creature_cast)
+    don't crowd out smaller ones (lifegain_trigger, historic_cast).
+    """
+    log.info("Loading ability_trigger pairs — fine keys only (sample=%d)…", sample)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_a::text, card_b::text,
+                       COALESCE(metadata->>'trigger_event', 'unknown') AS te
+                FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                WHERE score_type = 'ability_trigger'
+                  AND (metadata->>'trigger_event') NOT LIKE 'spell\_%' ESCAPE '\\'
+                  AND (metadata->>'trigger_event') NOT LIKE 'tribal\_%' ESCAPE '\\'
+                  AND COALESCE(metadata->>'trigger_event', '') != 'toughness_1_creatures'
+            """)
+            by_event: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for card_a, card_b, te in cur.fetchall():
+                by_event[te].append((card_a, card_b))
+
+    per_event = max(1, sample // max(len(by_event), 1))
+    a_list: list[int] = []
+    b_list: list[int] = []
+    for te, rows in sorted(by_event.items()):
+        random.shuffle(rows)
+        n_added = 0
+        for card_a, card_b in rows[:per_event]:
+            if card_a in id_to_idx and card_b in id_to_idx:
+                a_list.append(id_to_idx[card_a])
+                b_list.append(id_to_idx[card_b])
+                n_added += 1
+        log.info("    %-45s  %6d pairs  (pool %d)", te, n_added, len(rows))
+
+    log.info("  %d ability_trigger pairs across %d fine events", len(a_list), len(by_event))
+    return (
+        np.array(a_list, dtype=np.int32),
+        np.array(b_list, dtype=np.int32),
+    )
+
+
+def _load_decomposed_candidate_pairs(
+    id_to_idx: dict[str, int],
+    sample: int = DECOMPOSED_SAMPLE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (a_idx, b_idx) int32 arrays for decomposed_candidates synergy edges.
+
+    Each edge is (commander, candidate_card) written by compute_commander_value_synergy.
+    Stratified by the first pattern_key in the edge metadata so high-frequency patterns
+    (etb_trigger, death_trigger) don't crowd out smaller ones.
+    """
+    log.info("Loading decomposed_candidates pairs (sample=%d)…", sample)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT card_a::text, card_b::text,
+                       COALESCE(metadata->'pattern_keys'->>0, 'unknown') AS first_key
+                FROM synergy_edges TABLESAMPLE SYSTEM(10)
+                WHERE score_type = 'decomposed_candidates'
+            """)
+            by_key: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for card_a, card_b, first_key in cur.fetchall():
+                by_key[first_key].append((card_a, card_b))
+
+    per_key = max(1, sample // max(len(by_key), 1))
+    a_list: list[int] = []
+    b_list: list[int] = []
+    for key, rows in sorted(by_key.items()):
+        random.shuffle(rows)
+        n_added = 0
+        for card_a, card_b in rows[:per_key]:
+            if card_a in id_to_idx and card_b in id_to_idx:
+                a_list.append(id_to_idx[card_a])
+                b_list.append(id_to_idx[card_b])
+                n_added += 1
+        log.info("    %-45s  %6d pairs  (pool %d)", key, n_added, len(rows))
+
+    log.info("  %d decomposed_candidates pairs across %d pattern keys", len(a_list), len(by_key))
     return (
         np.array(a_list, dtype=np.int32),
         np.array(b_list, dtype=np.int32),

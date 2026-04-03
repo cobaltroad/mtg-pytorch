@@ -73,6 +73,8 @@ from export_db_helpers import (
     _load_card_meta,
     _load_effect_peer_pairs,
     _load_synergy_pairs,
+    _load_ability_trigger_pairs,
+    _load_decomposed_candidate_pairs,
     get_conn,
 )
 
@@ -403,25 +405,39 @@ def main() -> None:
     #     silently discards symmetric peer edges).
     ep_a, ep_b = _load_effect_peer_pairs(id_to_idx)
 
+    # 3c. Fine ability_trigger pairs — oracle-text pattern edges from tag_mechanics,
+    #     coarse card-characteristic keys (spell_*, tribal_*, toughness_1_creatures)
+    #     excluded.  Stored separately so the trainer can use them as direct positives
+    #     without re-running producer-grouping.
+    at_a, at_b = _load_ability_trigger_pairs(id_to_idx)
+
+    # 3d. Decomposed-candidate pairs — (commander, candidate_card) edges written by
+    #     compute_commander_value_synergy.  Stored separately; directional (card_a is
+    #     always a commander).
+    dc_a, dc_b = _load_decomposed_candidate_pairs(id_to_idx)
+
     # 4. Assemble and save
     #    Phases 3/4 are handled by the commanders artifact (mtg_commanders.pt).
     meta = {
-        "model":                  os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"),
-        "dim":                    int(emb_matrix.shape[1]),
-        "card_count":             n,
-        "functional_pair_count":  int(len(fp_a)),
-        "staple_pair_count":      int(len(sp_a)),
-        "synergy_count":          int(len(a_idx)),
-        "effect_peer_count":      int(len(ep_a)),
-        "training_path":          "compositional",
+        "model":                       os.environ.get("EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"),
+        "dim":                         int(emb_matrix.shape[1]),
+        "card_count":                  n,
+        "functional_pair_count":       int(len(fp_a)),
+        "staple_pair_count":           int(len(sp_a)),
+        "synergy_count":               int(len(a_idx)),
+        "effect_peer_count":           int(len(ep_a)),
+        "ability_trigger_count":       int(len(at_a)),
+        "decomposed_candidate_count":  int(len(dc_a)),
+        "training_path":               "compositional",
         "signal_config": {
-            "include_ability_trigger": False,
-            "include_effect_peer":     True,
-            "include_commander_value": False,
-            "phase2_signal":           "combo+effect_peer",
+            "include_ability_trigger":   True,
+            "include_effect_peer":       True,
+            "include_commander_value":   False,
+            "ability_trigger_fine_only": True,
+            "phase2_signal":             "combo+effect_peer+ability_trigger(fine)+decomposed_candidates",
         },
-        "git_commit":             GIT_COMMIT,
-        "created_at":             datetime.now(timezone.utc).isoformat(),
+        "git_commit":  GIT_COMMIT,
+        "created_at":  datetime.now(timezone.utc).isoformat(),
     }
 
     artifact = {
@@ -446,6 +462,14 @@ def main() -> None:
             "a_idx": torch.from_numpy(ep_a),
             "b_idx": torch.from_numpy(ep_b),
         },
+        "ability_trigger": {
+            "a_idx": torch.from_numpy(at_a),
+            "b_idx": torch.from_numpy(at_b),
+        },
+        "decomposed_candidates": {
+            "a_idx": torch.from_numpy(dc_a),
+            "b_idx": torch.from_numpy(dc_b),
+        },
         "card_meta": card_meta,
     }
 
@@ -460,8 +484,9 @@ def main() -> None:
     size_mb = OUTPUT_PATH.stat().st_size / 1e6
     log.info(
         "Done. %.1f MB  |  %d cards  |  %d functional pairs  |  %d staple pairs  "
-        "|  %d synergy pairs  |  %d effect_peer pairs",
-        size_mb, n, len(fp_a), len(sp_a), len(a_idx), len(ep_a),
+        "|  %d synergy pairs  |  %d effect_peer pairs  "
+        "|  %d ability_trigger pairs  |  %d decomposed_candidate pairs",
+        size_mb, n, len(fp_a), len(sp_a), len(a_idx), len(ep_a), len(at_a), len(dc_a),
     )
 
 
