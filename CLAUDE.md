@@ -221,12 +221,21 @@ The model is trained in four phases, each building on the last:
    by conflating complementary relations (producer→consumer, combo) with
    similarity relations (functional peers).
 
-3. **Deck co-occurrence** — multi-label ranking: given a commander, which cards
-   appear in human-built decks?  Data from EDHREC / Moxfield snapshots stored
-   in the `decks` table.
+3. **Commander-card ranking** — BPR loss on the commanders artifact: given a
+   commander, rank its synergy-positive cards above random legal cards.
+   Trains `CommanderScorer` (a joint MLP over `[z_cmd; z_card]`) on top of
+   the frozen Phase 1 encoder.  Adds per-commander non-linear discrimination
+   that the Phase 2 bilinear head cannot represent (W_r is a single global
+   matrix; the MLP sees each commander–card pair jointly).  **Empirically
+   validate** that Phase 3 re-ranks the top-20 candidates differently from the
+   bilinear head alone before treating it as load-bearing — if the candidate
+   pre-filter and bilinear signal are already tight, Phase 3 may provide
+   diminishing returns.
 
 4. **Generative deck construction** — transformer decoder; given commander +
    partial deck, predict next card.  Sampled freely at inference — not greedy.
+   The only phase that models deck-level coherence: no scoring function over a
+   fixed (commander, card) pair can account for what is already in the deck.
 
 ## Key data sources
 
@@ -448,6 +457,23 @@ At inference, `score_candidates()` uses the `decomposed_candidates` W_r matrix
 to score how well each candidate fits a given commander, blended with the Phase 3
 `CommanderScorer` score (default weight 30% bilinear / 70% scorer).  Tune via
 `bilinear_weight` in `inference.py:score_candidates()`.
+
+**Limitation of W_decomposed_candidates:** it is a single 256×256 matrix applied
+uniformly to every (commander, card) pair.  It learns a global answer to "does
+this card's embedding sit in a useful directional relation to this commander's
+embedding?" but cannot specialise per commander archetype.  A Prossh embedding
+and an Atraxa embedding pass through the same W.  The Phase 3 `CommanderScorer`
+MLP sees `[z_cmd; z_card]` jointly and is trained with BPR on per-commander
+positive/negative sets, giving it the per-commander discrimination that a single
+matrix structurally cannot represent.
+
+**When Phase 3 may be redundant:** if the synergy candidate pre-filter is already
+selecting the high-synergy cards and the bilinear signal generalises well, the
+CommanderScorer may only re-rank within a pool that is already well-ordered.
+Validate empirically: compare the top-20 candidates for several commanders scored
+by bilinear alone vs. bilinear + CommanderScorer.  If the ranking does not change
+meaningfully, the commanders artifact pipeline is doing the real work and Phase 3
+is not earning its compute.
 
 ### How relation pairs flow into training
 
