@@ -129,8 +129,18 @@ def get_model(checkpoint_name: str = "phase3_best") -> Optional[_ModelBundle]:
         return None
     log.info("Loading scorer from %s", scorer_path)
     scr_state = torch.load(scorer_path, map_location=device)
-    # Infer embed_dim from the saved weights (net.0: Linear(embed_dim*2 → embed_dim)).
-    embed_dim = scr_state["net.0.weight"].shape[0]
+    # Validate state dict before use — bilinear head and encoder checkpoints
+    # have incompatible key structures and must not be loaded as a scorer.
+    w = scr_state.get("net.0.weight")
+    if w is None or w.shape[1] != w.shape[0] * 2:
+        log.error(
+            "%s is not a CommanderScorer checkpoint (expected net.0.weight with "
+            "shape (D, 2D)); got keys: %s",
+            scorer_path,
+            list(scr_state.keys())[:6],
+        )
+        return None
+    embed_dim = w.shape[0]
     scorer = CommanderScorer(embed_dim=embed_dim)
     scorer.load_state_dict(scr_state)
     scorer.eval()
