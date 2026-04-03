@@ -36,11 +36,10 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(r"\bdecayed\b")),
 ]
 
-# Direct oracle_text SQL for the sacrifice_fodder deck key — union of all patterns
-# above as PostgreSQL WHERE fragments against the cards table.  Used by
-# stages/mechanic_tags.py to tag self-sacrificing fodder cards without depending
-# on card_abilities rows from tag_abilities.
-SQL: str = (
-    "(oracle_text ~* 'sacrifice .{0,40}at the beginning of .{0,10}end step'"
-    " OR oracle_text ILIKE '%%decayed%%')"
-)
+# Direct oracle_text SQL for the sacrifice_fodder deck key.  Each sub-key maps to
+# its own WHERE fragment so stages/mechanics.py can write fine-grained role rows.
+SACRIFICE_SQL: dict[str, str] = {
+    "sacrifice_eot":   "oracle_text ~* 'sacrifice .{0,40}at the beginning of .{0,10}end step'",
+    "keyword_decayed": "oracle_text ILIKE '%%decayed%%'",
+}
+SQL: str = "(" + " OR ".join(SACRIFICE_SQL.values()) + ")"

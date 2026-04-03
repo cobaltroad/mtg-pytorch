@@ -23,7 +23,7 @@ mtg-pytorch/
 │   │       ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
 │   │       ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
 │   │       ├── tag.py          #   embed_cards
-│   │       ├── mechanic_tags.py #  tag_mechanic_tags — canonical role tagger (replaces tag_abilities)
+│   │       ├── mechanics.py    #   tag_mechanics — canonical role tagger (coarse + fine + oracle-pattern)
 │   │       ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
 │   │       ├── commander.py    #   compute_commander_value_synergy
 │   │       └── export.py       #   Thin wrappers for all export sub-stages
@@ -66,8 +66,8 @@ docker compose run --rm ingest
 
 # Individual sub-stages (useful after code changes or partial failures):
 docker compose run --rm ingest python pipeline.py --stage embed_cards
-docker compose run --rm ingest python pipeline.py --stage tag_mechanic_tags
-docker compose run --rm ingest python pipeline.py --stage tag_mechanic_tags --rescan   # delete + re-insert all mechanic role rows
+docker compose run --rm ingest python pipeline.py --stage tag_mechanics
+docker compose run --rm ingest python pipeline.py --stage tag_mechanics --rescan   # delete + re-insert all oracle_text/card_characteristic role rows
 docker compose run --rm ingest python pipeline.py --stage tag_abilities_xmage          # supplement with XMage source parsing (requires mage/ mount)
 docker compose run --rm ingest python pipeline.py --stage compute_textmatch_synergy
 docker compose run --rm ingest python pipeline.py --stage compute_xmage_synergy
@@ -464,7 +464,7 @@ together after training.
 
 XMage's Java card implementations encode machine-readable ability structure
 (triggered, activated, static, keyword) via typed Java classes.
-`tag_abilities_xmage` supplements the canonical `tag_mechanic_tags` stage with
+`tag_abilities_xmage` supplements the canonical `tag_mechanics` stage with
 a pass over the XMage Java source tree (`mage/`) and writes `card_abilities`
 rows tagged `source='xmage'`.
 

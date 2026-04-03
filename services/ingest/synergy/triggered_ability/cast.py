@@ -42,7 +42,7 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(r"whenever .{0,20}cast (?:an? )?(?:aura|equipment|vehicle)")),
 ]
 
-# Direct oracle_text SQL equivalents — used by stages/mechanic_tags.py so that
+# Direct oracle_text SQL equivalents — used by stages/mechanics.py so that
 # cast-trigger amplifier tags can be written without depending on card_abilities
 # rows from tag_abilities.  Mirrors the PATTERNS above as PostgreSQL ~* (POSIX
 # case-insensitive regex) WHERE fragments against the cards table.

@@ -252,7 +252,6 @@ with tab_deck:
                         "type_line": r.get("type_line") or "",
                         "mana_cost": r.get("mana_cost") or "",
                         "score": round(r["score"], 4),
-                        "cosine_sim": round(r["cosine_sim"], 4),
                         "tags": ", ".join(r.get("tags") or []),
                     }
                     for r in results
@@ -264,9 +263,6 @@ with tab_deck:
                 height=700,
                 column_config={
                     "score": st.column_config.NumberColumn("Fit score", format="%.4f"),
-                    "cosine_sim": st.column_config.NumberColumn(
-                        "Cosine sim", format="%.4f"
-                    ),
                     "tags": st.column_config.TextColumn("Tags"),
                 },
             )

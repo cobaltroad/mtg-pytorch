@@ -25,13 +25,12 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("creature_etb_self",        "Creature ETB trigger (self)",          p(r"when (?:this creature|~ |it) enters")),
 ]
 
-# Direct oracle_text SQL for the creature_etb_payoff deck key — union of all
-# patterns above as PostgreSQL WHERE fragments against the cards table.  Used by
-# stages/mechanic_tags.py to tag ETB-payoff cards without depending on
-# card_abilities rows from tag_abilities.
-SQL: str = (
-    "(oracle_text ~* 'whenever .{0,20}nontoken creature enters'"
-    " OR oracle_text ~* 'whenever .{0,20}creature you control enters'"
-    " OR oracle_text ~* 'whenever .{0,20}creatures? enters?'"
-    " OR oracle_text ~* 'when (this creature|it) enters')"
-)
+# Direct oracle_text SQL for the creature_etb_payoff deck key.  Each sub-key maps
+# to its own WHERE fragment so stages/mechanics.py can write fine-grained role rows.
+CREATURE_ETB_SQL: dict[str, str] = {
+    "nontoken_creature_etb":    "oracle_text ~* 'whenever .{0,20}nontoken creature enters'",
+    "creature_etb_you_control": "oracle_text ~* 'whenever .{0,20}creature you control enters'",
+    "creature_etb":             "oracle_text ~* 'whenever .{0,20}creatures? enters?'",
+    "creature_etb_self":        "oracle_text ~* 'when (this creature|it) enters'",
+}
+SQL: str = "(" + " OR ".join(CREATURE_ETB_SQL.values()) + ")"

@@ -11,15 +11,15 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("undergrowth_champion","Counter Check",                     p(r"(?:while|if) .* ha[sd] a \+1/\+1 counter on it")),
 ]
 
-# Direct oracle_text SQL for the counter_trigger deck key — union of all patterns
-# above as PostgreSQL WHERE fragments against the cards table.  Used by
-# stages/mechanic_tags.py to tag counter-amplifier cards without depending on
-# card_abilities rows from tag_abilities.
-SQL: str = (
-    "(oracle_text ILIKE '%%proliferate%%'"
-    " OR oracle_text ~* 'if one or more .{0,20}counters would be put'"
-    " OR oracle_text ~* 'if you would put one or more .{0,20}counters'"
-    " OR oracle_text ~* 'whenever one or more [+]1/[+]1 counters are put on'"
-    " OR oracle_text ~* 'each creature you control with a [+]1/[+]1 counter on it'"
-    " OR oracle_text ~* '(while|if) .{0,30}ha[sd] a [+]1/[+]1 counter on it')"
-)
+# Direct oracle_text SQL for the counter_trigger deck key.  Each sub-key maps to
+# its own WHERE fragment so stages/mechanics.py can write fine-grained role rows.
+# SQL is derived from the dict so both stay in sync automatically.
+COUNTER_SQL: dict[str, str] = {
+    "proliferate":          "oracle_text ILIKE '%%proliferate%%'",
+    "hardened_scales":      "oracle_text ~* 'if one or more .{0,20}counters would be put'",
+    "vorinclex":            "oracle_text ~* 'if you would put one or more .{0,20}counters'",
+    "scurry_oak":           "oracle_text ~* 'whenever one or more [+]1/[+]1 counters are put on'",
+    "bramblewood_paragon":  "oracle_text ~* 'each creature you control with a [+]1/[+]1 counter on it'",
+    "undergrowth_champion": "oracle_text ~* '(while|if) .{0,30}ha[sd] a [+]1/[+]1 counter on it'",
+}
+SQL: str = "(" + " OR ".join(COUNTER_SQL.values()) + ")"

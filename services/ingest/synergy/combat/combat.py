@@ -45,15 +45,14 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
      p(r"target attacking creature(?:\s+you control)?\s+gets? \+")),
 ]
 
-# Direct oracle_text SQL for the combat_tricks deck key — union of all patterns
-# above as PostgreSQL WHERE fragments against the cards table.  Used by
-# stages/mechanic_tags.py to tag combat-enabler cards without depending on
-# card_abilities rows from tag_abilities.
-SQL: str = (
-    "(oracle_text ~* '(has|have|gains?) (flying|menace|fear|intimidate|shadow|horsemanship|skulk)'"
-    " OR oracle_text ILIKE '%%can''t be blocked%%'"
-    " OR oracle_text ~* '(has|have|gains?) (first strike|double strike|deathtouch|lifelink|trample)'"
-    " OR oracle_text ~* '(has|have|gains?) vigilance'"
-    " OR oracle_text ~* 'attacking creatures?.+get [+]'"
-    " OR oracle_text ~* 'target attacking creature.+gets? [+]')"
-)
+# Direct oracle_text SQL for the combat_tricks deck key.  Each sub-key maps to its
+# own WHERE fragment so stages/mechanics.py can write fine-grained role rows.
+COMBAT_SQL: dict[str, str] = {
+    "evasion_enabler":      "oracle_text ~* '(has|have|gains?) (flying|menace|fear|intimidate|shadow|horsemanship|skulk)'",
+    "unblockable_enabler":  "oracle_text ILIKE '%%can''t be blocked%%'",
+    "damage_enabler":       "oracle_text ~* '(has|have|gains?) (first strike|double strike|deathtouch|lifelink|trample)'",
+    "vigilance_enabler":    "oracle_text ~* '(has|have|gains?) vigilance'",
+    "all_attackers_pump":   "oracle_text ~* 'attacking creatures?.+get [+]'",
+    "single_attacker_pump": "oracle_text ~* 'target attacking creature.+gets? [+]'",
+}
+SQL: str = "(" + " OR ".join(COMBAT_SQL.values()) + ")"

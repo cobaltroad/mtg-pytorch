@@ -63,7 +63,7 @@ def family_sql(family_key: str) -> str:
     Queries card_abilities.trigger_event so the result is driven entirely by
     what tag.py wrote — no oracle_text LIKE chains needed here.
 
-    Public so that other modules (e.g. stages/mechanic_tags.py) can import
+    Public so that other modules (e.g. stages/mechanics.py) can import
     this as the single canonical implementation rather than duplicating it.
     """
     keys = PATTERNS[family_key]
@@ -122,6 +122,11 @@ PRODUCER_DECOMPOSE_TO_DECK_KEY: dict[str, list[str]] = {
     "cast_trigger_instant_sorcery": ["instant_sorcery_cast", "spell_instant_sorcery"],
     "cast_trigger_historic": ["historic_cast", "spell_historic"],
     "cast_trigger_aura_equipment": ["aura_equipment_cast", "spell_aura_equipment"],
+    # color-based cast triggers need spells of that color (no amplifier category exists)
+    **{
+        f"cast_trigger_{c}": [f"spell_{c}"]
+        for c in ("white", "blue", "black", "red", "green", "colorless")
+    },
 }
 
 
@@ -162,8 +167,9 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
+    # color spell fodder (deck key for color-based cast-trigger commanders)
     **{
-        f"cast_trigger_{c}": f"{c.title()} spells"
+        f"spell_{c}": f"{c.title()} spells"
         for c in ("white", "blue", "black", "red", "green", "colorless")
     },
     **{

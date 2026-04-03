@@ -18,7 +18,7 @@ Run download only:  python pipeline.py --stage download
 Run process only:   python pipeline.py --stage process
 
 Individual sub-stages (rarely needed):
-  embed_cards, tag_mechanic_tags [--rescan],
+  embed_cards, tag_mechanics [--rescan],
   compute_textmatch_synergy, compute_xmage_synergy, compute_xmage_effect_synergy,
   decompose_commanders, compute_commander_value_synergy,
   export_dataset, export_dataset_commanders
@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 from stages.download import download as _download  # noqa: E402
 from stages.tag import embed_cards  # noqa: E402
-from stages.mechanic_tags import tag_mechanic_tags  # noqa: E402
+from stages.mechanics import tag_mechanics  # noqa: E402
 from stages.dataset import (
     compute_textmatch_synergy,
     compute_xmage_synergy,
@@ -82,7 +82,7 @@ async def process() -> None:
     explicitly before building the commander artifact.
     """
     await embed_cards()
-    tag_mechanic_tags()
+    tag_mechanics()
     await compute_textmatch_synergy()
     await compute_xmage_synergy()
     await compute_xmage_effect_synergy()
@@ -108,7 +108,7 @@ if __name__ == "__main__":
             "process",
             # Tag sub-stages
             "embed_cards",
-            "tag_mechanic_tags",
+            "tag_mechanics",
             "tag_abilities_xmage",
             # Synergy sub-stages
             "compute_textmatch_synergy",
@@ -125,8 +125,8 @@ if __name__ == "__main__":
         default=None,
         help=(
             "download: fetch MTGJSON + load cards + import combos. "
-            "process: embed + tag_mechanic_tags + compute synergy + export_dataset. "
-            "tag_mechanic_tags: write deck-key role tags to candidate cards (source='mechanic'). "
+            "process: embed + tag_mechanics + compute synergy + export_dataset. "
+            "tag_mechanics: write coarse, fine-grained, and oracle-pattern role tags to candidate cards. "
             "tag_abilities_xmage: supplement card_abilities from XMage source tree "
             "(requires XMAGE_DIR env var; mount mage/ read-only). "
             "Omit to run both download and process."
@@ -136,8 +136,8 @@ if __name__ == "__main__":
         "--rescan",
         action="store_true",
         help=(
-            "tag_mechanic_tags only: delete all existing source='mechanic' role rows "
-            "first, then re-insert.  Use after updating SQL in synergy modules."
+            "tag_mechanics only: delete all existing source='oracle_text'/'card_characteristic' "
+            "rows first, then re-insert.  Use after updating SQL or patterns."
         ),
     )
     args = parser.parse_args()
@@ -148,8 +148,8 @@ if __name__ == "__main__":
         asyncio.run(process())
     elif args.stage == "embed_cards":
         asyncio.run(embed_cards())
-    elif args.stage == "tag_mechanic_tags":
-        tag_mechanic_tags(rescan=args.rescan)
+    elif args.stage == "tag_mechanics":
+        tag_mechanics(rescan=args.rescan)
     elif args.stage == "tag_abilities_xmage":
         from xmage_parse import tag_abilities_xmage as _xmage_tag
         import os as _os
@@ -166,6 +166,10 @@ if __name__ == "__main__":
         from stages.decompose import write_commander_abilities as _decompose
 
         _decompose()
+    elif args.stage == "compute_commander_value_synergy":
+        from stages.commander import compute_commander_value_synergy as _ccvs
+
+        _ccvs()
     elif args.stage == "export_dataset":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":

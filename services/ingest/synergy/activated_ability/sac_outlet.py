@@ -19,11 +19,10 @@ PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("sac_outlet_permanent", "Sac outlet: sacrifice a permanent", p(r"sacrifice a(?:nother)? permanent\s*:")),
 ]
 
-# Direct oracle_text SQL for the sac_outlet deck key — union of all patterns above
-# as PostgreSQL WHERE fragments against the cards table.  Used by
-# stages/mechanic_tags.py to tag sacrifice-outlet cards without depending on
-# card_abilities rows from tag_abilities.
-SQL: str = (
-    "(oracle_text ~* 'sacrifice a(nother)? creature\\s*:'"
-    " OR oracle_text ~* 'sacrifice a(nother)? permanent\\s*:')"
-)
+# Direct oracle_text SQL for the sac_outlet deck key.  Each sub-key maps to its
+# own WHERE fragment so stages/mechanics.py can write fine-grained role rows.
+SAC_OUTLET_SQL: dict[str, str] = {
+    "sac_outlet_creature":  "oracle_text ~* 'sacrifice a(nother)? creature\\s*:'",
+    "sac_outlet_permanent": "oracle_text ~* 'sacrifice a(nother)? permanent\\s*:'",
+}
+SQL: str = "(" + " OR ".join(SAC_OUTLET_SQL.values()) + ")"

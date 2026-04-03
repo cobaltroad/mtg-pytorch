@@ -352,16 +352,6 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
             r"|when.{0,30}put into (?:a |your )?graveyard from",
         ),
     ),
-    # Keyword lord
-    (
-        "keyword_lord",
-        "Keyword grant (lord)",
-        p(
-            r"(?:creatures? you control|other [a-z\s]+you control).{0,40}"
-            r"(?:gain|have|get) (?:flying|trample|haste|menace|hexproof|lifelink|"
-            r"deathtouch|reach|vigilance|indestructible|first strike|double strike)",
-        ),
-    ),
     # Cycling trigger
     (
         "cycling_trigger",

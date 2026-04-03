@@ -143,6 +143,8 @@ _PRODUCER_DECOMPOSE_TO_DECK_KEY: dict[str, list[str]] = {
     "cast_trigger_instant_sorcery": ["instant_sorcery_cast", "spell_instant_sorcery"],
     "cast_trigger_historic": ["historic_cast", "spell_historic"],
     "cast_trigger_aura_equipment": ["aura_equipment_cast", "spell_aura_equipment"],
+    **{f"cast_trigger_{c}": [f"spell_{c}"]
+       for c in ("white", "blue", "black", "red", "green", "colorless")},
 }
 
 # All consumer decompose keys (deck key == decompose key for consumers).
@@ -150,13 +152,6 @@ _CONSUMER_DECOMPOSE_KEYS: frozenset[str] = frozenset(
     {
         "creature_token_generator",
         "mana_dork",
-        # color-based cast triggers
-        "cast_trigger_white",
-        "cast_trigger_blue",
-        "cast_trigger_black",
-        "cast_trigger_red",
-        "cast_trigger_green",
-        "cast_trigger_colorless",
         # tribal
         "tribal_elf",
         "tribal_dragon",
@@ -219,12 +214,12 @@ _DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
-    "cast_trigger_white": "White spells",
-    "cast_trigger_blue": "Blue spells",
-    "cast_trigger_black": "Black spells",
-    "cast_trigger_red": "Red spells",
-    "cast_trigger_green": "Green spells",
-    "cast_trigger_colorless": "Colorless spells",
+    "spell_white": "White spells",
+    "spell_blue": "Blue spells",
+    "spell_black": "Black spells",
+    "spell_red": "Red spells",
+    "spell_green": "Green spells",
+    "spell_colorless": "Colorless spells",
     **{
         f"tribal_{t}": f"{t.title()} tribal creatures"
         for t in (
@@ -390,26 +385,35 @@ async def score_commander_candidates(
     embeddings = await loop.run_in_executor(
         None, inference.get_embeddings, DATABASE_URL
     )
-    legal_ids = await loop.run_in_executor(None, inference.get_legal_ids, DATABASE_URL)
-    color_ids = await loop.run_in_executor(
-        None, inference.get_color_identities, DATABASE_URL
-    )
     card_meta = await loop.run_in_executor(
         None, inference.get_card_metadata, DATABASE_URL
     )
 
-    legal_color = [
-        cid
-        for cid in legal_ids
-        if cid in embeddings
-        and color_ids.get(cid, frozenset()) <= color_identity
-        and cid != commander_id
+    decomposed_rows = await db.execute(
+        text(
+            "SELECT card_b::text FROM synergy_edges"
+            " WHERE score_type = 'decomposed_candidates' AND card_a = CAST(:cmd_id AS uuid)"
+        ),
+        {"cmd_id": commander_id},
+    )
+    candidates = [
+        row[0]
+        for row in decomposed_rows.fetchall()
+        if row[0] in embeddings and row[0] != commander_id
     ]
+
+    if not candidates:
+        raise HTTPException(
+            503,
+            "No decomposed_candidates found for this commander. "
+            "Run pipeline.py --stage decompose_commanders then "
+            "--stage compute_commander_value_synergy first.",
+        )
 
     scored = await loop.run_in_executor(
         None,
         lambda: inference.score_candidates(
-            commander_id, legal_color, embeddings, model
+            commander_id, candidates, embeddings, model
         ),
     )
 
@@ -435,6 +439,7 @@ async def score_commander_candidates(
                 SELECT c.oracle_id::text,
                        ca.ability_type,
                        ca.ability_name,
+                       ca.trigger_event,
                        ca.source
                 FROM card_abilities ca
                 JOIN cards c ON c.id = ca.card_id
@@ -451,11 +456,11 @@ async def score_commander_candidates(
 
         tags_by_oracle: dict[str, list[str]] = defaultdict(list)
         seen_tags: dict[str, set[str]] = defaultdict(set)
-        for oid, ability_type, ability_name, source in tag_rows.fetchall():
+        for oid, ability_type, ability_name, trigger_event, source in tag_rows.fetchall():
             if source == "xmage":
-                tag = f"⚡ {ability_name}"
+                tag = f"⚡ {trigger_event or ability_name}"
             else:
-                tag = ability_name
+                tag = trigger_event or ability_name
             if tag not in seen_tags[oid]:
                 seen_tags[oid].add(tag)
                 tags_by_oracle[oid].append(tag)
