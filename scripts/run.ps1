@@ -31,6 +31,13 @@ param(
     # Start high for soft gradients, end near Phase 1 value to sharpen clusters.
     [double]$Phase2TempStart = 0.3,
     [double]$Phase2TempEnd = 0.07,
+    # Phase 2 (Option B): train BilinearSynergyHead W_r matrices with frozen
+    # encoder instead of NT-Xent on the card encoder.  Saves phase2_bilinear_best.pt.
+    # The encoder (phase2_best.pt) is NOT updated — Phase 1 weights are reused as-is.
+    # Default true (Option B is preferred).  Pass -Bilinear:$false to use NT-Xent.
+    [bool]$Bilinear = $true,
+    # Phase 2 bilinear: InfoNCE temperature (fixed, no annealing).
+    [double]$BilinearTemperature = 0.07,
 
     [int]$Sample = 500000,
     [int]$RoleDemandSample = 100000,
@@ -149,27 +156,47 @@ function Show-PostTrainingGuidance {
             Write-Host '   < 3.5       overfit risk'
         }
         2 {
+            if ($Bilinear) {
+                Write-Host ''
+                Write-Host ' Bilinear (Option B) loss scale  (asymmetric InfoNCE per relation):' -ForegroundColor White
+                Write-Host '   Random ceiling = ln(batch_size).  For batch_size=512: ln(512) = 6.24'
+                Write-Host '   > 6.0       barely learning'
+                Write-Host '   4.0-5.5     good'
+                Write-Host '   2.5-4.0     excellent'
+                Write-Host '   < 2.5       overfit risk'
+                Write-Host ''
+                Write-Host ' Encoder is FROZEN — Phase 1 geometry is preserved exactly.'
+                Write-Host ' Only the W_r bilinear matrices are trained (one per relation type).'
+                Write-Host ''
+                Write-Host (' Checkpoint: ' + $ckpt + '\phase2_bilinear_best.pt  (bilinear head)')
+                Write-Host (' Encoder:    ' + $ckpt + '\phase1_best.pt           (unchanged)')
+                Write-Host ''
+                Write-Host ' Regression check (Phase 1 geometry must be undamaged):'
+                Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 1' + $dsArg)
+                Write-Host '     -> should still show mana dorks (Phase 1 encoder, not updated)'
+            } else {
+                Write-Host ''
+                Write-Host ' NT-Xent loss scale  (batch_size=512, random ceiling = ln(1024) = 6.93):' -ForegroundColor White
+                Write-Host '   > 6.5       barely learning - check synergy_edges row count'
+                Write-Host '   5.0-6.2     good'
+                Write-Host '   3.5-5.0     excellent'
+                Write-Host '   < 3.5       overfit risk - shorten training'
+                Write-Host ''
+                Write-Host ' Most learning happens in the second half of training as temperature'
+                Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
+                Write-Host ' epoch 30 in the 5.5-6.2 range is normal - evaluate geometry,'
+                Write-Host ' not just loss:'
+                Write-Host ''
+                Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
+                Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 2' + $dsArg)
+                Write-Host '     -> should still show mana dorks'
+                Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -Phase 2' + $dsArg)
+                Write-Host '     -> should still show removal spells'
+                Write-Host ''
+                Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
+            }
             Write-Host ''
-            Write-Host ' NT-Xent loss scale  (batch_size=512, random ceiling = ln(1024) = 6.93):' -ForegroundColor White
-            Write-Host '   > 6.5       barely learning - check synergy_edges row count'
-            Write-Host '   5.0-6.2     good'
-            Write-Host '   3.5-5.0     excellent'
-            Write-Host '   < 3.5       overfit risk - shorten training'
-            Write-Host ''
-            Write-Host ' Most learning happens in the second half of training as temperature'
-            Write-Host ' anneals toward --temp-end (default 0.07).  A final loss around'
-            Write-Host ' epoch 30 in the 5.5-6.2 range is normal - evaluate geometry,'
-            Write-Host ' not just loss:'
-            Write-Host ''
-            Write-Host ' Regression check (verify Phase 2 did not corrupt Phase 1 geometry):'
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Llanowar Elves" -Phase 2' + $dsArg)
-            Write-Host '     -> should still show mana dorks'
-            Write-Host ('   .\scripts\eval_neighbors.ps1 "Swords to Plowshares" -Phase 2' + $dsArg)
-            Write-Host '     -> should still show removal spells'
-            Write-Host ''
-            Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
-            Write-Host ''
-            Write-Host ' Next step -download commanders artifact then train Phase 3:'
+            Write-Host ' Next step — download commanders artifact then train Phase 3:'
             Write-Host '   .\scripts\download_commanders.ps1'
             Write-Host '   .\scripts\run.ps1 -Train 3'
         }
@@ -321,8 +348,15 @@ if ($Mode -eq 'train') {
 
     if ($Phase -eq 2) {
         $cmd += @('--sample', $Sample, '--combo-sample', $ComboSample, '--commander-value-sample', $CommanderValueSample)
-        $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
-        $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
+        if ($Bilinear) {
+            $cmd += '--bilinear'
+            $cmd += @('--bilinear-temperature', $BilinearTemperature)
+            # Bilinear freezes the encoder; encoder-lr-scale and temp annealing
+            # flags are NT-Xent-specific and not passed in this mode.
+        } else {
+            $cmd += @('--encoder-lr-scale', $Phase2EncoderLrScale)
+            $cmd += @('--temp-start', $Phase2TempStart, '--temp-end', $Phase2TempEnd)
+        }
     }
 
     # Phase 3: encoder is frozen in train.py — no extra flags needed.

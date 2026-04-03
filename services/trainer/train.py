@@ -388,6 +388,76 @@ class CommanderScorer(nn.Module):
         return self.net(torch.cat([z_cmd, z_card], dim=-1)).squeeze(-1)
 
 
+class BilinearSynergyHead(nn.Module):
+    """Phase 2 (Option B): relation-specific bilinear scoring matrices W_r.
+
+    score(A, B, r) = A^T W_r B
+
+    One matrix per relation type, initialised to identity so that at the
+    start of training score(A, B, r) = cosine-similarity (Phase 1 geometry
+    is preserved exactly at init).
+
+    The CardEncoder is frozen during bilinear training — only W_r matrices
+    are updated.  This separates the four signal types that Phase 2 NT-Xent
+    incorrectly collapses together:
+
+        effect_peer           — symmetric functional equivalence (valid for
+                                similarity training)
+        ability_trigger       — producer → consumer (complementary, not similar)
+        combo                 — game-state interaction (complementary)
+        decomposed_candidates — commander → deck candidate (directed relevance)
+
+    At inference the decomposed_candidates relation is used to score how
+    well a given card fits a commander's strategy.
+    """
+
+    RELATIONS: list[str] = [
+        "effect_peer",
+        "ability_trigger",
+        "combo",
+        "decomposed_candidates",
+    ]
+
+    def __init__(self, embed_dim: int = 256):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.rel_to_idx: dict[str, int] = {r: i for i, r in enumerate(self.RELATIONS)}
+        # Identity init: score(A, B, r) = A · B (cosine sim for unit vectors).
+        self.W = nn.ParameterList(
+            [nn.Parameter(torch.eye(embed_dim)) for _ in self.RELATIONS]
+        )
+
+    def _rel_idx(self, relation: int | str) -> int:
+        if isinstance(relation, str):
+            return self.rel_to_idx[relation]
+        return relation
+
+    def score_matrix(
+        self, z_a: torch.Tensor, z_b: torch.Tensor, relation: int | str
+    ) -> torch.Tensor:
+        """Return (B_a, B_b) bilinear score matrix.
+
+        [i, j] = z_a[i]^T W_r z_b[j]
+
+        Diagonal entries are the positive-pair scores; off-diagonal entries
+        are in-batch negatives for InfoNCE loss.
+        """
+        W = self.W[self._rel_idx(relation)]
+        return z_a @ W @ z_b.T  # (B_a, B_b)
+
+    def score(
+        self, z_a: torch.Tensor, z_b: torch.Tensor, relation: int | str
+    ) -> torch.Tensor:
+        """Return (B,) pairwise bilinear scores.
+
+        score[i] = z_a[i]^T W_r z_b[i]
+
+        Used at inference to score (commander, candidate) pairs.
+        """
+        W = self.W[self._rel_idx(relation)]
+        return (z_a @ W * z_b).sum(dim=-1)  # (B,)
+
+
 # ── Datasets ──────────────────────────────────────────────────────────────────
 
 
@@ -406,6 +476,32 @@ class SynergyDataset(Dataset):
         emb_a = torch.from_numpy(self.embeddings[card_a])
         emb_b = torch.from_numpy(self.embeddings[card_b])
         return emb_a, emb_b, torch.tensor(label, dtype=torch.float32)
+
+
+class SynergyRelationDataset(Dataset):
+    """Phase 2 bilinear: positive pairs tagged with relation type index.
+
+    Each item returns (emb_a, emb_b, relation_idx) where relation_idx is
+    an int indexing into BilinearSynergyHead.RELATIONS.  Used by
+    train_bilinear_phase to route each pair to the correct W_r matrix.
+    """
+
+    def __init__(
+        self,
+        pairs: list[tuple[str, str, int]],
+        embeddings: dict[str, np.ndarray],
+    ):
+        self.pairs = pairs
+        self.embeddings = embeddings
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, idx: int):
+        card_a, card_b, rel = self.pairs[idx]
+        emb_a = torch.from_numpy(self.embeddings[card_a])
+        emb_b = torch.from_numpy(self.embeddings[card_b])
+        return emb_a, emb_b, torch.tensor(rel, dtype=torch.long)
 
 
 # ── Training loops ────────────────────────────────────────────────────────────
@@ -443,6 +539,29 @@ def nt_xent_loss(
     sim = sim.masked_fill(mask, float("-inf"))
     # For i in [0,B): positive is at i+B; for i in [B,2B): positive is at i-B
     labels = torch.cat([torch.arange(B, 2 * B), torch.arange(B)]).to(z.device)
+    return F.cross_entropy(sim, labels)
+
+
+def bilinear_nt_xent_loss(
+    z_a: torch.Tensor,
+    z_b: torch.Tensor,
+    head: BilinearSynergyHead,
+    relation: int | str,
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """Asymmetric bilinear InfoNCE loss for a batch of positive pairs.
+
+    z_a, z_b: (B, D) L2-normalised encoder outputs.
+
+    Score matrix: S[i, j] = z_a[i]^T W_r z_b[j] / temperature.
+    The diagonal (i == j) are the positive pairs; all other entries in each
+    row are in-batch negatives.  Asymmetric formulation (one direction only)
+    is natural for directed relations (ability_trigger, decomposed_candidates)
+    and avoids double-counting for symmetric ones (effect_peer, combo).
+    """
+    B = z_a.size(0)
+    sim = head.score_matrix(z_a, z_b, relation) / temperature  # (B, B)
+    labels = torch.arange(B, device=z_a.device)
     return F.cross_entropy(sim, labels)
 
 
@@ -708,6 +827,262 @@ def train_synergy_phase(
     save_checkpoint(model, f"{checkpoint_prefix}2_epoch{epochs}")
     return {"phase": 2, "best_loss": best_loss, "best_epoch": best_epoch,
             "final_epoch": epochs, "stopped_early": False}
+
+
+# ── Phase 2 bilinear (Option B) ───────────────────────────────────────────────
+
+
+def load_relation_pairs_from_artifact(
+    data: dict,
+    combo_sample: int = 200_000,
+    effect_peer_sample: int = 200_000,
+    ability_trigger_sample: int = 200_000,
+    decomposed_sample: int = 200_000,
+) -> dict[str, list[tuple[str, str]]]:
+    """Load positive pairs grouped by relation type from the training artifact.
+
+    Returns {relation_name: [(card_a_id, card_b_id), …]} for each relation
+    present in the artifact.  Used by train_bilinear_phase to build
+    per-relation DataLoaders.
+
+    Relations loaded:
+        combo                 — from artifact["synergy"] (label > 0.5 = positive)
+        effect_peer           — from artifact["effect_peer"]
+        ability_trigger       — from artifact["ability_trigger"]
+        decomposed_candidates — from artifact["decomposed_candidates"]
+    """
+    card_ids = data["card_ids"]
+    rng = random.Random(42)
+    result: dict[str, list[tuple[str, str]]] = {}
+
+    # combo — synergy key contains combo_package edges; label > 0.5 = positive
+    syn = data.get("synergy")
+    if syn is not None:
+        combo_pairs: list[tuple[str, str]] = [
+            (card_ids[a], card_ids[b])
+            for a, b, l in zip(
+                syn["a_idx"].tolist(), syn["b_idx"].tolist(), syn["labels"].tolist()
+            )
+            if l > 0.5
+        ]
+        rng.shuffle(combo_pairs)
+        if len(combo_pairs) > combo_sample:
+            combo_pairs = combo_pairs[:combo_sample]
+        result["combo"] = combo_pairs
+        log.info("load_relation_pairs: %d combo pairs", len(combo_pairs))
+
+    # effect_peer — symmetric peer pairs by (trigger_event, effect_class)
+    ep = data.get("effect_peer")
+    if ep is not None:
+        ep_pairs: list[tuple[str, str]] = [
+            (card_ids[a], card_ids[b])
+            for a, b in zip(ep["a_idx"].tolist(), ep["b_idx"].tolist())
+        ]
+        rng.shuffle(ep_pairs)
+        if len(ep_pairs) > effect_peer_sample:
+            ep_pairs = ep_pairs[:effect_peer_sample]
+        result["effect_peer"] = ep_pairs
+        log.info("load_relation_pairs: %d effect_peer pairs", len(ep_pairs))
+
+    # ability_trigger — fine oracle-text pattern edges (producer → consumer)
+    at = data.get("ability_trigger")
+    if at is not None:
+        at_pairs: list[tuple[str, str]] = [
+            (card_ids[a], card_ids[b])
+            for a, b in zip(at["a_idx"].tolist(), at["b_idx"].tolist())
+        ]
+        rng.shuffle(at_pairs)
+        if len(at_pairs) > ability_trigger_sample:
+            at_pairs = at_pairs[:ability_trigger_sample]
+        result["ability_trigger"] = at_pairs
+        log.info("load_relation_pairs: %d ability_trigger pairs", len(at_pairs))
+
+    # decomposed_candidates — commander → deck candidate (directed)
+    dc = data.get("decomposed_candidates")
+    if dc is not None:
+        dc_pairs: list[tuple[str, str]] = [
+            (card_ids[a], card_ids[b])
+            for a, b in zip(dc["a_idx"].tolist(), dc["b_idx"].tolist())
+        ]
+        rng.shuffle(dc_pairs)
+        if len(dc_pairs) > decomposed_sample:
+            dc_pairs = dc_pairs[:decomposed_sample]
+        result["decomposed_candidates"] = dc_pairs
+        log.info("load_relation_pairs: %d decomposed_candidates pairs", len(dc_pairs))
+
+    total = sum(len(v) for v in result.values())
+    log.info(
+        "load_relation_pairs: %d total pairs across %d relations",
+        total, len(result),
+    )
+    return result
+
+
+def train_bilinear_phase(
+    encoder: CardEncoder,
+    head: BilinearSynergyHead,
+    pairs_by_relation: dict[str, list[tuple[str, str]]],
+    embeddings: dict[str, np.ndarray],
+    epochs: int,
+    lr: float,
+    batch_size: int = 256,
+    temperature: float = 0.07,
+    checkpoint_prefix: str = "phase",
+) -> dict:
+    """Phase 2 (Option B): learn W_r bilinear matrices with frozen encoder.
+
+    For each epoch every relation type's pairs are processed in separate
+    passes.  Within each pass, pairs are shuffled and split into mini-batches
+    of size batch_size.  Loss: asymmetric bilinear InfoNCE where the diagonal
+    of the score matrix is the positive pair and every off-diagonal entry in
+    the same row is an in-batch negative.
+
+    The encoder is frozen — its Phase 1 geometry is never touched.  All cards
+    are pre-projected through the encoder once at the start of training and
+    the cached projections are reused every epoch.
+
+    Checkpoints:
+        phase2_bilinear_best.pt  — saved whenever a new best loss is found
+        phase2_bilinear_epochN.pt — saved at the end of training
+    """
+    device = next(encoder.parameters()).device
+
+    # ── Freeze encoder; pre-project all cards once ────────────────────────────
+    encoder.requires_grad_(False)
+    encoder.eval()
+    all_ids = list(embeddings.keys())
+    id_to_idx = {cid: i for i, cid in enumerate(all_ids)}
+    all_raw = torch.from_numpy(
+        np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
+    ).to(device)
+    log.info(
+        "Phase 2 bilinear: pre-projecting %d cards through frozen encoder…",
+        len(all_ids),
+    )
+    with torch.no_grad():
+        all_proj = torch.cat(
+            [encoder(all_raw[i: i + 512]) for i in range(0, all_raw.size(0), 512)],
+            dim=0,
+        )  # (N, D')
+    log.info("Phase 2 bilinear: projections cached, shape=%s", tuple(all_proj.shape))
+
+    # ── Build per-relation index arrays ───────────────────────────────────────
+    rel_arrays: dict[str, np.ndarray] = {}
+    for rel_name, pairs in pairs_by_relation.items():
+        if rel_name not in head.rel_to_idx:
+            log.warning(
+                "Phase 2 bilinear: unknown relation '%s' — skipping", rel_name
+            )
+            continue
+        idx_list: list[tuple[int, int]] = []
+        n_skipped = 0
+        for a_id, b_id in pairs:
+            ai = id_to_idx.get(a_id)
+            bi = id_to_idx.get(b_id)
+            if ai is None or bi is None:
+                n_skipped += 1
+                continue
+            idx_list.append((ai, bi))
+        if n_skipped:
+            log.warning(
+                "Phase 2 bilinear: %s — %d pairs skipped (card not in embeddings)",
+                rel_name, n_skipped,
+            )
+        if len(idx_list) >= batch_size:
+            rel_arrays[rel_name] = np.array(idx_list, dtype=np.int64)
+            log.info(
+                "Phase 2 bilinear: %s → %d pairs", rel_name, len(idx_list)
+            )
+        else:
+            log.warning(
+                "Phase 2 bilinear: %s — only %d pairs (need >= batch_size=%d), skipping",
+                rel_name, len(idx_list), batch_size,
+            )
+
+    if not rel_arrays:
+        log.error(
+            "Phase 2 bilinear: no relation has enough pairs — "
+            "re-export artifact and ensure synergy stages have run."
+        )
+        return {
+            "phase": "2_bilinear",
+            "best_loss": None,
+            "best_epoch": None,
+            "final_epoch": 0,
+            "stopped_early": False,
+        }
+
+    active_rels = list(rel_arrays.keys())
+    log.info(
+        "Phase 2 bilinear: training %d relations: %s  batch_size=%d  temp=%.3f",
+        len(active_rels), active_rels, batch_size, temperature,
+    )
+
+    # ── Optimiser (head parameters only) ─────────────────────────────────────
+    head = head.to(device)
+    optimizer = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    best_loss = float("inf")
+    best_epoch = 0
+
+    for epoch in range(epochs):
+        head.train()
+        total_loss = 0.0
+        n_batches = 0
+
+        for rel_name in active_rels:
+            rel_idx = head.rel_to_idx[rel_name]
+            arr = rel_arrays[rel_name]
+            perm = np.random.permutation(len(arr))
+            arr = arr[perm]
+
+            for start in range(0, len(arr) - batch_size + 1, batch_size):
+                batch = arr[start: start + batch_size]
+                z_a = all_proj[batch[:, 0].tolist()]
+                z_b = all_proj[batch[:, 1].tolist()]
+
+                loss = bilinear_nt_xent_loss(z_a, z_b, head, rel_idx, temperature)
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(head.parameters(), 1.0)
+                optimizer.step()
+                total_loss += loss.item()
+                n_batches += 1
+
+        scheduler.step()
+        avg = total_loss / max(n_batches, 1)
+        log.info(
+            "Phase 2 bilinear  epoch %d/%d  loss=%.4f  lr=%.2e",
+            epoch + 1,
+            epochs,
+            avg,
+            scheduler.get_last_lr()[0],
+        )
+
+        if WANDB_ENABLED:
+            _wandb_log(
+                {
+                    "phase": "2_bilinear",
+                    "epoch": epoch + 1,
+                    "loss": avg,
+                    "lr": scheduler.get_last_lr()[0],
+                }
+            )
+
+        if avg < best_loss:
+            best_loss = avg
+            best_epoch = epoch + 1
+            save_checkpoint(head, checkpoint_prefix + "2_bilinear_best")
+
+    save_checkpoint(head, f"{checkpoint_prefix}2_bilinear_epoch{epochs}")
+    return {
+        "phase": "2_bilinear",
+        "best_loss": best_loss,
+        "best_epoch": best_epoch,
+        "final_epoch": epochs,
+        "stopped_early": False,
+    }
 
 
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
@@ -1161,6 +1536,22 @@ def main():
         help="Phase 2: lr scale factor for encoder parameters (default 0.1 — "
         "encoder drifts 10× slower to protect Phase 1 geometry).",
     )
+    parser.add_argument(
+        "--bilinear",
+        action="store_true",
+        help="Phase 2 (Option B): train BilinearSynergyHead W_r matrices with "
+        "frozen encoder instead of NT-Xent on the full card encoder.  Requires "
+        "--dataset (artifact mode).  Saves phase2_bilinear_best.pt; does NOT "
+        "update phase2_best.pt (which still holds the Phase 1 encoder for Phase 3).",
+    )
+    parser.add_argument(
+        "--bilinear-temperature",
+        type=float,
+        default=0.07,
+        dest="bilinear_temperature",
+        help="Phase 2 bilinear: InfoNCE temperature (fixed, no annealing). "
+        "Default 0.07 matches Phase 1 final temperature.",
+    )
     args = parser.parse_args()
 
     pfx = "phase"
@@ -1221,62 +1612,114 @@ def main():
             log.error("No embeddings found -- run the ingest pipeline first.")
             return
 
-        if _artifact:
-            pairs = load_synergy_pairs_from_artifact(_artifact, sample=args.sample)
-        else:
-            pairs = load_synergy_pairs(
-                embeddings,
-                neg_ratio=args.neg_ratio,
-                sample=args.sample,
-                hard_neg_frac=args.hard_neg_frac,
+        if args.bilinear:
+            # ── Option B: bilinear relational scoring ─────────────────────────
+            if not _artifact:
+                log.error(
+                    "Phase 2 --bilinear requires --dataset pointing to mtg_dataset.pt"
+                )
+                return
+
+            pairs_by_relation = load_relation_pairs_from_artifact(
+                _artifact,
                 combo_sample=args.combo_sample,
-                commander_value_sample=args.commander_value_sample,
+                effect_peer_sample=args.sample,
+                ability_trigger_sample=args.sample,
+                decomposed_sample=args.sample,
             )
-        if not pairs:
-            log.error("No synergy pairs found -- run compute_synergy stage first.")
-            return
+            if not any(pairs_by_relation.values()):
+                log.error(
+                    "Phase 2 bilinear: no relation pairs found in artifact — "
+                    "re-export with export_dataset stage."
+                )
+                return
 
-        dataset = SynergyDataset(pairs, embeddings)
-        log.info("Dataset: %d pairs", len(dataset))
-
-        input_dim = len(next(iter(embeddings.values())))
-        model = CardEncoder(input_dim=input_dim).to(device)
-        if args.resume:
+            input_dim = len(next(iter(embeddings.values())))
+            encoder = CardEncoder(input_dim=input_dim).to(device)
+            # Always warm-start encoder from Phase 1; it is frozen during bilinear.
             warm = "phase1_best"
             if (CHECKPOINT_DIR / (warm + ".pt")).exists():
-                load_checkpoint(model, warm, device)
+                load_checkpoint(encoder, warm, device)
             else:
-                fallback = pfx + "1_best"
-                log.info("No %s found -- loading %s as warm start", warm, fallback)
-                load_checkpoint(model, fallback, device)
+                log.error(
+                    "Phase 2 bilinear requires phase1_best checkpoint — run Phase 1 first."
+                )
+                return
 
-        staple_pairs_p2 = load_staple_pairs_from_artifact(_artifact) if _artifact else []
+            embed_dim = encoder.net[-1].out_features
+            head = BilinearSynergyHead(embed_dim=embed_dim).to(device)
 
-        # Build index-addressable embedding array for staple pair lookups.
-        # Staple indices are offsets into artifact card_ids; SynergyDataset
-        # uses a card_id dict so we need a parallel numpy array.
-        staple_embs_p2: np.ndarray | None = None
-        if staple_pairs_p2 and _artifact:
-            card_ids_list = _artifact["card_ids"]
-            staple_embs_p2 = np.stack(
-                [embeddings[cid] for cid in card_ids_list]
-            ).astype(np.float32)
+            summary = train_bilinear_phase(
+                encoder,
+                head,
+                pairs_by_relation,
+                embeddings,
+                args.epochs,
+                args.lr,
+                args.batch_size,
+                temperature=args.bilinear_temperature,
+                checkpoint_prefix=pfx,
+            )
+            _wandb_summary(summary)
 
-        summary = train_synergy_phase(
-            model,
-            dataset,
-            args.epochs,
-            args.lr,
-            args.batch_size,
-            temp_start=args.temp_start,
-            temp_end=args.temp_end,
-            encoder_lr_scale=args.encoder_lr_scale,
-            checkpoint_prefix=pfx,
-            staple_pairs=staple_pairs_p2 or None,
-            staple_pair_weight=args.staple_pair_weight,
-            staple_embs=staple_embs_p2,
-        )
-        _wandb_summary(summary)
+        else:
+            # ── Option A / original NT-Xent path ─────────────────────────────
+            if _artifact:
+                pairs = load_synergy_pairs_from_artifact(_artifact, sample=args.sample)
+            else:
+                pairs = load_synergy_pairs(
+                    embeddings,
+                    neg_ratio=args.neg_ratio,
+                    sample=args.sample,
+                    hard_neg_frac=args.hard_neg_frac,
+                    combo_sample=args.combo_sample,
+                    commander_value_sample=args.commander_value_sample,
+                )
+            if not pairs:
+                log.error("No synergy pairs found -- run compute_synergy stage first.")
+                return
+
+            dataset = SynergyDataset(pairs, embeddings)
+            log.info("Dataset: %d pairs", len(dataset))
+
+            input_dim = len(next(iter(embeddings.values())))
+            model = CardEncoder(input_dim=input_dim).to(device)
+            if args.resume:
+                warm = "phase1_best"
+                if (CHECKPOINT_DIR / (warm + ".pt")).exists():
+                    load_checkpoint(model, warm, device)
+                else:
+                    fallback = pfx + "1_best"
+                    log.info("No %s found -- loading %s as warm start", warm, fallback)
+                    load_checkpoint(model, fallback, device)
+
+            staple_pairs_p2 = load_staple_pairs_from_artifact(_artifact) if _artifact else []
+
+            # Build index-addressable embedding array for staple pair lookups.
+            # Staple indices are offsets into artifact card_ids; SynergyDataset
+            # uses a card_id dict so we need a parallel numpy array.
+            staple_embs_p2: np.ndarray | None = None
+            if staple_pairs_p2 and _artifact:
+                card_ids_list = _artifact["card_ids"]
+                staple_embs_p2 = np.stack(
+                    [embeddings[cid] for cid in card_ids_list]
+                ).astype(np.float32)
+
+            summary = train_synergy_phase(
+                model,
+                dataset,
+                args.epochs,
+                args.lr,
+                args.batch_size,
+                temp_start=args.temp_start,
+                temp_end=args.temp_end,
+                encoder_lr_scale=args.encoder_lr_scale,
+                checkpoint_prefix=pfx,
+                staple_pairs=staple_pairs_p2 or None,
+                staple_pair_weight=args.staple_pair_weight,
+                staple_embs=staple_embs_p2,
+            )
+            _wandb_summary(summary)
 
     elif args.phase == 3:
         if not _artifact:

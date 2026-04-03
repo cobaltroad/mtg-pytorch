@@ -22,7 +22,7 @@ import torch
 
 from mtg_sql import commanders
 from mtg_sql.staples.ramp import SQL as _RAMP_SQL
-from ops.model import CardEncoder, CommanderScorer
+from ops.model import CardEncoder, CommanderScorer, BilinearSynergyHead
 
 log = logging.getLogger(__name__)
 
@@ -37,15 +37,26 @@ EXPECTED_EMBEDDING_DIM: int = 768
 # ── Model bundle ─────────────────────────────────────────────────────────────
 
 class _ModelBundle:
-    """Holds the frozen encoder and trained scorer together."""
+    """Holds the frozen encoder, trained scorer, and optional bilinear head."""
 
-    def __init__(self, card_encoder: CardEncoder, scorer: CommanderScorer):
+    def __init__(
+        self,
+        card_encoder: CardEncoder,
+        scorer: CommanderScorer,
+        bilinear_head: BilinearSynergyHead | None = None,
+    ):
         self.card_encoder = card_encoder
         self.scorer = scorer
+        # Bilinear head from phase2_bilinear_best.pt — present when Option B
+        # training has been run.  When set, score_candidates uses it to blend
+        # a decomposed_candidates relation score into the final ranking.
+        self.bilinear_head = bilinear_head
 
     def eval(self) -> "_ModelBundle":
         self.card_encoder.eval()
         self.scorer.eval()
+        if self.bilinear_head is not None:
+            self.bilinear_head.eval()
         return self
 
 
@@ -124,7 +135,22 @@ def get_model(checkpoint_name: str = "phase3_best") -> Optional[_ModelBundle]:
     scorer.load_state_dict(scr_state)
     scorer.eval()
 
-    bundle = _ModelBundle(encoder, scorer)
+    # ── Optionally load bilinear head (phase2_bilinear_best.pt) ──────────────
+    bilinear_head: BilinearSynergyHead | None = None
+    bilinear_path = CHECKPOINT_DIR / "phase2_bilinear_best.pt"
+    if bilinear_path.exists():
+        log.info("Loading bilinear head from %s", bilinear_path)
+        bl_state = torch.load(bilinear_path, map_location=device)
+        # Infer embed_dim from the first W matrix shape.
+        first_key = next(iter(bl_state.keys()))
+        bl_embed_dim = bl_state[first_key].shape[0]
+        bilinear_head = BilinearSynergyHead(embed_dim=bl_embed_dim)
+        bilinear_head.load_state_dict(bl_state)
+        bilinear_head.eval()
+    else:
+        log.debug("No phase2_bilinear_best.pt found — bilinear scoring disabled")
+
+    bundle = _ModelBundle(encoder, scorer, bilinear_head=bilinear_head)
     _model_cache[checkpoint_name] = bundle
     return bundle
 
@@ -684,17 +710,28 @@ def score_candidates(
     embeddings: dict[str, np.ndarray],
     model: _ModelBundle,
     batch_size: int = 512,
+    bilinear_weight: float = 0.3,
 ) -> list[tuple[str, float, float]]:
     """Return (card_id, scorer_score, cosine_sim) for each candidate.
 
     Single encoder pass: cosine_sim = z_cand @ z_cmd (dot product of unit
     vectors = cosine similarity), scorer_score = CommanderScorer output.
     Sorted descending by scorer_score.
+
+    When a BilinearSynergyHead is loaded in the bundle, a decomposed_candidates
+    relation score is blended into the final scorer_score:
+
+        final = (1 - bilinear_weight) * scorer_score
+                + bilinear_weight * bilinear_score
+
+    The bilinear score uses the ``decomposed_candidates`` W_r matrix, which was
+    trained to capture commander → deck-candidate directed relevance.
     """
     candidate_ids = [cid for cid in candidate_ids if cid in embeddings]
     if not candidate_ids:
         return []
 
+    use_bilinear = model.bilinear_head is not None
     model.eval()
     cmd_raw = torch.from_numpy(embeddings[commander_id]).unsqueeze(0)
     with torch.no_grad():
@@ -710,7 +747,20 @@ def score_candidates(
             z_cand = model.card_encoder(cand_raw)                  # (C, D) unit vectors
             scorer_scores = model.scorer(z_cmd, z_cand).tolist()   # (C,)
             cosine_sims   = (z_cand @ z_cmd).tolist()              # (C,)
-            for cid, sc, cos in zip(batch_ids, scorer_scores, cosine_sims):
+
+            if use_bilinear:
+                z_cmd_batch = z_cmd.unsqueeze(0).expand_as(z_cand)
+                bl_scores = model.bilinear_head.score(
+                    z_cmd_batch, z_cand, "decomposed_candidates"
+                ).tolist()  # (C,)
+                blended = [
+                    (1.0 - bilinear_weight) * sc + bilinear_weight * bl
+                    for sc, bl in zip(scorer_scores, bl_scores)
+                ]
+            else:
+                blended = scorer_scores
+
+            for cid, sc, cos in zip(batch_ids, blended, cosine_sims):
                 results.append((cid, sc, cos))
 
     results.sort(key=lambda x: x[1], reverse=True)
