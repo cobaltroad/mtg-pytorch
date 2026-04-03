@@ -20,7 +20,8 @@ param(
     [Nullable[double]]$LearningRate = $null,
     [Nullable[int]]$BatchSize = $null,
 
-    [Nullable[bool]]$Resume = $null,
+    [switch]$Resume,
+    [switch]$NoResume,
     # Phase 2: scale factor applied to lr for all encoder parameters.
     # Default 0.1 protects Phase 1 geometry - encoder drifts 10x slower.
     [double]$Phase2EncoderLrScale = 0.1,
@@ -222,7 +223,6 @@ function Assert-Prerequisites {
     param(
         [string]$mode,
         [int]$phase,
-        [System.Nullable[bool]]$resume,
         [string]$checkpointsDir,
         [string]$dataset
     )
@@ -294,7 +294,7 @@ function Assert-Prerequisites {
     }
 }
 
-Assert-Prerequisites -mode $Mode -phase $Phase -resume $Resume -checkpointsDir $checkpointsDir -dataset $Dataset
+Assert-Prerequisites -mode $Mode -phase $Phase -checkpointsDir $checkpointsDir -dataset $Dataset
 
 $env:PYTHONUNBUFFERED = '1'
 
@@ -307,7 +307,7 @@ if ($Mode -eq 'train') {
 
     if ($null -eq $Epochs) {
         if ($Phase -eq 1)    { $Epochs = 50 }
-        elseif ($Phase -eq 2) { $Epochs = 60 }
+        elseif ($Phase -eq 2) { $Epochs = 320 }
         else                  { $Epochs = 50 }
     }
 
@@ -316,10 +316,9 @@ if ($Mode -eq 'train') {
         else              { $LearningRate = 1e-4  }
     }
 
-    if ($null -eq $Resume) {
-        # Phase 2 warm-starts from phase1_best; Phases 1 and 3 do not use --resume.
-        if ($Phase -eq 2) { $Resume = $true } else { $Resume = $false }
-    }
+    # Resolve resume: explicit -Resume or -NoResume wins.
+    # Default: Phase 2 NT-Xent resumes from phase1_best; bilinear starts fresh (head is new).
+    $resolvedResume = if ($Resume) { $true } elseif ($NoResume) { $false } else { $Phase -eq 2 -and -not $Bilinear }
 
     if ($null -eq $BatchSize) {
         if ($Phase -le 2) { $BatchSize = 512 }
@@ -334,7 +333,7 @@ if ($Mode -eq 'train') {
         '--batch-size', $BatchSize
     )
 
-    if ($Resume) {
+    if ($resolvedResume) {
         $cmd += '--resume'
     }
 

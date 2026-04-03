@@ -1648,6 +1648,13 @@ def main():
 
             embed_dim = encoder.net[-1].out_features
             head = BilinearSynergyHead(embed_dim=embed_dim).to(device)
+            if args.resume:
+                bilinear_ckpt = pfx + "2_bilinear_best"
+                if (CHECKPOINT_DIR / (bilinear_ckpt + ".pt")).exists():
+                    load_checkpoint(head, bilinear_ckpt, device)
+                    log.info("Resumed bilinear head from %s", bilinear_ckpt)
+                else:
+                    log.warning("--resume set but %s not found — starting fresh", bilinear_ckpt)
 
             summary = train_bilinear_phase(
                 encoder,
