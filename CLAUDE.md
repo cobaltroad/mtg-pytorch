@@ -19,14 +19,24 @@ mtg-pytorch/
 ├── services/
 │   ├── api/                    # FastAPI — card search, similarity, deck generation
 │   ├── ingest/                 # Pipeline: MTGJSON → pgvector embeddings
-│   │   └── stages/             # Focused stage modules (pipeline.py delegates here)
-│   │       ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
-│   │       ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
-│   │       ├── tag.py          #   embed_cards
-│   │       ├── mechanics.py    #   tag_mechanics — canonical role tagger (coarse + fine + oracle-pattern)
-│   │       ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
-│   │       ├── commander.py    #   compute_commander_value_synergy
-│   │       └── export.py       #   Thin wrappers for all export sub-stages
+│   │   ├── pipeline.py         # Stage orchestrator — accepts --stage flag
+│   │   ├── stages/             # Focused stage modules (pipeline.py delegates here)
+│   │   │   ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
+│   │   │   ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
+│   │   │   ├── tag.py          #   embed_cards
+│   │   │   ├── mechanics.py    #   tag_mechanics — canonical role tagger (coarse + fine + oracle-pattern)
+│   │   │   ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
+│   │   │   ├── commander.py    #   compute_commander_value_synergy
+│   │   │   ├── decompose.py    #   decompose_commanders — ORACLE_PATTERNS + _detect()
+│   │   │   └── export.py       #   Thin wrappers for all export sub-stages
+│   │   └── scripts/            # User-facing scripts (export, import, eval)
+│   │       ├── export_dataset.py           #   Build mtg_dataset.pt (Phases 1–2)
+│   │       ├── export_dataset_commanders.py #   Build mtg_commanders.pt (Phases 3–4)
+│   │       ├── export_db_helpers.py        #   Shared DB loading utilities
+│   │       ├── eval_decomposition.py       #   Spot-check decompose output (DB required)
+│   │       ├── import_moxfield.py          #   Batch Moxfield .txt deck imports
+│   │       ├── import_decklists.py         #   cardtrak JSON export imports
+│   │       └── import_spellbook.py         #   Commander Spellbook combo imports
 │   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
 │   └── ui/                     # Streamlit interface
 ├── models/                     # Model architecture files (shared into jupyter)
@@ -43,6 +53,26 @@ mtg-pytorch/
 | `ui`      | Streamlit deck builder + generated deck history | `$UI_HOST`              |
 | `jupyter` | JupyterLab for research and inference        | `$JUPYTER_HOST`            |
 | `ingest`  | One-shot MTGJSON → DB pipeline               | internal only              |
+
+```mermaid
+graph TB
+    subgraph docker["Docker Host (Linux)"]
+        DB[(pgvector\nDB)]
+        ING[Ingest\npipeline.py]
+        API[FastAPI\napi]
+        UI[Streamlit\nui]
+        JL[JupyterLab\njupyter]
+    end
+    subgraph gpu["GPU Machine (Windows)"]
+        TR["train.py\n+ scripts/*.ps1"]
+    end
+    ING -->|"mtg_dataset.pt\nmtg_commanders.pt\n(download_dataset.ps1)"| TR
+    TR -->|"phase*.pt checkpoints\n(curl upload)"| API
+    DB <--> ING
+    DB <--> API
+    API <--> UI
+    API <--> JL
+```
 
 ## Development workflow
 
@@ -88,16 +118,15 @@ docker compose run --rm ingest python pipeline.py --stage compute_commander_valu
 # Step 2: export artifact (reads card_abilities instead of calling _detect directly)
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
-# Spot-check the decomposition output with eval_commander.py:
-docker compose run --rm ingest python scripts/eval_commander.py "Anje Falkenrath"   # named lookup (partial match)
-docker compose run --rm ingest python scripts/eval_commander.py --stats             # coverage summary + pattern frequency histogram
-docker compose run --rm ingest python scripts/eval_commander.py --no-signals        # list commanders with zero signals (gap analysis)
-docker compose run --rm ingest python scripts/eval_commander.py --pattern goad      # list all commanders that matched a specific pattern_key
-docker compose run --rm ingest python scripts/eval_commander.py --pattern goad --limit 0  # remove cap (default 50)
+# Spot-check the decomposition output with eval_decomposition:
+docker compose run --rm ingest python -m scripts.eval_decomposition "Anje Falkenrath"         # named lookup (partial match)
+docker compose run --rm ingest python -m scripts.eval_decomposition --no-signals              # list commanders with zero signals (gap analysis)
+docker compose run --rm ingest python -m scripts.eval_decomposition --key goad                # evaluate a specific pattern key
+docker compose run --rm ingest python -m scripts.eval_decomposition "Anje" --limit 0          # remove per-key card cap (default 10)
 
 # 5. Import decklists (required for Phase 3/4 training and proxy context in inference)
 #    See "Decklist import" section below for details.
-docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python import_moxfield.py
+docker compose run --rm -v /path/to/exports:/data/moxfield:ro ingest python scripts/import_moxfield.py
 
 # 6. Re-export the artifact after importing new decklists (fast — ~5 min)
 docker compose run --rm ingest python pipeline.py --stage export_dataset
@@ -112,6 +141,40 @@ docker compose exec db psql -U mtg -d mtg -c \
 # 9. Open UI
 open https://$UI_HOST
 ```
+
+### Ingest pipeline stages
+
+```mermaid
+flowchart TD
+    DL["download\n(MTGJSON + combos)"]
+    EC["embed_cards\n(sentence-transformers 768-dim)"]
+    TM["tag_mechanics\n(coarse + fine + oracle-pattern)"]
+    XM["tag_abilities_xmage\n(XMage Java source)"]
+    TTS["compute_textmatch_synergy\n→ ability_trigger edges"]
+    XS["compute_xmage_synergy\n→ xmage_ability_trigger edges"]
+    XES["compute_xmage_effect_synergy\n→ effect_peer edges"]
+    ED["export_dataset\n→ mtg_dataset.pt"]
+    DC["decompose_commanders\n→ card_abilities source='decompose'"]
+    CVS["compute_commander_value_synergy\n→ decomposed_candidates edges"]
+    EDC["export_dataset_commanders\n→ mtg_commanders.pt"]
+
+    DL --> EC
+    EC --> TM
+    TM --> XM
+    TM --> TTS
+    XM --> XS
+    XM --> XES
+    TTS --> ED
+    XS --> ED
+    XES --> ED
+
+    TM --> DC
+    DC --> CVS
+    TTS -.->|"tribal edges"| EDC
+    CVS --> EDC
+```
+
+`download` + `embed_cards` + `tag_mechanics` + synergy stages + `export_dataset` are all run by `--stage process`.  The commander artifact stages (`decompose_commanders`, `compute_commander_value_synergy`, `export_dataset_commanders`) must be run explicitly after `process`.
 
 ### Embedding model
 
@@ -157,7 +220,7 @@ These two must always agree or deck generation will silently fail:
 ### Workflow for updating the model
 
 1. Run full ingest on the Docker host (produces a fresh `mtg_dataset.pt`).
-2. Import new decklists if any, then re-export: `docker compose run --rm ingest python export_dataset.py`
+2. Import new decklists if any, then re-export: `docker compose run --rm ingest python pipeline.py --stage export_dataset`
 3. On the GPU machine, download the artifact:
 
 ```powershell
@@ -237,6 +300,28 @@ The model is trained in four phases, each building on the last:
    The only phase that models deck-level coherence: no scoring function over a
    fixed (commander, card) pair can account for what is already in the deck.
 
+```mermaid
+flowchart LR
+    DS[("mtg_dataset.pt")]
+    DC[("mtg_commanders.pt")]
+
+    P1["Phase 1\nCardEncoder\nNT-Xent\ncontrastive loss"]
+    P2["Phase 2\nBilinearSynergyHead\nasymmetric InfoNCE\nper relation\n(encoder frozen)"]
+    P3["Phase 3\nCommanderScorer MLP\nBPR ranking\n(encoder frozen)"]
+    P4["Phase 4\nTransformer Decoder\nautoregressive\ndeck construction"]
+
+    DS --> P1
+    DS --> P2
+    DC --> P3
+    DC --> P4
+
+    P1 -->|"phase1_best.pt\nencoder weights"| P2
+    P1 -->|"phase1_best.pt\nencoder weights"| P3
+    P2 -->|"phase2_bilinear_best.pt"| INF
+    P3 -->|"phase3_best.pt"| P4
+    P4 -->|"phase4_best.pt"| INF[("API\nInference\n30% bilinear\n70% scorer")]
+```
+
 ## Key data sources
 
 - **MTGJSON AtomicCards** (primary) — https://mtgjson.com/downloads/ — full
@@ -283,7 +368,7 @@ The model is trained in four phases, each building on the last:
 
 ## Decklist import
 
-Two import scripts live in `services/ingest/`:
+Two import scripts live in `services/ingest/scripts/`:
 
 ### `import_moxfield.py` — batch Moxfield `.txt` exports
 
@@ -292,12 +377,12 @@ Drop Moxfield deck exports (one `.txt` per deck) into a folder, then:
 ```bash
 docker compose run --rm \
     -v /path/to/exports:/data/moxfield:ro \
-    ingest python import_moxfield.py
+    ingest python scripts/import_moxfield.py
 
 # Dry-run (parse only, no DB writes):
 MOXFIELD_DRY_RUN=1 docker compose run --rm \
     -v /path/to/exports:/data/moxfield:ro \
-    ingest python import_moxfield.py
+    ingest python scripts/import_moxfield.py
 ```
 
 - Commander identified from the `Commander` section header (reliable).
@@ -317,7 +402,7 @@ docker exec cardtrak_db psql -U cardtrak -d cardtrak_production \
 # Import:
 docker compose run --rm \
     -v /tmp/ml_decklists.json:/data/ml_decklists.json:ro \
-    ingest python import_decklists.py
+    ingest python scripts/import_decklists.py
 ```
 
 ---
@@ -421,7 +506,7 @@ is genuinely distinct from other commanders', giving BPR a meaningful gradient.
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
 # Or call directly:
-docker compose run --rm ingest python export_dataset_commanders.py
+docker compose run --rm ingest python -m scripts.export_dataset_commanders
 ```
 
 | Env var | Default | Purpose |
@@ -477,31 +562,22 @@ is not earning its compute.
 
 ### How relation pairs flow into training
 
-```
-ingest pipeline (Docker host)
-  │
-  ├── compute_textmatch_synergy  → synergy_edges (ability_trigger rows)
-  ├── compute_xmage_synergy      → synergy_edges (xmage_ability_trigger rows)
-  ├── compute_xmage_effect_synergy → synergy_edges (effect_peer rows)
-  ├── decompose_commanders       → card_abilities (source='decompose')
-  └── compute_commander_value_synergy → synergy_edges (decomposed_candidates rows)
-           │
-           ▼
-  export_dataset  (export_dataset.py)
-           │
-           ├── ability_trigger key  ← _load_ability_trigger_pairs()
-           ├── effect_peer key      ← _load_effect_peer_pairs()
-           ├── synergy key          ← _load_synergy_pairs() (combo only)
-           └── decomposed_candidates key ← _load_decomposed_candidate_pairs()
-           │
-           ▼
-  mtg_dataset.pt  (downloaded to GPU machine)
-           │
-           ▼
-  load_relation_pairs_from_artifact()  (train.py)
-           │
-           ▼
-  train_bilinear_phase()  → phase2_bilinear_best.pt
+```mermaid
+flowchart TD
+    TTS["compute_textmatch_synergy"] -->|"ability_trigger rows"| SE
+    XS["compute_xmage_synergy"] -->|"xmage_ability_trigger rows"| SE
+    XES["compute_xmage_effect_synergy"] -->|"effect_peer rows"| SE
+    CVS["compute_commander_value_synergy"] -->|"decomposed_candidates rows"| SE[(synergy_edges)]
+
+    SE -->|"_load_ability_trigger_pairs()"| ED
+    SE -->|"_load_effect_peer_pairs()"| ED
+    SE -->|"_load_synergy_pairs() — combo only"| ED
+    SE -->|"_load_decomposed_candidate_pairs()"| ED
+
+    ED["scripts/export_dataset.py"] --> ART[("mtg_dataset.pt\ndownloaded to GPU machine")]
+
+    ART -->|"load_relation_pairs_from_artifact()"| TR["train_bilinear_phase()\ntrain.py"]
+    TR --> CK[("phase2_bilinear_best.pt")]
 ```
 
 ### Updating pairs for an existing relation
@@ -745,22 +821,19 @@ Each `card_abilities` row written by `decompose_commanders` comes from:
 | `cascade` | Cascade / discover | Yidris, Abaddon, Maelstrom Wanderer, Averna |
 | `group_hug` | Draw/resource grants to all players | Kami, Kwain, Kynaios and Tiro |
 
-### Spot-check with `eval_commander.py`
+### Spot-check with `eval_decomposition`
 
 ```bash
 # Named lookup (partial, case-insensitive):
-docker compose run --rm ingest python scripts/eval_commander.py "Anje"
-docker compose run --rm ingest python scripts/eval_commander.py "Syr Konrad, the Grim"
-
-# Coverage summary + pattern frequency histogram:
-docker compose run --rm ingest python scripts/eval_commander.py --stats
+docker compose run --rm ingest python -m scripts.eval_decomposition "Anje"
+docker compose run --rm ingest python -m scripts.eval_decomposition "Syr Konrad, the Grim"
 
 # Gap analysis — commanders with zero signals:
-docker compose run --rm ingest python scripts/eval_commander.py --no-signals
+docker compose run --rm ingest python -m scripts.eval_decomposition --no-signals
 
-# All commanders matching a specific pattern_key:
-docker compose run --rm ingest python scripts/eval_commander.py --pattern goad
-docker compose run --rm ingest python scripts/eval_commander.py --pattern goad --limit 0  # remove 50-result cap
+# Evaluate a specific pattern key:
+docker compose run --rm ingest python -m scripts.eval_decomposition "Anje" --key discard_outlet
+docker compose run --rm ingest python -m scripts.eval_decomposition "Anje" --key discard_outlet --limit 0  # remove per-key cap (default 10)
 ```
 
 ### Adding a new pattern
@@ -773,4 +846,4 @@ Add one entry to `ORACLE_PATTERNS` in `stages/decompose.py`:
  re.compile(r"your regex here", re.I)),
 ```
 
-Then re-run `decompose_commanders` and spot-check with `eval_commander.py --pattern <key>`.  No other files require modification.
+Then re-run `decompose_commanders` and spot-check with `eval_decomposition --key <key>`.  No other files require modification.
