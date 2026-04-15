@@ -103,14 +103,12 @@ PRODUCER_DECOMPOSE_TO_DECK_KEY: dict[str, list[str]] = {
     # attack/combat-damage commanders need combat tricks in the deck
     "attack_trigger": ["combat_tricks"],
     "combat_damage_to_player": ["combat_tricks"],
-    # death-trigger commanders need sac outlets, self-sacrificing fodder, low-toughness
-    # creatures, destroy removal, and damage-based removal
+    # death-trigger commanders need sac outlets, self-sacrificing fodder, and
+    # low-toughness creatures (die easily, generating triggers without sac outlets)
     "death_trigger": [
         "sac_outlet",
         "sacrifice_fodder",
         "toughness_1_creatures",
-        "destroy_removal",
-        "damage_removal",
     ],
     # sacrifice-payoff commanders need sac outlets + treasure generators + token generators
     "sacrifice_payoff": ["sac_outlet", "treasure_generators", "token_generators"],
@@ -246,6 +244,15 @@ PATTERN_KEY_TO_PRODUCER_SQL: dict[str, str] = {
     # Tremors, Anointed Procession, etc.
     # Sac outlets are covered by the CONSUMER entry for "creature_token_generator".
     "creature_etb_payoff": _family_sql("creature_etb"),
+    # ── deck keys: death / sacrifice / combat support ─────────────────────────
+    # Commanders that output deaths, sac events, or combat-trigger value need
+    # the deck stocked with these support card types.
+    "sac_outlet":            _family_sql("sac_outlet"),
+    "sacrifice_fodder":      _family_sql("sacrifice_fodder"),
+    "toughness_1_creatures": _spells["toughness_1"],
+    "combat_tricks":         _family_sql("combat_tricks"),
+    "treasure_generators":   _TREASURE_SQL,
+    "token_generators":      _TOKEN_SQL,
 }
 
 PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
@@ -281,9 +288,7 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "death_trigger": (
         f"({_family_sql('sac_outlet')}"
         f" OR {_family_sql('sacrifice_fodder')}"
-        f" OR {_spells['toughness_1']}"
-        f" OR {_REMOVAL_DESTROY}"
-        f" OR {_REMOVAL_DAMAGE})"
+        f" OR {_spells['toughness_1']})"
     ),
     # ── CONSUMER: sacrifice-payoff commanders want sac outlets + fodder ──────────
     # A commander that scales off sacrificing permanents (e.g. Korvold: "whenever
