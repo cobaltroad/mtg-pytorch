@@ -146,35 +146,37 @@ def eval_commander(name: str, limit: int, key_filter: str | None) -> None:
                 if key_filter and key != key_filter:
                     continue
 
-            in_consumer = key in PATTERN_KEY_TO_CONSUMER_SQL
-            in_producer = key in PRODUCER_DECOMPOSE_TO_DECK_KEY
+                in_consumer = key in PATTERN_KEY_TO_CONSUMER_SQL
+                in_producer = key in PRODUCER_DECOMPOSE_TO_DECK_KEY
 
-            if not in_consumer and not in_producer:
-                print(f"  [TODO]  {key}  —  {label}")
-                print(f'          matched: "{phrase[:70]}"')
-                print(f"          (no SQL entry in commander_mechanics.py yet)")
-                continue
+                if not in_consumer and not in_producer:
+                    print(f"  [TODO]  {key}  —  {label}")
+                    print(f'          matched: "{phrase[:70]}"')
+                    print(f"          (no SQL entry in commander_mechanics.py yet)")
+                    continue
 
-            if in_consumer:
-                where = PATTERN_KEY_TO_CONSUMER_SQL[key]
-                result = _query_cards(where, limit, conn)
-                _print_section("CONSUMER", key, label, phrase, where, result)
-
-            if in_producer:
-                for deck_key in PRODUCER_DECOMPOSE_TO_DECK_KEY[key]:
-                    deck_label = DECK_KEY_LABELS.get(deck_key, deck_key)
-                    where = PATTERN_KEY_TO_PRODUCER_SQL[deck_key]
+                if in_consumer:
+                    where = PATTERN_KEY_TO_CONSUMER_SQL[key]
                     result = _query_cards(where, limit, conn)
-                    _print_section(
-                        f"PRODUCER → {deck_key} ({deck_label})",
-                        key,
-                        label,
-                        phrase,
-                        where,
-                        result,
-                    )
+                    _print_section("CONSUMER", key, label, phrase, where, result)
 
-            print()
+                if in_producer:
+                    for deck_key in PRODUCER_DECOMPOSE_TO_DECK_KEY[key]:
+                        if deck_key not in PATTERN_KEY_TO_PRODUCER_SQL:
+                            continue
+                        deck_label = DECK_KEY_LABELS.get(deck_key, deck_key)
+                        where = PATTERN_KEY_TO_PRODUCER_SQL[deck_key]
+                        result = _query_cards(where, limit, conn)
+                        _print_section(
+                            f"PRODUCER → {deck_key} ({deck_label})",
+                            key,
+                            label,
+                            phrase,
+                            where,
+                            result,
+                        )
+
+                print()
     finally:
         conn.close()
 
