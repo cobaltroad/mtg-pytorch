@@ -165,6 +165,7 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
+    "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     # color spell fodder (deck key for color-based cast-trigger commanders)
     **{
         f"spell_{c}": f"{c.title()} spells"
@@ -309,6 +310,17 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "cast_trigger_instant_sorcery": _spells["spell_instant_sorcery"],
     "cast_trigger_historic": _spells["spell_historic"],
     "cast_trigger_aura_equipment": _spells["spell_aura_equipment"],
+    # ── CONSUMER: proliferate commanders want counter-bearing permanents ────────
+    # A commander that proliferates (Atraxa, Ezuri, Cayth, Brimaz) benefits from
+    # a deck full of permanents that already carry counters — +1/+1 counter
+    # payoffs, planeswalkers, infect creatures, and counter doublers each get
+    # more value from each proliferate trigger.
+    "proliferate_matters": (
+        f"({_family_sql('counter_trigger')}"
+        f" OR type_line ILIKE '%%Planeswalker%%'"
+        f" OR oracle_text ILIKE '%%infect%%'"
+        f" OR oracle_text ILIKE '%%toxic%%')"
+    ),
     # ── CONSUMER: color-based cast triggers want spells of that color ─────────
     # A commander whose trigger fires on a specific color (e.g. K'rrik for black,
     # Chandra for red, Aragorn for multicolor) wants the deck filled with spells
