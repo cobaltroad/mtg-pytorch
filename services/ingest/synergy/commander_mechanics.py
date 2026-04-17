@@ -166,6 +166,7 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
     "trigger_doubling": "Creatures with attack-triggered abilities",
+    "token_generator": "Token doublers and token creation payoffs",
     "artifact_token_generator": "Artifact ETB and graveyard payoffs (non-creature tokens)",
     "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     # color spell fodder (deck key for color-based cast-trigger commanders)
@@ -280,6 +281,14 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # being doubled.
     "trigger_doubling": (
         f"type_line ILIKE '%%Creature%%' AND {_family_sql('attack_trigger')}"
+    ),
+    # ── CONSUMER: any token generator wants doublers and generic token payoffs ────
+    # A commander that creates tokens of any type benefits from cards that
+    # double token creation (Doubling Season, Anointed Procession) or trigger
+    # whenever tokens are created (Chatterfang, Elspeth Storm Slayer).
+    "token_generator": (
+        "(oracle_text ~* 'would create .{0,40}tokens?.{0,40}instead'"
+        " OR oracle_text ~* 'whenever .{0,30}tokens? (enters?|are created)')"
     ),
     # ── CONSUMER: artifact token generators want artifact ETB/graveyard payoffs ──
     # A commander that creates non-creature tokens (Clue, Blood, Treasure,
