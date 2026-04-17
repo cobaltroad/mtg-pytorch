@@ -215,7 +215,7 @@ _DECK_KEY_LABELS: dict[str, str] = {
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
     "trigger_doubling": "Creatures with attack-triggered abilities",
-    "token_generator": "Sac outlets and ETB payoffs (any token type)",
+    "token_generator": "Artifact ETB and graveyard payoffs (non-creature tokens)",
     "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     "spell_white": "White spells",
     "spell_blue": "Blue spells",
