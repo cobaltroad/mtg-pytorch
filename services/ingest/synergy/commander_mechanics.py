@@ -165,6 +165,7 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
+    "trigger_doubling": "Creatures with attack-triggered abilities",
     "token_generator": "Sac outlets and ETB payoffs (any token type)",
     "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     # color spell fodder (deck key for color-based cast-trigger commanders)
@@ -273,6 +274,13 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # to profitably block.
     "attack_trigger": _family_sql("combat_tricks"),
     "combat_damage_to_player": _family_sql("combat_tricks"),
+    # ── CONSUMER: trigger-doubling commanders want attack-triggered creatures ────
+    # A commander that doubles attack triggers (Isshin, Wulfgar) gets value from
+    # creatures whose own abilities fire when they attack — those are the triggers
+    # being doubled.
+    "trigger_doubling": (
+        f"type_line ILIKE '%%Creature%%' AND {_family_sql('attack_trigger')}"
+    ),
     # ── CONSUMER: any token generator wants sac outlets + ETB payoffs ───────────
     # A commander that creates tokens of any type (creature, Clue, Blood,
     # Treasure, copy) benefits from sac outlets to cash them in and ETB payoffs
