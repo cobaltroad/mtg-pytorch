@@ -275,13 +275,21 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
         ),
     ),
     # Token generator — commander creates tokens as a primary output.
-    # creature_token_generator is the narrower sub-case (Krenko, Mob Boss:
-    # "create X 1/1 red Goblin creature tokens").
+    # creature_token_generator fires for creature tokens (Krenko, Edgar Markov).
+    # artifact_token_generator fires for non-creature tokens (Clue, Blood,
+    # Treasure, Mutagen) — uses a negative lookahead to exclude "creature token".
     (
         "creature_token_generator",
         "Creature token generator",
         p(
             r"create (?:x |a number of |one or more |that many |(?:\d+ ))?(?:[\w/]+ )*creature tokens?"
+        ),
+    ),
+    (
+        "artifact_token_generator",
+        "Artifact token generator",
+        p(
+            r"create (?:x |a number of |one or more |that many |(?:\d+ ))?(?:(?!creature\b)[\w/]+ )*tokens?"
         ),
     ),
     (

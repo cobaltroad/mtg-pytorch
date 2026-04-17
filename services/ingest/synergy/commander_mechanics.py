@@ -166,7 +166,7 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
     "trigger_doubling": "Creatures with attack-triggered abilities",
-    "token_generator": "Artifact ETB and graveyard payoffs (non-creature tokens)",
+    "artifact_token_generator": "Artifact ETB and graveyard payoffs (non-creature tokens)",
     "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     # color spell fodder (deck key for color-based cast-trigger commanders)
     **{
@@ -281,16 +281,12 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "trigger_doubling": (
         f"type_line ILIKE '%%Creature%%' AND {_family_sql('attack_trigger')}"
     ),
-    # ── CONSUMER: non-creature token generators want artifact payoffs ────────────
+    # ── CONSUMER: artifact token generators want artifact ETB/graveyard payoffs ──
     # A commander that creates non-creature tokens (Clue, Blood, Treasure,
-    # Mutagen, copy) benefits from cards that trigger on artifacts entering
+    # Mutagen) benefits from cards that trigger on artifacts entering
     # (Reckless Fireweaver, Wily Goblin) or on artifacts going to the graveyard
-    # (Disciple of the Vault, Marionette Master).  Creature ETB and sac outlets
-    # don't apply — these tokens aren't creatures and aren't typically sac'd for
-    # combat value.  For commanders that also fire creature_token_generator
-    # (Edgar Markov, Krenko), that key's sac-outlet section handles the creature
-    # token side; this section adds the artifact-payoff dimension.
-    "token_generator": (
+    # (Disciple of the Vault, Marionette Master).
+    "artifact_token_generator": (
         "(oracle_text ~* 'whenever .{0,30}artifact enters'"
         " OR oracle_text ~* 'whenever .{0,30}artifact .{0,30}graveyard')"
     ),
