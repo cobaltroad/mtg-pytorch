@@ -214,6 +214,7 @@ _DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
+    "token_generator": "Sac outlets and ETB payoffs (any token type)",
     "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     "spell_white": "White spells",
     "spell_blue": "Blue spells",

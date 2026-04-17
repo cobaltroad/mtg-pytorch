@@ -165,6 +165,7 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
+    "token_generator": "Sac outlets and ETB payoffs (any token type)",
     "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     # color spell fodder (deck key for color-based cast-trigger commanders)
     **{
@@ -272,6 +273,16 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # to profitably block.
     "attack_trigger": _family_sql("combat_tricks"),
     "combat_damage_to_player": _family_sql("combat_tricks"),
+    # ── CONSUMER: any token generator wants sac outlets + ETB payoffs ───────────
+    # A commander that creates tokens of any type (creature, Clue, Blood,
+    # Treasure, copy) benefits from sac outlets to cash them in and ETB payoffs
+    # (Purphoros, Impact Tremors, Anointed Procession) if those tokens enter as
+    # creatures.  Covers all 236+ commanders that match the broader
+    # `token_generator` pattern (Alquist Proft, Anje, April O'Neil, etc.).
+    "token_generator": (
+        f"({_family_sql('sac_outlet')}"
+        f" OR {_family_sql('creature_etb')})"
+    ),
     # ── CONSUMER: creature token generators want sac outlets ─────────────────
     # A commander that floods the board with tokens (e.g. Krenko) wants sac
     # outlets to convert that board presence into damage, draw, or mana:
