@@ -165,6 +165,10 @@ DECK_KEY_LABELS: dict[str, str] = {
     "spell_historic": "Historic spells",
     "spell_aura_equipment": "Aura / equipment spells",
     "mana_dork": "Mana ability creatures",
+    "trigger_doubling": "Creatures with attack-triggered abilities",
+    "token_generator": "Token doublers and token creation payoffs",
+    "artifact_token_generator": "Artifact ETB and graveyard payoffs (non-creature tokens)",
+    "proliferate_matters": "Counter-bearing permanents (proliferate targets)",
     # color spell fodder (deck key for color-based cast-trigger commanders)
     **{
         f"spell_{c}": f"{c.title()} spells"
@@ -271,6 +275,30 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # to profitably block.
     "attack_trigger": _family_sql("combat_tricks"),
     "combat_damage_to_player": _family_sql("combat_tricks"),
+    # ── CONSUMER: trigger-doubling commanders want attack-triggered creatures ────
+    # A commander that doubles attack triggers (Isshin, Wulfgar) gets value from
+    # creatures whose own abilities fire when they attack — those are the triggers
+    # being doubled.
+    "trigger_doubling": (
+        f"type_line ILIKE '%%Creature%%' AND {_family_sql('attack_trigger')}"
+    ),
+    # ── CONSUMER: any token generator wants doublers and generic token payoffs ────
+    # A commander that creates tokens of any type benefits from cards that
+    # double token creation (Doubling Season, Anointed Procession) or trigger
+    # whenever tokens are created (Chatterfang, Elspeth Storm Slayer).
+    "token_generator": (
+        "(oracle_text ~* 'would create .{0,40}tokens?.{0,40}instead'"
+        " OR oracle_text ~* 'whenever .{0,30}tokens? (enters?|are created)')"
+    ),
+    # ── CONSUMER: artifact token generators want artifact ETB/graveyard payoffs ──
+    # A commander that creates non-creature tokens (Clue, Blood, Treasure,
+    # Mutagen) benefits from cards that trigger on artifacts entering
+    # (Reckless Fireweaver, Wily Goblin) or on artifacts going to the graveyard
+    # (Disciple of the Vault, Marionette Master).
+    "artifact_token_generator": (
+        "(oracle_text ~* 'whenever .{0,30}artifact enters'"
+        " OR oracle_text ~* 'whenever .{0,30}artifact .{0,30}graveyard')"
+    ),
     # ── CONSUMER: creature token generators want sac outlets ─────────────────
     # A commander that floods the board with tokens (e.g. Krenko) wants sac
     # outlets to convert that board presence into damage, draw, or mana:
@@ -309,6 +337,17 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "cast_trigger_instant_sorcery": _spells["spell_instant_sorcery"],
     "cast_trigger_historic": _spells["spell_historic"],
     "cast_trigger_aura_equipment": _spells["spell_aura_equipment"],
+    # ── CONSUMER: proliferate commanders want counter-bearing permanents ────────
+    # A commander that proliferates (Atraxa, Ezuri, Cayth, Brimaz) benefits from
+    # a deck full of permanents that already carry counters — +1/+1 counter
+    # payoffs, planeswalkers, infect creatures, and counter doublers each get
+    # more value from each proliferate trigger.
+    "proliferate_matters": (
+        f"({_family_sql('counter_trigger')}"
+        f" OR type_line ILIKE '%%Planeswalker%%'"
+        f" OR oracle_text ILIKE '%%infect%%'"
+        f" OR oracle_text ILIKE '%%toxic%%')"
+    ),
     # ── CONSUMER: color-based cast triggers want spells of that color ─────────
     # A commander whose trigger fires on a specific color (e.g. K'rrik for black,
     # Chandra for red, Aragorn for multicolor) wants the deck filled with spells
