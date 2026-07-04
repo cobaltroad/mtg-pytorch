@@ -23,6 +23,7 @@ mtg-pytorch/
 │   │   ├── stages/             # Focused stage modules (pipeline.py delegates here)
 │   │   │   ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
 │   │   │   ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
+│   │   │   ├── facts.py        #   compute_card_facts — Layer-1 facts → card_facts table
 │   │   │   ├── tag.py          #   embed_cards
 │   │   │   ├── mechanics.py    #   tag_mechanics — canonical role tagger (coarse + fine + oracle-pattern)
 │   │   │   ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
@@ -95,6 +96,7 @@ docker compose run --rm ingest python pipeline.py --stage process
 docker compose run --rm ingest
 
 # Individual sub-stages (useful after code changes or partial failures):
+docker compose run --rm ingest python pipeline.py --stage compute_card_facts   # Layer-1 card facts (pips, land classes) → card_facts table
 docker compose run --rm ingest python pipeline.py --stage embed_cards
 docker compose run --rm ingest python pipeline.py --stage tag_mechanics
 docker compose run --rm ingest python pipeline.py --stage tag_mechanics --rescan   # delete + re-insert all oracle_text/card_characteristic role rows
@@ -117,6 +119,18 @@ docker compose run --rm ingest python pipeline.py --stage compute_commander_valu
 
 # Step 2: export artifact (reads card_abilities instead of calling _detect directly)
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
+
+# Composition engine (docs/composition-first-plan.md) — profile + deck builds:
+docker compose run --rm ingest python -m scripts.eval_profile "Wilhelt"                # derived quota profile
+docker compose run --rm ingest python -m scripts.build_deck "Wilhelt"                  # heuristic baseline build (W3)
+docker compose run --rm ingest python -m scripts.build_deck "Wilhelt" --ranking=model  # Phase 1/2 model-ranked build (W4)
+
+# Regression harness (W6): golden 20-commander set — hard invariants (99 cards,
+# singleton, color identity, quota audit, castability gate) + human-deck quota
+# range comparison.  Exit code 0/1 — run before merging composition changes.
+docker compose run --rm ingest python -m scripts.eval_harness                  # ~5 min, model ranking
+docker compose run --rm ingest python -m scripts.eval_harness --ranking heuristic
+docker compose run --rm ingest python -m scripts.eval_harness --commanders "Wilhelt" --json
 
 # Spot-check the decomposition output with eval_decomposition:
 docker compose run --rm ingest python -m scripts.eval_decomposition "Anje Falkenrath"         # named lookup (partial match)
@@ -336,6 +350,7 @@ flowchart LR
 | Table              | Purpose                                      |
 |--------------------|----------------------------------------------|
 | `cards`            | Oracle card data from MTGJSON/Scryfall       |
+| `card_facts`       | Layer-1 composition facts: pip counts, land classification (see `shared/composition/`) |
 | `card_embeddings`  | Per-model vector embeddings (pgvector)       |
 | `card_abilities`   | Structured ability tags (keyword/triggered)  |
 | `synergy_edges`    | Pairwise synergy scores, multiple score types|

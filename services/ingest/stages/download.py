@@ -124,6 +124,11 @@ def _normalise_mtgjson(name: str, faces: list[dict]) -> dict | None:
     if not oracle_id:
         return None
 
+    # MTGJSON marks Unfinity sticker-sheet cards commander-"Legal" (upstream
+    # bug); isFunny separates them from real eternal-legal Unfinity cards.
+    if face.get("isFunny"):
+        return None
+
     # Legalities: MTGJSON uses {format: "Legal"/"Banned"/etc}
     legalities_raw = face.get("legalities") or {}
     legalities = {fmt: status.lower() for fmt, status in legalities_raw.items()}
@@ -149,6 +154,7 @@ def _normalise_mtgjson(name: str, faces: list[dict]) -> dict | None:
         "toughness":      face.get("toughness"),
         "loyalty":        face.get("loyalty"),
         "scryfall_data":  face,                           # store raw face for reference
+        "faces":          faces,                          # all faces (MDFC/split/adventure)
     }
 
 
@@ -172,6 +178,7 @@ def _normalise_scryfall(card: dict) -> dict | None:
         "toughness":      card.get("toughness"),
         "loyalty":        card.get("loyalty"),
         "scryfall_data":  card,
+        "faces":          card.get("card_faces") or [card],
     }
 
 
@@ -192,7 +199,32 @@ def _to_row(card: dict) -> dict:
         "toughness":      card.get("toughness"),
         "loyalty":        card.get("loyalty"),
         "scryfall_data":  json.dumps(card.get("scryfall_data") or {}),
+        "faces":          json.dumps(card.get("faces") or []),
     }
+
+
+def _dedupe_by_oracle_id(cards: list[dict]) -> list[dict]:
+    """Collapse duplicate atomic entries that share a scryfallOracleId.
+
+    MTGJSON lists reversible printings (Secret Lair etc.) as separate
+    entries with doubled names — "Sol Ring // Sol Ring" alongside
+    "Sol Ring" — same oracle_id.  Without dedup, whichever parses last
+    wins the ON CONFLICT upsert and clobbers the canonical name, breaking
+    every name-based lookup (forced includes, basics, imports).
+
+    Doubled names are collapsed to the single form; on collision the
+    entry without " // " in its (original) name is preferred.
+    """
+    seen: dict[str, dict] = {}
+    for card in cards:
+        name = card["name"]
+        base, sep, rest = name.partition(" // ")
+        if sep and base == rest:
+            card["name"] = base  # reversible printing, not a real two-face name
+        prev = seen.get(card["oracle_id"])
+        if prev is None or (" // " in prev["name"] and " // " not in card["name"]):
+            seen[card["oracle_id"]] = card
+    return list(seen.values())
 
 
 def _is_commander_legal(card: dict) -> bool:
@@ -224,6 +256,10 @@ def _parse_cards(path: Path, source: str) -> list[dict]:
     before = len(cards)
     cards = [c for c in cards if _is_commander_legal(c)]
     log.info("Parsed %d commander-legal cards (dropped %d non-legal)", len(cards), before - len(cards))
+    before = len(cards)
+    cards = _dedupe_by_oracle_id(cards)
+    if len(cards) < before:
+        log.info("Deduplicated %d reversible-printing entries", before - len(cards))
     return cards
 
 
@@ -238,11 +274,11 @@ async def load_cards(path: Path, source: str) -> None:
                     INSERT INTO cards (
                         oracle_id, name, mana_cost, cmc, type_line, oracle_text,
                         colors, color_identity, keywords, legalities,
-                        produced_mana, power, toughness, loyalty, scryfall_data
+                        produced_mana, power, toughness, loyalty, scryfall_data, faces
                     ) VALUES (
                         :oracle_id, :name, :mana_cost, :cmc, :type_line, :oracle_text,
                         :colors, :color_identity, :keywords, :legalities,
-                        :produced_mana, :power, :toughness, :loyalty, :scryfall_data
+                        :produced_mana, :power, :toughness, :loyalty, :scryfall_data, :faces
                     )
                     ON CONFLICT (oracle_id) DO UPDATE SET
                         name          = EXCLUDED.name,
@@ -250,7 +286,8 @@ async def load_cards(path: Path, source: str) -> None:
                         type_line     = EXCLUDED.type_line,
                         keywords      = EXCLUDED.keywords,
                         legalities    = EXCLUDED.legalities,
-                        scryfall_data = EXCLUDED.scryfall_data
+                        scryfall_data = EXCLUDED.scryfall_data,
+                        faces         = EXCLUDED.faces
                 """),
                 batch,
             )

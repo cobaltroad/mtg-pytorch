@@ -103,11 +103,13 @@ services:
       HF_HOME: /data/hf_cache
       PYTHONPATH: /shared
       GIT_COMMIT: ${GIT_COMMIT:-}
+      MODEL_CHECKPOINT_DIR: /checkpoints
     volumes:
       - ./services/ingest:/app:cached
       - ./shared:/shared:ro
       - ingest_cache:/data
       - ./mage:/mage:ro
+      - model_checkpoints:/checkpoints:ro
     depends_on:
       db:
         condition: service_healthy

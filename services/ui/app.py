@@ -75,13 +75,79 @@ def get_generated_deck(filename: str) -> dict | None:
         return None
 
 
+def build_composition_deck(oracle_id: str, ranking: str, games: int) -> dict:
+    """POST a composition build — no caching, each call builds a fresh deck."""
+    r = httpx.post(
+        f"{API_URL}/commanders/{oracle_id}/build",
+        params={"ranking": ranking, "goldfish_games": games},
+        timeout=600,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 # ── UI constants ──────────────────────────────────────────────────────────────
 
 
 def _checkpoint_label(checkpoint: str) -> str:
+    if checkpoint.startswith("composition/"):
+        return "🏗 Composition"
     if checkpoint.startswith("cmd_"):
         return "👑 Commander"
     return "🎯 Phase"
+
+
+def render_composition(comp: dict) -> None:
+    """Render the quota profile, goldfish metrics, and slot breakdown."""
+    g = comp.get("goldfish", {})
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(
+        "P(commander on time)",
+        f"{g.get('p_commander_by_go_live', 0):.2f}",
+        f"gate {comp.get('gate', 0):.2f} {'✓' if comp.get('gate_passed') else '✗'}",
+    )
+    m2.metric("Avg cast turn", f"{g.get('avg_cast_turn', 0):.1f}")
+    m3.metric("Keepable hands", f"{g.get('keepable_rate', 0):.0%}")
+    d = comp.get("theme_density", {})
+    m4.metric(
+        "Theme density",
+        f"{d.get('commander_edge_rate', 0):.2f}",
+        f"pairwise {d.get('pairwise_rate', 0):.3f}",
+    )
+
+    for w in comp.get("warnings", []):
+        st.warning(w)
+
+    profile = comp.get("profile", {})
+    go = profile.get("go_live_turn", {})
+    st.caption(f"Go live: turn {go.get('turn', '?')} — {go.get('because', '')}")
+
+    quota_rows = []
+    for name, q in profile.get("quotas", {}).items():
+        extra = f" (≤{q['max_mv']} MV)" if name == "ramp" and "max_mv" in q else ""
+        extra = f" ({q.get('engines')} engines / {q.get('spells')} spells)" if name == "draw" else extra
+        quota_rows.append(
+            {"quota": name + extra, "count": q["count"], "because": q["because"]}
+        )
+    st.dataframe(pd.DataFrame(quota_rows), use_container_width=True, hide_index=True)
+
+    reqs = profile.get("pip_requirements", [])
+    if reqs:
+        st.caption(
+            "Commander castability: "
+            + "; ".join(
+                f"{r['pips']}×{{{r['color']}}} by T{r['by_turn']} → {r['sources']} sources"
+                for r in reqs
+            )
+        )
+
+    with st.expander("Slot breakdown"):
+        for slot, names in comp.get("breakdown", {}).items():
+            if names:
+                st.markdown(f"**{slot}** ({len(names)}): " + ", ".join(names))
+        basics = comp.get("basics", {})
+        if basics:
+            st.markdown("**basics**: " + ", ".join(f"{c}×{n}" for c, n in basics.items()))
 
 
 # ── Shared deck display ───────────────────────────────────────────────────────
@@ -91,6 +157,9 @@ def render_deck(deck: dict) -> None:
     """Render the full deck view. Accepts the deck result dict from the API."""
     st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
     st.markdown(f"**Commander:** {deck['commander']['name']}")
+
+    if deck.get("composition"):
+        render_composition(deck["composition"])
 
     _safe_name = re.sub(r"[^\w]", "_", deck["commander"]["name"])
     _dl_cols = st.columns(2)
@@ -204,6 +273,50 @@ with tab_deck:
                             st.markdown("  \n".join(lines))
                         else:
                             st.markdown("—")
+
+    # ── Composition build (docs/composition-first-plan.md W5) ────────────────
+    if commander:
+        st.divider()
+        st.subheader("Composition build")
+        st.markdown(
+            "Deterministic quotas (lands / ramp / draw / interaction / protection) "
+            "derived from the commander; models only rank cards *within* each quota."
+        )
+        _b_col1, _b_col2, _b_col3 = st.columns([1, 1, 2])
+        with _b_col1:
+            _ranking = st.radio(
+                "Ranking", ["model", "heuristic"], horizontal=True,
+                help="model = Phase 1/2 bilinear re-ranked pools; "
+                "heuristic = deterministic baseline",
+            )
+        with _b_col2:
+            _games = st.select_slider(
+                "Goldfish games", options=[100, 300, 500, 1000], value=300,
+                help="Monte Carlo iterations for castability metrics",
+            )
+        with _b_col3:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+            _do_build = st.button("🏗 Build 99-card deck", type="primary")
+
+        if _do_build:
+            with st.spinner("Building deck (quota fill + mana base + goldfish)…"):
+                try:
+                    _built = build_composition_deck(
+                        str(commander["oracle_id"]), _ranking, _games
+                    )
+                except httpx.HTTPStatusError as e:
+                    st.error(f"Build failed ({e.response.status_code}): {e.response.text}")
+                    _built = None
+                except Exception as e:
+                    st.error(f"Build failed: {e}")
+                    _built = None
+            if _built:
+                st.session_state["last_deck_filename"] = _built.get("deck_filename", "")
+                list_generated_decks.clear()
+                render_deck(_built)
+                st.info(
+                    "Deck saved — also available in the **Generated Decks** tab."
+                )
 
     # ── Advanced options ──────────────────────────────────────────────────────
     _chosen_checkpoint = "phase3_best"

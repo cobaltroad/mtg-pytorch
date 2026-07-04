@@ -482,6 +482,40 @@ async def score_commander_candidates(
     return out
 
 
+# ── Composition-first deck building (docs/composition-first-plan.md W5) ──────
+
+
+@app.post("/commanders/{oracle_id}/build")
+async def build_commander_deck(
+    oracle_id: UUID,
+    ranking: str = Query("model", pattern="^(model|heuristic)$"),
+    goldfish_games: int = Query(400, ge=50, le=2000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Build a full 99-card deck with the composition engine.
+
+    Deterministic quotas (lands/ramp/draw/interaction/protection) are
+    derived from the commander; the Phase 1/2 models only rank candidates
+    within each quota when ranking='model'.  Returns the deck plus the
+    quota profile with per-value rationales, goldfish castability metrics,
+    and the saved deck_filename (also visible under /decks/generated).
+    """
+    from ops import composition
+
+    try:
+        return await composition.build_commander_deck(
+            db,
+            str(oracle_id),
+            ranking=ranking,
+            goldfish_games=goldfish_games,
+            save_dir=DECK_SAVE_DIR,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
 # ── Generated deck history ───────────────────────────────────────────────────
 
 
