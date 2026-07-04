@@ -327,6 +327,34 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     # Treasure generators (Dockside Extortionist, Smothering Tithe, Pitiless
     # Plunderer) are ideal fodder — they also produce mana when sacrificed.
     "sacrifice_payoff": f"({_family_sql('sac_outlet')} OR {_TREASURE_SQL} OR {_TOKEN_SQL})",
+    # ── CONSUMER: graveyard-casting commanders want the graveyard stocked ─────
+    # A commander that casts/plays cards from the graveyard (Muldrotha,
+    # Karador, Gisa and Geralf) needs fillers: self-mill, surveil, and
+    # entomb-style effects that put specific cards into the graveyard.
+    # \y = POSIX word boundary; the put-clause requires an object
+    # ("card(s)"/"them"/"it") between put/into so replacement-effect text
+    # ("if it would be put into your graveyard") does not match.
+    "graveyard_payoff": (
+        "(oracle_text ~* '\\ymills?\\y'"
+        " OR oracle_text ~* '\\ysurveils?\\y'"
+        " OR oracle_text ~* 'put (that card|them|it|.{0,50}cards?) into your graveyard')"
+    ),
+    # ── CONSUMER: permanents-to-graveyard triggers want outlets + fodder ──────
+    # A commander that triggers when permanents hit a graveyard (the
+    # graveyard_from_play decompose key) wants to control when that happens:
+    # sac outlets plus self-sacrificing fodder — same engine parts as
+    # death_trigger, minus the toughness-1 shortcut (permanents, not
+    # creature deaths specifically).
+    "graveyard_from_play": (
+        f"({_family_sql('sac_outlet')} OR {_family_sql('sacrifice_fodder')})"
+    ),
+    # ── CONSUMER: temporary reanimation wants creatures with ETB value ────────
+    # Unearth/encore-style commanders re-animate creatures for one turn —
+    # the value is front-loaded, so the deck wants creatures whose ETB
+    # triggers do the work before the end-step exile.
+    "unearth_encore": (
+        f"(type_line ILIKE '%%Creature%%' AND {_family_sql('creature_etb')})"
+    ),
     # ── CONSUMER: deck needs spells of the type the commander cares about ─────
     # A commander with a cast trigger (e.g. Sythis) wants the deck filled with
     # the triggering spell type — enchantments for Sythis, creatures for Beast
