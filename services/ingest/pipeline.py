@@ -47,6 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 from stages.download import download as _download  # noqa: E402
+from stages.facts import compute_card_facts  # noqa: E402
 from stages.tag import embed_cards  # noqa: E402
 from stages.mechanics import tag_mechanics  # noqa: E402
 from stages.dataset import (
@@ -57,7 +58,6 @@ from stages.dataset import (
 from stages.export import (  # noqa: E402
     export_dataset_stage,
     export_dataset_commanders_stage,
-    composition_profile_stage,
 )
 
 
@@ -81,13 +81,13 @@ async def process() -> None:
     prerequisite for export_dataset_commanders only and should be run
     explicitly before building the commander artifact.
     """
+    await compute_card_facts()
     await embed_cards()
     tag_mechanics()
     await compute_textmatch_synergy()
     await compute_xmage_synergy()
     await compute_xmage_effect_synergy()
     export_dataset_stage()
-    await composition_profile_stage()
 
 
 async def run_all() -> None:
@@ -106,6 +106,8 @@ if __name__ == "__main__":
             # Grouped stages
             "download",
             "process",
+            # Card facts (composition Layer 1)
+            "compute_card_facts",
             # Tag sub-stages
             "embed_cards",
             "tag_mechanics",
@@ -120,7 +122,6 @@ if __name__ == "__main__":
             # Export sub-stages
             "export_dataset",
             "export_dataset_commanders",
-            "composition_profile",
         ],
         default=None,
         help=(
@@ -146,6 +147,8 @@ if __name__ == "__main__":
         asyncio.run(download())
     elif args.stage == "process":
         asyncio.run(process())
+    elif args.stage == "compute_card_facts":
+        asyncio.run(compute_card_facts())
     elif args.stage == "embed_cards":
         asyncio.run(embed_cards())
     elif args.stage == "tag_mechanics":
@@ -174,7 +177,5 @@ if __name__ == "__main__":
         export_dataset_stage()
     elif args.stage == "export_dataset_commanders":
         export_dataset_commanders_stage()
-    elif args.stage == "composition_profile":
-        asyncio.run(composition_profile_stage())
     else:
         asyncio.run(run_all())

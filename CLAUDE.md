@@ -23,6 +23,7 @@ mtg-pytorch/
 │   │   ├── stages/             # Focused stage modules (pipeline.py delegates here)
 │   │   │   ├── db.py           #   Shared engine, Session, SYNERGY_CHUNK constants
 │   │   │   ├── download.py     #   Fetch MTGJSON/Scryfall + load cards + import combos
+│   │   │   ├── facts.py        #   compute_card_facts — Layer-1 facts → card_facts table
 │   │   │   ├── tag.py          #   embed_cards
 │   │   │   ├── mechanics.py    #   tag_mechanics — canonical role tagger (coarse + fine + oracle-pattern)
 │   │   │   ├── dataset.py      #   compute_textmatch_synergy + compute_xmage_synergy + compute_xmage_effect_synergy
@@ -95,6 +96,7 @@ docker compose run --rm ingest python pipeline.py --stage process
 docker compose run --rm ingest
 
 # Individual sub-stages (useful after code changes or partial failures):
+docker compose run --rm ingest python pipeline.py --stage compute_card_facts   # Layer-1 card facts (pips, land classes) → card_facts table
 docker compose run --rm ingest python pipeline.py --stage embed_cards
 docker compose run --rm ingest python pipeline.py --stage tag_mechanics
 docker compose run --rm ingest python pipeline.py --stage tag_mechanics --rescan   # delete + re-insert all oracle_text/card_characteristic role rows
@@ -336,6 +338,7 @@ flowchart LR
 | Table              | Purpose                                      |
 |--------------------|----------------------------------------------|
 | `cards`            | Oracle card data from MTGJSON/Scryfall       |
+| `card_facts`       | Layer-1 composition facts: pip counts, land classification (see `shared/composition/`) |
 | `card_embeddings`  | Per-model vector embeddings (pgvector)       |
 | `card_abilities`   | Structured ability tags (keyword/triggered)  |
 | `synergy_edges`    | Pairwise synergy scores, multiple score types|
