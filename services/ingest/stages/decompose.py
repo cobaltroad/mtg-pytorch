@@ -67,41 +67,32 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
         ),
     ),
     # Spell cast — creature
-    (
-        "cast_trigger_creature",
-        "Creature cast trigger",
-        p(r"when(?:ever)?\s+you cast (?:a |an )?creature"),
-    ),
-    # Spell cast — instant/sorcery
-    (
-        "cast_trigger_instant_sorcery",
-        "Instant/sorcery cast trigger",
-        p(r"when(?:ever)?\s+you cast (?:a |an )?(?:instant|sorcery|noncreature)"),
-    ),
-    # Spell cast — enchantment
-    (
-        "cast_trigger_enchantment",
-        "Enchantment cast trigger",
-        p(r"when(?:ever)?\s+you cast (?:a |an )?enchantment"),
-    ),
-    # Spell cast — artifact
-    (
-        "cast_trigger_artifact",
-        "Artifact cast trigger",
-        p(r"when(?:ever)?\s+you cast (?:a |an )?artifact"),
-    ),
-    # Spell cast — historic
-    (
-        "cast_trigger_historic",
-        "Historic spell cast trigger",
-        p(r"when(?:ever)?\s+you cast (?:a |an )?historic"),
-    ),
-    # Spell cast — aura or equipment (Sram, Galea, Danitha, Puresteel Paladin)
-    (
-        "cast_trigger_aura_equipment",
-        "Aura or equipment cast trigger",
-        p(r"when(?:ever)?\s+you cast (?:a |an )?(?:aura|equipment)"),
-    ),
+    # Type-based cast triggers accept two templatings:
+    #   "whenever you cast <type>"                      — always a consumer
+    #   "whenever a player casts <type> …, you <gain>"  — Niv-Mizzet, Parun:
+    #     the trigger includes your own casts, but only counts when the
+    #     payoff clause benefits *you*.  Without the ", you" guard this
+    #     matches punisher text (Ruric Thar: "Whenever a player casts a
+    #     noncreature spell, Ruric Thar deals 6 damage to them") whose deck
+    #     avoids the type entirely.  "an opponent casts" never matches.
+    *[
+        (
+            f"cast_trigger_{_key}",
+            f"{_label} cast trigger",
+            p(
+                rf"when(?:ever)?\s+you cast (?:a |an )?{_type_re}"
+                rf"|when(?:ever)?\s+a player casts (?:a |an )?{_type_re}[^.]{{0,60}}, you\s"
+            ),
+        )
+        for _key, _label, _type_re in (
+            ("creature", "Creature", r"creature"),
+            ("instant_sorcery", "Instant/sorcery", r"(?:instant|sorcery|noncreature)"),
+            ("enchantment", "Enchantment", r"enchantment"),
+            ("artifact", "Artifact", r"artifact"),
+            ("historic", "Historic spell", r"historic"),
+            ("aura_equipment", "Aura or equipment", r"(?:aura|equipment)"),
+        )
+    ],
     # Spell cast — color-based
     # Per-color cast triggers — three phrasings covered per color:
     #   1. triggered: "whenever you cast a {color} spell" (standard trigger)
@@ -203,7 +194,9 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ),
     # High-MV payoff — commander scales an effect from the mana value of a card
     # (Yuriko: opponents lose life equal to the revealed card's mana value;
-    #  Zhulodok: grants cascade to colorless spells with mana value 7 or greater).
+    #  Zhulodok: grants cascade to colorless spells with mana value 7 or greater;
+    #  Kozilek: "Discard a card with mana value X: Counter target spell with
+    #  mana value X" — the deck wants an MV spread topping out high).
     # Deck wants the highest-MV spells possible to maximise the trigger.
     (
         "high_mv_payoff",
@@ -212,6 +205,7 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
             r"(?:damage|lose life|loses? life).{0,40}mana value"
             r"|mana value.{0,40}(?:damage|lose life|loses? life)"
             r"|mana value \d+ or greater"
+            r"|discard a card with mana value x"
         ),
     ),
     # Madness payoff

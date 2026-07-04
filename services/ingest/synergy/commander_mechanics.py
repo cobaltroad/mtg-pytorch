@@ -355,6 +355,12 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "unearth_encore": (
         f"(type_line ILIKE '%%Creature%%' AND {_family_sql('creature_etb')})"
     ),
+    # ── CONSUMER: high-MV payoffs want expensive spells ───────────────────────
+    # Kozilek (discard-MV-X counters), Zhulodok, Yuriko-style reveals: the
+    # deck supplies the big mana values the commander converts into effect.
+    # Mirrors the producer-side SQL; needed here too because the ingest
+    # build path (scripts/build_deck.py) reads consumer SQL only.
+    "high_mv_payoff": _spells["high_mv"],
     # ── CONSUMER: deck needs spells of the type the commander cares about ─────
     # A commander with a cast trigger (e.g. Sythis) wants the deck filled with
     # the triggering spell type — enchantments for Sythis, creatures for Beast
