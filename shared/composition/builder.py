@@ -181,9 +181,13 @@ def build_deck(
                          ("sweeper", sweep), ("protection", prot)]:
         breakdown[label] = [c["name"] for c in cards]
         spells += cards
-    for label, quota in [("ramp", profile.ramp.count), ("draw", profile.draw.count),
-                         ("spot_removal", profile.spot_removal.count)]:
-        got = len(ramp) if label == "ramp" else len(draw_e) + len(draw_s) if label == "draw" else len(spot)
+    for label, quota, got in [
+        ("ramp", profile.ramp.count, len(ramp)),
+        ("draw", profile.draw.count, len(draw_e) + len(draw_s)),
+        ("spot_removal", profile.spot_removal.count, len(spot)),
+        ("sweepers", profile.sweepers.count, len(sweep)),
+        ("protection", profile.protection.count, len(prot)),
+    ]:
         if got < quota:
             warnings.append(f"{label} pool exhausted: {got}/{quota}")
 

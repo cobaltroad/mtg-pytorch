@@ -125,6 +125,13 @@ docker compose run --rm ingest python -m scripts.eval_profile "Wilhelt"         
 docker compose run --rm ingest python -m scripts.build_deck "Wilhelt"                  # heuristic baseline build (W3)
 docker compose run --rm ingest python -m scripts.build_deck "Wilhelt" --ranking=model  # Phase 1/2 model-ranked build (W4)
 
+# Regression harness (W6): golden 20-commander set — hard invariants (99 cards,
+# singleton, color identity, quota audit, castability gate) + human-deck quota
+# range comparison.  Exit code 0/1 — run before merging composition changes.
+docker compose run --rm ingest python -m scripts.eval_harness                  # ~5 min, model ranking
+docker compose run --rm ingest python -m scripts.eval_harness --ranking heuristic
+docker compose run --rm ingest python -m scripts.eval_harness --commanders "Wilhelt" --json
+
 # Spot-check the decomposition output with eval_decomposition:
 docker compose run --rm ingest python -m scripts.eval_decomposition "Anje Falkenrath"         # named lookup (partial match)
 docker compose run --rm ingest python -m scripts.eval_decomposition --no-signals              # list commanders with zero signals (gap analysis)
