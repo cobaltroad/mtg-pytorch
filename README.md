@@ -307,6 +307,25 @@ the parser couldn't interpret (gaps).  The analysis produces `boost_overrides`
 
 ---
 
+## Known gaps
+
+### Commander decomposition misses activated-ability engines
+
+`stages/decompose.py` ORACLE_PATTERNS are trigger/static-oriented; there is
+no pattern for activated-ability engines ("{X}, {T}, Put a verse counter on
+~: search your library for a creature card…").  Commanders like **Yisan, the
+Wanderer Bard** fire **zero** decompose signals, so everything downstream
+treats them as incidental-value commanders — including the composition
+profile (`shared/composition/profile.py`), which assigns them minimal
+protection when they are in fact canonical remove-on-sight engines.
+
+Fix belongs in ORACLE_PATTERNS (e.g. an `activated_engine` key for repeatable
+activated abilities with a search/token/counter payoff), which improves both
+the commander artifact and the derived quotas.  Use
+`python -m scripts.eval_decomposition --no-signals` for the full gap list.
+
+---
+
 ## Data sources
 
 | Source | Role |
