@@ -162,6 +162,25 @@ def test_land_quality_ordering():
     assert q == sorted(q, reverse=True)
 
 
+def test_theme_diminishing_returns():
+    """A pool dominated by one sub-theme gets capped so minority sub-themes
+    still land their slots."""
+    pools, land_pool, basics, forced = make_pools()
+    sac = [dict(card(f"Sac Outlet {i}", mv=2, pips={"B": 1}), theme_keys={"sacrifice_payoff"})
+           for i in range(50)]
+    tokens = [dict(card(f"Token Maker {i}", mv=3, pips={"B": 1}), theme_keys={"token_generator"})
+              for i in range(20)]
+    pools["theme"] = sac + tokens  # ranked order: all sac outlets first
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    picked_tokens = sum(1 for n in r.breakdown["theme"] if n.startswith("Token Maker"))
+    picked_sac = sum(1 for n in r.breakdown["theme"] if n.startswith("Sac Outlet"))
+    quota = WILHELT_PROFILE.theme.count
+    cap = max(3, -(-quota // 2) + 2)
+    assert picked_sac <= cap                  # majority sub-theme saturates
+    assert picked_tokens >= quota - cap - 1   # minority sub-theme gets the rest
+
+
 def test_goldfish_prefers_more_lands():
     land = card("Forest", is_land=True, produces=["G"], etb_tapped="untapped")
     spell = card("Bear", mv=2, pips={"G": 1})

@@ -79,6 +79,7 @@ class BuildResult:
     gate_passed: bool
     iterations: int
     warnings: list[str] = field(default_factory=list)
+    theme_density: dict | None = None  # attached by DB-side evaluators
 
 
 # ── Land quality ──────────────────────────────────────────────────────────────
@@ -188,11 +189,17 @@ def build_deck(
 
     # Theme fill, curve-aware: first pass respects per-bucket capacity after
     # infrastructure; second pass relaxes if the pool can't fit the shape.
+    # Diminishing returns: cards carrying `theme_keys` are soft-capped per
+    # key so the 8th sac outlet loses its slot to the 1st counters payoff —
+    # a linear scorer can't express saturation, so the builder does.
     theme_quota = profile.theme.count
     capacity = {t.max_mv: t.count for t in profile.curve_targets}
     for c in spells:
         b = _curve_bucket(c["mv"], profile.curve_targets)
         capacity[b] = capacity.get(b, 0) - 1
+    all_keys = {k for c in pools.get("theme", []) for k in c.get("theme_keys", ())}
+    key_cap = max(3, -(-theme_quota // len(all_keys)) + 2) if all_keys else 0
+    key_counts: dict[str, int] = {}
     theme: list[dict] = []
     for relax in (False, True):
         if len(theme) >= theme_quota:
@@ -205,7 +212,12 @@ def build_deck(
             b = _curve_bucket(card["mv"], profile.curve_targets)
             if not relax and capacity.get(b, 0) <= 0:
                 continue
+            keys = card.get("theme_keys") or set()
+            if not relax and keys and all(key_counts.get(k, 0) >= key_cap for k in keys):
+                continue  # every sub-theme this card serves is saturated
             capacity[b] = capacity.get(b, 0) - 1
+            for k in keys:
+                key_counts[k] = key_counts.get(k, 0) + 1
             theme.append(card)
             chosen.add(card["id"])
     if len(theme) < theme_quota:

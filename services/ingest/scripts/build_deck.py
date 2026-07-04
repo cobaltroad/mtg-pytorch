@@ -112,9 +112,12 @@ def _query_pool(conn, where_sql: str, identity: frozenset[str], role: str) -> li
 
 
 def _theme_pool(conn, keys: set[str], identity: frozenset[str], commander_id: str) -> list[dict]:
-    """Union of decompose consumer pools; rank by how many keys a card serves."""
+    """Union of decompose consumer pools; rank by how many keys a card serves.
+
+    Each card carries `theme_keys` (which sub-themes it serves) so the
+    builder's diminishing-returns counters can saturate sub-themes.
+    """
     hits: dict[str, dict] = {}
-    matches: dict[str, int] = {}
     for key in sorted(keys):
         where = PATTERN_KEY_TO_CONSUMER_SQL.get(key)
         if not where:
@@ -122,11 +125,59 @@ def _theme_pool(conn, keys: set[str], identity: frozenset[str], commander_id: st
         for card in _query_pool(conn, where, identity, "theme"):
             if card["id"] == commander_id:
                 continue
-            hits.setdefault(card["id"], card)
-            matches[card["id"]] = matches.get(card["id"], 0) + 1
+            entry = hits.setdefault(card["id"], card)
+            entry.setdefault("theme_keys", set()).add(key)
     pool = list(hits.values())
-    pool.sort(key=lambda c: (-matches[c["id"]], c["mv"], c["name"]))
+    pool.sort(key=lambda c: (-len(c["theme_keys"]), c["mv"], c["name"]))
     return pool
+
+
+def _embeddings(conn, card_ids: list[str]) -> dict[str, list[float]]:
+    """Raw 768-dim embeddings for the given cards (missing ids omitted)."""
+    if not card_ids:
+        return {}
+    out: dict[str, list[float]] = {}
+    with conn.cursor() as cur:
+        for i in range(0, len(card_ids), 5000):
+            batch = card_ids[i : i + 5000]
+            cur.execute(
+                "SELECT card_id::text, embedding::text FROM card_embeddings"
+                " WHERE card_id = ANY(%s::uuid[])",
+                (batch,),
+            )
+            for cid, vec in cur.fetchall():
+                out[cid] = json.loads(vec)
+    return out
+
+
+def _theme_density(conn, commander_id: str, theme_ids: list[str]) -> dict:
+    """Synergy-edge density of the chosen theme slots (A/B metric).
+
+    commander_edge_rate — fraction of theme cards with a synergy edge to
+    the commander; pairwise_rate — density of edges among theme cards.
+    """
+    if not theme_ids:
+        return {"commander_edge_rate": 0.0, "pairwise_rate": 0.0}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(DISTINCT CASE WHEN card_a = %s::uuid THEN card_b ELSE card_a END)"
+            " FROM synergy_edges"
+            " WHERE (card_a = %s::uuid AND card_b = ANY(%s::uuid[]))"
+            "    OR (card_b = %s::uuid AND card_a = ANY(%s::uuid[]))",
+            (commander_id, commander_id, theme_ids, commander_id, theme_ids),
+        )
+        cmd_hits = cur.fetchone()[0]
+        cur.execute(
+            "SELECT count(*) FROM synergy_edges"
+            " WHERE card_a = ANY(%s::uuid[]) AND card_b = ANY(%s::uuid[])",
+            (theme_ids, theme_ids),
+        )
+        pair_hits = cur.fetchone()[0]
+    n = len(theme_ids)
+    return {
+        "commander_edge_rate": cmd_hits / n,
+        "pairwise_rate": pair_hits / (n * (n - 1)) if n > 1 else 0.0,
+    }
 
 
 def _land_pool(conn, identity: frozenset[str]) -> list[dict]:
@@ -175,7 +226,12 @@ def _forced(conn, identity: frozenset[str]) -> list[dict]:
     return out
 
 
-def build_for_commander(name: str, goldfish_games: int = 500) -> tuple[CompositionProfile, object]:
+def build_for_commander(
+    name: str,
+    goldfish_games: int = 500,
+    ranking: str = "heuristic",
+) -> tuple[CompositionProfile, object]:
+    """ranking: 'heuristic' (W3 baseline) or 'model' (Phase 1/2 re-ranked)."""
     cards = _fetch(name)
     if not cards:
         sys.exit(f"No commander matching {name!r}")
@@ -201,6 +257,26 @@ def build_for_commander(name: str, goldfish_games: int = 500) -> tuple[Compositi
         }
         pools["theme"] = _theme_pool(conn, keys, identity, commander["id"])
 
+        if ranking == "model":
+            from composition.ranking import load_ranker
+
+            ranker = load_ranker()
+            if ranker is None:
+                sys.exit("model ranking requested but checkpoints/torch unavailable")
+            all_ids = [c["id"] for pool in pools.values() for c in pool] + [commander["id"]]
+            embs = _embeddings(conn, list(set(all_ids)))
+            cmd_emb = embs.get(commander["id"])
+            if cmd_emb is None:
+                sys.exit(f"no embedding for commander {commander['name']}")
+            # Ramp stays heuristic: mana development is castability physics
+            # (mana output per card), which the synergy model can't see —
+            # model-ranking it demotes the big rocks Kozilek-tier decks
+            # need and fails the castability gate.
+            pools = {
+                role: pool if role == "ramp" else ranker.rank_pool(pool, cmd_emb, embs)
+                for role, pool in pools.items()
+            }
+
         # The goldfisher can't model a commander discounting its own cost
         # (Karador); relax its gate rather than pretend the sim is right.
         gate_relax = 0.0
@@ -216,6 +292,10 @@ def build_for_commander(name: str, goldfish_games: int = 500) -> tuple[Compositi
             goldfish_games=goldfish_games,
             gate_relax=gate_relax,
         )
+
+        theme_names = set(result.breakdown.get("theme", []))
+        theme_ids = [c["id"] for c in result.deck if c["name"] in theme_names]
+        result.theme_density = _theme_density(conn, commander["id"], theme_ids)
     finally:
         conn.close()
     return profile, result
@@ -225,7 +305,8 @@ def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
         sys.exit(__doc__)
-    profile, result = build_for_commander(args[0])
+    ranking = "model" if "--ranking=model" in sys.argv or "--model" in sys.argv else "heuristic"
+    profile, result = build_for_commander(args[0], ranking=ranking)
 
     if "--json" in sys.argv:
         print(json.dumps({
@@ -242,7 +323,10 @@ def main() -> None:
 
     g = result.goldfish
     check_turn = max(profile.go_live_turn, profile.commander_mv)
-    print(f"\n=== {profile.commander_name} — composition build (heuristic baseline) ===")
+    print(f"\n=== {profile.commander_name} — composition build ({ranking} ranking) ===")
+    d = result.theme_density
+    print(f"theme density: commander_edge_rate={d['commander_edge_rate']:.2f} "
+          f"pairwise_rate={d['pairwise_rate']:.3f}")
     lands = sum(1 for c in result.deck if c["is_land"])
     print(f"99 cards: {lands} lands ({result.basic_counts}), {99 - lands} spells")
     print(f"goldfish: P(cast by T{check_turn}) = {g.p_commander_by_go_live:.2f} "

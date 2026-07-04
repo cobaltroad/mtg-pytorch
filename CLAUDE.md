@@ -120,6 +120,11 @@ docker compose run --rm ingest python pipeline.py --stage compute_commander_valu
 # Step 2: export artifact (reads card_abilities instead of calling _detect directly)
 docker compose run --rm ingest python pipeline.py --stage export_dataset_commanders
 
+# Composition engine (docs/composition-first-plan.md) — profile + deck builds:
+docker compose run --rm ingest python -m scripts.eval_profile "Wilhelt"                # derived quota profile
+docker compose run --rm ingest python -m scripts.build_deck "Wilhelt"                  # heuristic baseline build (W3)
+docker compose run --rm ingest python -m scripts.build_deck "Wilhelt" --ranking=model  # Phase 1/2 model-ranked build (W4)
+
 # Spot-check the decomposition output with eval_decomposition:
 docker compose run --rm ingest python -m scripts.eval_decomposition "Anje Falkenrath"         # named lookup (partial match)
 docker compose run --rm ingest python -m scripts.eval_decomposition --no-signals              # list commanders with zero signals (gap analysis)
