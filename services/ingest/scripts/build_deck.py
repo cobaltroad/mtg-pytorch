@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import re
 import sys
 
 import psycopg2
@@ -21,77 +20,25 @@ import psycopg2.extras
 sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), ".."))
 
 from composition.builder import build_deck  # noqa: E402
-from composition.profile import CompositionProfile, derive_profile  # noqa: E402
-from mtg_sql.staples import (  # noqa: E402
-    draw_engine,
-    draw_spell,
-    interaction,
-    protection,
-    removal,
-    sweeper,
+from composition.pool_helpers import (  # noqa: E402
+    CARD_COLUMNS as _CARD_COLUMNS,
+    CASTABLE_FILTER,
+    COST_REDUCTION_RE,
+    FORCED_NAMES,
+    GATE_RELAX_COST_REDUCTION,
+    POOL_SQL as _POOL_SQL,
+    row_to_card as _row_to_card,
+    sort_pool,
 )
-from mtg_sql.staples.ramp import SQL as RAMP_SQL  # noqa: E402
+from composition.profile import CompositionProfile, derive_profile  # noqa: E402
 from stages.decompose import DATABASE_URL, _detect, _fetch  # noqa: E402
 from synergy.commander_mechanics import PATTERN_KEY_TO_CONSUMER_SQL  # noqa: E402
-
-FORCED_NAMES = ("Sol Ring", "Arcane Signet", "Command Tower")
-
-_POOL_SQL: dict[str, str] = {
-    "ramp": RAMP_SQL,
-    "draw_engine": draw_engine.SQL,
-    "draw_spell": draw_spell.SQL,
-    "spot_removal": f"(({removal.SQL}) OR ({interaction.SQL}))",
-    "sweeper": sweeper.SQL,
-    "protection": protection.SQL,
-}
-
-_CARD_COLUMNS = (
-    "c.id::text, c.name, c.cmc, c.color_identity, c.produced_mana, c.type_line,"
-    " c.oracle_text, f.pips, f.hybrid_pips, f.is_land, f.is_basic, f.etb_tapped, f.is_fetch"
-)
-
-# Largest "Add {…}{…}" clause → mana per activation (Sol Ring 2, Thran
-# Dynamo 3).  The goldfisher counts each source once per turn, so this is
-# what makes big-mana commanders castable in simulation.
-_ADD_CLAUSE_RE = re.compile(r"add ((?:\{[WUBRGCS0-9]\})+)", re.IGNORECASE)
-_ADD_SYMBOL_RE = re.compile(r"\{[WUBRGCS0-9]\}")
-
-
-def _mana_output(oracle_text: str | None) -> int:
-    best = 1
-    for clause in _ADD_CLAUSE_RE.findall(oracle_text or ""):
-        best = max(best, len(_ADD_SYMBOL_RE.findall(clause)))
-    return best
-
-
-def _row_to_card(row, roles: set[str]) -> dict:
-    pips = row["pips"] if isinstance(row["pips"], dict) else json.loads(row["pips"] or "{}")
-    hybrid = row["hybrid_pips"]
-    if not isinstance(hybrid, list):
-        hybrid = json.loads(hybrid or "[]")
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "mv": int(row["cmc"] or 0),
-        "pips": pips,
-        "hybrid": hybrid,
-        "is_land": row["is_land"],
-        "is_basic": row["is_basic"],
-        "produces": [c for c in (row["produced_mana"] or []) if c in "WUBRGC"],
-        "mana_output": _mana_output(row["oracle_text"]),
-        "etb_tapped": row["etb_tapped"],
-        "is_fetch": row["is_fetch"],
-        "roles": set(roles),
-    }
 
 
 def _query_pool(conn, where_sql: str, identity: frozenset[str], role: str) -> list[dict]:
     query = (
         f"SELECT {_CARD_COLUMNS} FROM cards c JOIN card_facts f ON f.card_id = c.id"
-        f" WHERE ({where_sql})"
-        # No-cost nonland cards (Evermind, suspend-only spells) are
-        # uncastable by normal means — keep them out of heuristic pools.
-        " AND (c.mana_cost IS NOT NULL OR f.is_land)"
+        f" WHERE ({where_sql}) AND {CASTABLE_FILTER}"
     )
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         cur.execute(query)
@@ -101,14 +48,7 @@ def _query_pool(conn, where_sql: str, identity: frozenset[str], role: str) -> li
         for r in rows
         if frozenset(r["color_identity"] or []) <= identity
     ]
-    # Heuristic rank (the W3 baseline the ML must beat): ramp prefers raw
-    # mana output (Thran Dynamo over trinkets), then the 2-MV signet tier;
-    # everything else cheap-first; name breaks ties.
-    if role == "ramp":
-        cards.sort(key=lambda c: (-min(c["mana_output"], 3), abs(c["mv"] - 2), c["name"]))
-    else:
-        cards.sort(key=lambda c: (c["mv"], c["name"]))
-    return cards
+    return sort_pool(cards, role)
 
 
 def _theme_pool(conn, keys: set[str], identity: frozenset[str], commander_id: str) -> list[dict]:
@@ -280,8 +220,8 @@ def build_for_commander(
         # The goldfisher can't model a commander discounting its own cost
         # (Karador); relax its gate rather than pretend the sim is right.
         gate_relax = 0.0
-        if re.search(r"costs? \{?[X0-9]*\}? ?less to cast", commander["oracle_text"] or "", re.I):
-            gate_relax = 0.15
+        if COST_REDUCTION_RE.search(commander["oracle_text"] or ""):
+            gate_relax = GATE_RELAX_COST_REDUCTION
 
         result = build_deck(
             profile,
