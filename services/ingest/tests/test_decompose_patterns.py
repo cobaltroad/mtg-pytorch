@@ -65,3 +65,61 @@ def test_original_word_order_still_fires():
 )
 def test_negatives_do_not_fire(text):
     assert "graveyard_payoff" not in keys(text)
+
+
+# ── cast triggers: "a player casts" templating (issue #134) ──────────────────
+
+NIV_MIZZET_PARUN = (
+    "This spell can't be countered.\nFlying\n"
+    "Whenever you draw a card, Niv-Mizzet deals 1 damage to any target.\n"
+    "Whenever a player casts an instant or sorcery spell, you draw a card."
+)
+
+
+def test_a_player_casts_fires_type_trigger():
+    assert "cast_trigger_instant_sorcery" in keys(NIV_MIZZET_PARUN)
+
+
+def test_you_cast_still_fires():
+    assert "cast_trigger_creature" in keys("Whenever you cast a creature spell, draw a card.")
+
+
+def test_opponent_casts_is_punisher_not_consumer():
+    # The deck can't feed an opponent-cast trigger — must NOT fire.
+    text = "Whenever an opponent casts a creature spell, you gain 1 life."
+    assert "cast_trigger_creature" not in keys(text)
+
+
+def test_a_player_casts_punisher_does_not_fire():
+    # Ruric Thar: symmetric trigger whose payoff PUNISHES the caster —
+    # this deck avoids noncreature spells, so no consumer key.
+    text = (
+        "Whenever a player casts a noncreature spell, Ruric Thar, the "
+        "Unbowed deals 6 damage to them."
+    )
+    assert "cast_trigger_instant_sorcery" not in keys(text)
+
+
+# ── high_mv_payoff: Kozilek's discard-MV-X clause (issue #134) ────────────────
+
+KOZILEK_DISTORTION = (
+    "When you cast this spell, if you have fewer than seven cards in hand, "
+    "draw cards equal to the difference.\nMenace\n"
+    "Discard a card with mana value X: Counter target spell with mana value X."
+)
+
+
+def test_kozilek_fires_high_mv_payoff():
+    assert "high_mv_payoff" in keys(KOZILEK_DISTORTION)
+
+
+def test_zhulodok_still_fires_high_mv_payoff():
+    text = (
+        "Whenever you cast your first spell during each of your turns, if it "
+        "has mana value 7 or greater, it gains cascade."
+    )
+    assert "high_mv_payoff" in keys(text)
+
+
+def test_plain_discard_does_not_fire_high_mv():
+    assert "high_mv_payoff" not in keys("Discard a card: Draw a card.")
