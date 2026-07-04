@@ -324,6 +324,27 @@ activated abilities with a search/token/counter payoff), which improves both
 the commander artifact and the derived quotas.  Use
 `python -m scripts.eval_decomposition --no-signals` for the full gap list.
 
+### Decompose keys without consumer SQL leave theme pools empty
+
+Even when a commander's decompose patterns fire, the composition builder can
+only fill theme slots for keys that have an entry in
+`PATTERN_KEY_TO_CONSUMER_SQL` (`synergy/commander_mechanics.py`).  Keys
+without consumer SQL — currently the graveyard family (Muldrotha, Karador),
+`high_mv_payoff` (Kozilek), and per-color cast triggers (Niv-Mizzet) — yield
+an empty theme pool, so those decks are built entirely from staple-pool
+backfill ("goodstuff") with zero theme synergy density.  The builds are
+legal and castable, just themeless.  The recent `token_generator` /
+`proliferate_matters` / `trigger_doubling` commits are this same gap being
+closed key by key; W4's A/B eval (`scripts/build_deck.py`) makes the
+remaining holes measurable via `commander_edge_rate = 0`.
+
+### ~950 newest cards have no embeddings
+
+`card_embeddings` lags the card table until `--stage embed_cards` is re-run
+after a download.  Model-ranked builds handle this gracefully (unscored
+cards keep heuristic order at the pool tail), but new-set cards are
+effectively invisible to the Phase 1/2 scorers until re-embedding.
+
 ---
 
 ## Data sources
