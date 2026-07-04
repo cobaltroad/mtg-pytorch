@@ -124,6 +124,11 @@ def _normalise_mtgjson(name: str, faces: list[dict]) -> dict | None:
     if not oracle_id:
         return None
 
+    # MTGJSON marks Unfinity sticker-sheet cards commander-"Legal" (upstream
+    # bug); isFunny separates them from real eternal-legal Unfinity cards.
+    if face.get("isFunny"):
+        return None
+
     # Legalities: MTGJSON uses {format: "Legal"/"Banned"/etc}
     legalities_raw = face.get("legalities") or {}
     legalities = {fmt: status.lower() for fmt, status in legalities_raw.items()}

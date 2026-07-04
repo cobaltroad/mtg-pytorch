@@ -133,7 +133,13 @@ def test_voltron_gets_max_protection():
     assert "voltron" in p.protection.because
     assert p.go_live_turn == 5            # 6-drop ramped a turn early
     assert p.ramp.count == 12
-    assert p.ramp.max_mv == 3
+    assert p.ramp.max_mv == 4             # mv − 2: Thran Dynamo tier is live
+
+
+def test_big_mana_commander_ramp_scales():
+    p = derive_profile("Kozilek", 10, {}, [], set())
+    assert p.ramp.count == 14
+    assert p.ramp.max_mv == 5             # ceiling: Gilded Lotus tier
 
 
 def test_cheap_commander_needs_less_ramp():

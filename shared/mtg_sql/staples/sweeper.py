@@ -28,7 +28,10 @@ RATE: float = 0.06
 SQL: str = (
     "("
     "  oracle_text ILIKE '%%destroy all%%'"
-    "  OR oracle_text ILIKE '%%exile all%%'"
+    # "exile all" must name battlefield objects — bare '%%exile all%%'
+    # matches library manipulation ("exile all other cards revealed this
+    # way", Demonic Consultation)
+    "  OR oracle_text ~* 'exile all (other )?(attacking |blocking |nonland )?(creature|permanent|artifact|enchantment|planeswalker|token)'"
     # pyroclasm-style: "deals N damage to each creature"
     "  OR oracle_text ~* 'deals? [0-9]+ damage to each creature'"
     # toughness reduction: "each creature gets -N/-N"

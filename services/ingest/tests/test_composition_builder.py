@@ -1,0 +1,172 @@
+"""Tests for the composition builder + goldfisher (plan W3).
+
+Synthetic card pools — pure, no DB.  The contract under test:
+  * exactly 99 cards, singleton except basics
+  * quotas honored when pools suffice; shortfalls become basics + warnings
+  * ramp respects the profile's max-MV ceiling
+  * basics allocation meets the commander's Karsten color minimums first
+  * the goldfish feedback loop converts theme slots to lands when the
+    castability gate fails, and a sound build passes the gate
+"""
+
+from __future__ import annotations
+
+import sys
+from itertools import count
+from pathlib import Path
+
+import pytest
+
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "shared" / "composition").is_dir():
+        sys.path.insert(0, str(_parent / "shared"))
+        break
+
+from composition.builder import build_deck, castability_floor, land_quality  # noqa: E402
+from composition.goldfish import simulate  # noqa: E402
+from composition.profile import derive_profile  # noqa: E402
+
+_ids = count()
+
+
+def card(name, mv=2, pips=None, is_land=False, is_basic=False, produces=None,
+         etb_tapped=None, is_fetch=False, roles=None):
+    return {
+        "id": f"c{next(_ids)}", "name": name, "mv": mv, "pips": pips or {},
+        "hybrid": [], "is_land": is_land, "is_basic": is_basic,
+        "produces": produces or [], "etb_tapped": etb_tapped,
+        "is_fetch": is_fetch, "roles": roles or set(),
+    }
+
+
+def make_pools():
+    """Ample ranked pools for a UB commander."""
+    pools = {
+        "ramp": [card(f"Rock {i}", mv=2, produces=["C"], roles={"ramp"}) for i in range(15)]
+        + [card("Big Rock", mv=4, produces=["C"], roles={"ramp"})],
+        "draw_engine": [card(f"Engine {i}", mv=3, pips={"U": 1}) for i in range(10)],
+        "draw_spell": [card(f"Divination {i}", mv=2, pips={"U": 1}) for i in range(10)],
+        "spot_removal": [card(f"Removal {i}", mv=2, pips={"B": 1}) for i in range(12)],
+        "sweeper": [card(f"Wipe {i}", mv=4, pips={"B": 2}) for i in range(6)],
+        "protection": [card(f"Boots {i}", mv=2) for i in range(8)],
+        "theme": [card(f"Zombie {i}", mv=(i % 5) + 1, pips={"B": 1}) for i in range(60)],
+    }
+    land_pool = (
+        [card(f"Dual {i}", is_land=True, produces=["U", "B"], etb_tapped="conditional")
+         for i in range(12)]
+        + [card(f"Tapland {i}", is_land=True, produces=["U", "B"], etb_tapped="always")
+           for i in range(8)]
+    )
+    basics = {
+        "U": card("Island", is_land=True, is_basic=True, produces=["U"], etb_tapped="untapped"),
+        "B": card("Swamp", is_land=True, is_basic=True, produces=["B"], etb_tapped="untapped"),
+    }
+    forced = [
+        card("Sol Ring", mv=1, produces=["C"], roles={"ramp"}),
+        card("Arcane Signet", mv=2, produces=["U", "B"], roles={"ramp"}),
+        card("Command Tower", is_land=True, produces=["U", "B"], etb_tapped="untapped"),
+    ]
+    return pools, land_pool, basics, forced
+
+
+WILHELT_PROFILE = derive_profile(
+    "Wilhelt", 4, {"U": 1, "B": 1}, ["U", "B"],
+    {"death_trigger", "creature_token_generator", "sacrifice_payoff"},
+)
+
+
+def _build(**kw):
+    pools, land_pool, basics, forced = make_pools()
+    return build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                      goldfish_games=300, **kw)
+
+
+def test_exactly_99_singleton_except_basics():
+    r = _build()
+    assert len(r.deck) == 99
+    nonbasic_ids = [c["id"] for c in r.deck if not c["is_basic"]]
+    assert len(nonbasic_ids) == len(set(nonbasic_ids))
+
+
+def test_quotas_honored():
+    r = _build()
+    p = WILHELT_PROFILE
+    assert len(r.breakdown["ramp"]) + 2 == p.ramp.count          # +2 forced rocks
+    assert len(r.breakdown["draw_engine"]) == p.draw.engines
+    assert len(r.breakdown["draw_spell"]) == p.draw.spells
+    assert len(r.breakdown["spot_removal"]) == p.spot_removal.count
+    assert len(r.breakdown["sweeper"]) == p.sweepers.count
+    assert len(r.breakdown["protection"]) == p.protection.count
+    lands = sum(1 for c in r.deck if c["is_land"])
+    assert lands >= p.lands.count  # feedback loop may add, never remove
+
+
+def test_ramp_respects_max_mv():
+    r = _build()
+    assert "Big Rock" not in r.breakdown["ramp"]  # mv 4 > ceiling 2
+
+
+def test_sound_build_passes_gate():
+    r = _build()
+    assert r.gate == castability_floor(4, 2) == 0.75  # MV 4, {U}{B} = 2 pips
+    assert r.gate_passed, (r.goldfish, r.warnings)
+
+
+def test_castability_floor_scales_with_pips():
+    # Atraxa (MV 4, 4 pips) gets a lower bar than Wilhelt (MV 4, 2 pips):
+    # no mana base fully recovers a 4-color pip requirement.
+    assert castability_floor(4, 4) < castability_floor(4, 2) < castability_floor(4, 1)
+    assert castability_floor(10, 10) >= 0.35  # clamped
+    assert castability_floor(10, 1) < castability_floor(6, 1)  # MV-graded past 6
+
+
+def test_deterministic_under_seed():
+    a, b = _build(seed=42), _build(seed=42)
+    assert [c["name"] for c in a.deck] == [c["name"] for c in b.deck]
+
+
+def test_basics_meet_commander_minimums():
+    r = _build()
+    reqs = {q.color: q.sources for q in WILHELT_PROFILE.pip_requirements}
+    for color, needed in reqs.items():
+        have = sum(1 for c in r.deck if c["is_land"] and color in c["produces"])
+        assert have >= min(needed, 20), (color, have, needed)
+
+
+def test_pool_shortfall_becomes_basics_with_warning():
+    pools, land_pool, basics, forced = make_pools()
+    pools["theme"] = pools["theme"][:5]  # starve the theme pool
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert len(r.deck) == 99
+    assert any("theme pool exhausted" in w for w in r.warnings)
+
+
+def test_feedback_loop_fires_on_bad_mana_base():
+    """Starve the land pool of untapped lands: gate should force extra lands
+    or a documented failure — never a silent pass."""
+    pools, land_pool, basics, forced = make_pools()
+    land_pool = [c for c in land_pool if c["etb_tapped"] == "always"]
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert r.gate_passed or any("castability gate" in w for w in r.warnings)
+
+
+def test_land_quality_ordering():
+    identity = {"U", "B"}
+    dual_untapped = card("x", is_land=True, produces=["U", "B"], etb_tapped="untapped")
+    dual_tapped = card("x", is_land=True, produces=["U", "B"], etb_tapped="always")
+    mono = card("x", is_land=True, produces=["U"], etb_tapped="untapped")
+    off_color = card("x", is_land=True, produces=["R", "G"], etb_tapped="untapped")
+    q = [land_quality(c, identity) for c in (dual_untapped, dual_tapped, mono, off_color)]
+    assert q == sorted(q, reverse=True)
+
+
+def test_goldfish_prefers_more_lands():
+    land = card("Forest", is_land=True, produces=["G"], etb_tapped="untapped")
+    spell = card("Bear", mv=2, pips={"G": 1})
+    good = [dict(land, id=f"l{i}") for i in range(37)] + [dict(spell, id=f"s{i}") for i in range(62)]
+    bad = [dict(land, id=f"l{i}") for i in range(20)] + [dict(spell, id=f"s{i}") for i in range(79)]
+    pg = simulate(good, 2, {"G": 2}, 2, games=400).p_commander_by_go_live
+    pb = simulate(bad, 2, {"G": 2}, 2, games=400).p_commander_by_go_live
+    assert pg > pb + 0.2

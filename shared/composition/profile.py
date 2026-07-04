@@ -184,11 +184,11 @@ def derive_profile(
 
     # Ramp count scales with commander cost; ramp above commander_mv − 2
     # cannot accelerate the commander (a 2-mana rock turns a 4-drop into a
-    # turn-3 play; a 3-mana rock does not), clamped to [2, 3] so cheap
-    # commanders still get generic 2-MV ramp and big-mana decks keep the
-    # Cultivate tier.
-    ramp_count = 6 if mv <= 2 else 8 if mv == 3 else 10 if mv == 4 else 12
-    ramp_max_mv = min(max(mv - 2, 2), 3)
+    # turn-3 play; a 3-mana rock does not).  Floor 2 keeps generic cheap
+    # ramp for cheap commanders; ceiling 5 admits the big-rock tier
+    # (Thran Dynamo, Gilded Lotus) that big-mana decks are built on.
+    ramp_count = 6 if mv <= 2 else 8 if mv == 3 else 10 if mv == 4 else 12 if mv <= 6 else 14
+    ramp_max_mv = min(max(mv - 2, 2), 5)
     ramp = RampQuota(
         count=ramp_count,
         because=f"commander costs {mv}: enough acceleration to go live on turn {go_live}",
