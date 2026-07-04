@@ -351,12 +351,16 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
             r"|(?:exile|sacrifice) (?:it|them) at the beginning of the next end step",
         ),
     ),
-    # Graveyard payoff
+    # Graveyard payoff — both word orders: "from your graveyard … cast" AND
+    # the canonical "cast/play … from your graveyard" (Muldrotha: "cast a
+    # permanent spell of each permanent type from your graveyard"; Karador:
+    # "cast a creature spell from your graveyard").
     (
         "graveyard_payoff",
         "Graveyard payoff",
         p(
             r"from (?:your |a |the )?graveyard.{0,30}(?:cast|play|battlefield)"
+            r"|(?:cast|play)(?: a| an| up to)? .{0,60}?from (?:your |a |the )?graveyard"
             r"|when.{0,30}put into (?:a |your )?graveyard from",
         ),
     ),
