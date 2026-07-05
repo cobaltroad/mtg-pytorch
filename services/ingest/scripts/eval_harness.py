@@ -28,7 +28,13 @@ sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__fi
 
 from composition.evaluation import check_build, deck_census, range_check  # noqa: E402
 from composition.pool_helpers import POOL_SQL  # noqa: E402
-from stages.decompose import DATABASE_URL  # noqa: E402
+from stages.decompose import DATABASE_URL, _detect  # noqa: E402
+from synergy.commander_mechanics import (  # noqa: E402
+    PATTERN_KEY_TO_CONSUMER_SQL,
+    PATTERN_KEY_TO_PRODUCER_SQL,
+    PATTERNS as FAMILY_PATTERNS,
+    PRODUCER_DECOMPOSE_TO_DECK_KEY,
+)
 
 from scripts.build_deck import build_for_commander  # noqa: E402
 
@@ -113,6 +119,107 @@ def human_distributions(conn) -> tuple[dict, int]:
     return stats, len(samples["lands"])
 
 
+def signal_drift(
+    live: dict[str, set[str]], stored: dict[str, set[str]]
+) -> dict[str, int]:
+    """Compare live _detect() output against DB rows, per commander.
+
+    Pure — testable without a DB.  Returns counts of commanders whose
+    stored signal set is missing keys the code now fires ('missing') or
+    carries keys the code no longer fires ('stale').
+    """
+    missing = sum(1 for cid, keys in live.items() if keys - stored.get(cid, set()))
+    stale = sum(1 for cid, keys in stored.items() if keys - live.get(cid, set()))
+    return {"missing": missing, "stale": stale}
+
+
+def staleness_check(conn) -> list[str]:
+    """Detect drift between decompose pattern code and DB-materialized data.
+
+    Issue #137: the API build path reads card_abilities (source='decompose')
+    and decomposed_candidates edges; after a pattern or consumer-SQL change
+    those must be rebuilt (--stage decompose_commanders, then
+    --stage compute_commander_value_synergy).  This check makes forgetting
+    that loud instead of silent.
+    """
+    from mtg_sql import commanders as commanders_sql
+
+    warnings: list[str] = []
+    with conn.cursor() as cur:
+        # 1. Signals: card_abilities vs running the patterns live.
+        cur.execute(
+            "SELECT id::text, COALESCE(oracle_text, ''), COALESCE(type_line, '')"
+            f" FROM cards WHERE {commanders_sql.WHERE}"
+        )
+        live = {
+            cid: {k for k, _l, _p in _detect(o, t)}
+            for cid, o, t in cur.fetchall()
+        }
+        cur.execute(
+            "SELECT card_id::text, trigger_event FROM card_abilities"
+            " WHERE source = 'decompose' AND trigger_event IS NOT NULL"
+        )
+        stored: dict[str, set[str]] = {}
+        for cid, key in cur.fetchall():
+            stored.setdefault(cid, set()).add(key)
+        drift = signal_drift(live, stored)
+        if drift["missing"] or drift["stale"]:
+            warnings.append(
+                f"decompose signals stale: {drift['missing']} commanders missing "
+                f"new-pattern keys, {drift['stale']} carrying removed keys — "
+                "run --stage decompose_commanders"
+            )
+
+        # 2. Edges: every stored key that has producer/consumer SQL should
+        #    appear in decomposed_candidates metadata; keys in edges that no
+        #    longer have SQL indicate the reverse drift.
+        keys_with_sql = {
+            k for k in {key for keys in stored.values() for key in keys}
+            if k in PATTERN_KEY_TO_CONSUMER_SQL
+            or any(dk in PATTERN_KEY_TO_PRODUCER_SQL
+                   for dk in PRODUCER_DECOMPOSE_TO_DECK_KEY.get(k, []))
+        }
+        cur.execute(
+            "SELECT DISTINCT jsonb_array_elements_text(metadata->'pattern_keys')"
+            " FROM synergy_edges WHERE score_type = 'decomposed_candidates'"
+        )
+        edge_keys = {row[0] for row in cur.fetchall()}
+        missing_edges = keys_with_sql - edge_keys
+        orphan_edges = edge_keys - keys_with_sql
+        if missing_edges:
+            warnings.append(
+                f"edges stale: keys with SQL but no decomposed_candidates edges "
+                f"({', '.join(sorted(missing_edges)[:6])}"
+                f"{'…' if len(missing_edges) > 6 else ''}) — "
+                "run --stage compute_commander_value_synergy"
+            )
+        if orphan_edges:
+            warnings.append(
+                f"edges stale: {len(orphan_edges)} pattern key(s) in edges no longer "
+                "have SQL in code — run --stage compute_commander_value_synergy"
+            )
+
+        # 3. Role-tag families: consumer/producer SQL built on _family_sql()
+        #    silently matches zero cards when tag_mechanics has never written
+        #    the family's keys (how trigger_doubling shipped with SQL but no
+        #    edges — the attack_trigger family was empty).
+        empty_families = []
+        for family, fam_keys in FAMILY_PATTERNS.items():
+            cur.execute(
+                "SELECT 1 FROM card_abilities WHERE trigger_event = ANY(%s) LIMIT 1",
+                (list(fam_keys),),
+            )
+            if cur.fetchone() is None:
+                empty_families.append(family)
+        if empty_families:
+            warnings.append(
+                f"role-tag families with zero card_abilities rows "
+                f"({', '.join(sorted(empty_families))}) — "
+                "run --stage tag_mechanics --rescan, then rebuild decompose + edges"
+            )
+    return warnings
+
+
 def color_identity_map(conn, card_ids: list[str]) -> dict[str, set[str]]:
     with conn.cursor() as cur:
         cur.execute(
@@ -134,6 +241,7 @@ def main() -> None:
 
     conn = psycopg2.connect(DATABASE_URL)
     try:
+        stale = staleness_check(conn)
         human_stats, n_human = human_distributions(conn)
 
         report: list[dict] = []
@@ -170,12 +278,17 @@ def main() -> None:
     if args.as_json:
         print(json.dumps({
             "ranking": args.ranking,
+            "staleness": stale,
             "human_decks": n_human,
             "human_stats": human_stats,
             "results": report,
             "hard_failures": n_failures,
         }, indent=2, default=str))
     else:
+        if stale:
+            print("\nStaleness (DB-materialized decompose data vs pattern code):")
+            for w in stale:
+                print(f"  ⚠ {w}")
         print(f"\nHuman quota distributions ({n_human} decks ≥{MIN_HUMAN_DECK_SIZE} cards):")
         for metric, s in human_stats.items():
             print(f"  {metric:<13} min {s['min']:>3}  median {s['median']:>5.1f}  "

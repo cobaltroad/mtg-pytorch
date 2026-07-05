@@ -572,11 +572,12 @@ _UPSERT = """
 
 
 def write_commander_abilities() -> None:
-    """Upsert card_abilities rows for all legal commanders (source='decompose').
+    """Rebuild card_abilities rows for all legal commanders (source='decompose').
 
     Runs _detect() on each commander's oracle text and writes one row per
-    matched pattern.  Safe to re-run — uses DO UPDATE so stale rows are
-    refreshed.
+    matched pattern.  Existing source='decompose' rows are DELETED first so
+    keys removed from ORACLE_PATTERNS don't linger (they previously
+    persisted forever and defeated staleness detection — issue #137).
 
     ability_type heuristic (mirrors tag.py):
         'triggered'  if 'trigger' in label.lower()
@@ -591,6 +592,10 @@ def write_commander_abilities() -> None:
 
     conn = psycopg2.connect(DATABASE_URL)
     try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM card_abilities WHERE source = 'decompose'")
+            log.info("Deleted %d stale source='decompose' rows", cur.rowcount)
+
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(_ALL_COMMANDERS_QUERY)
             all_commanders = cur.fetchall()
