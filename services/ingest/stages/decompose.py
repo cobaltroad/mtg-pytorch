@@ -208,6 +208,25 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
             r"|discard a card with mana value x"
         ),
     ),
+    # Activated tutor engines — a repeatable activated ability ({cost}: …)
+    # that searches the library.  Yisan, Prime Speaker Vannifar, Captain
+    # Sisay, Zirilan: canonical remove-on-sight engine commanders (see
+    # profile.py ACTIVATED_ENGINE_KEYS).  The creature-target variant also
+    # gets consumer SQL (the deck supplies the creature toolbox); other
+    # targets are signal-only until their consumers are added (#136).
+    (
+        "activated_tutor_creature",
+        "Activated creature-tutor engine",
+        p(
+            r"\{[^}]+\}[^:.]{0,80}:[^.]{0,20}search your library for "
+            r"(?:a |an |up to \S+ )?[^.]{0,30}creature card"
+        ),
+    ),
+    (
+        "activated_tutor",
+        "Activated tutor engine",
+        p(r"\{[^}]+\}[^:.]{0,80}:[^.]{0,20}search your library"),
+    ),
     # Madness payoff
     ("madness_payoff", "Madness payoff", p(r"\bmadness\b|for its madness cost")),
     # Discard outlet

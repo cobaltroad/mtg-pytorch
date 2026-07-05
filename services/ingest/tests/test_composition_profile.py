@@ -157,6 +157,17 @@ def test_single_signal_commander_gets_moderate_protection():
     assert p.protection.count == 3
 
 
+def test_activated_engine_gets_engine_protection():
+    # Yisan: activated tutor keys force engine-tier protection even though
+    # only two signals fire (the deck routes through the activation loop).
+    p = derive_profile(
+        "Yisan, the Wanderer Bard", 3, {"G": 1}, ["G"],
+        {"activated_tutor", "activated_tutor_creature"},
+    )
+    assert p.protection.count == 5
+    assert "activated engine" in p.protection.because
+
+
 def test_double_pip_demands_more_sources():
     p = derive_profile(**VANILLA_2DROP)  # {G}{G} at turn 2
     (req,) = p.pip_requirements

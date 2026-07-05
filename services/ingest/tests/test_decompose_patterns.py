@@ -123,3 +123,44 @@ def test_zhulodok_still_fires_high_mv_payoff():
 
 def test_plain_discard_does_not_fire_high_mv():
     assert "high_mv_payoff" not in keys("Discard a card: Draw a card.")
+
+
+# ── activated tutor engines (issue #135) ─────────────────────────────────────
+
+YISAN = (
+    "{2}{G}, {T}, Put a verse counter on Yisan: Search your library for a "
+    "creature card with mana value equal to the number of verse counters on "
+    "Yisan, put it onto the battlefield, then shuffle."
+)
+CAPTAIN_SISAY = (
+    "{T}: Search your library for a legendary card, reveal it, put it into "
+    "your hand, then shuffle."
+)
+
+
+def test_yisan_fires_creature_tutor_engine():
+    ks = keys(YISAN)
+    assert "activated_tutor_creature" in ks
+    assert "activated_tutor" in ks
+
+
+def test_sisay_fires_generic_tutor_engine_only():
+    ks = keys(CAPTAIN_SISAY)
+    assert "activated_tutor" in ks
+    assert "activated_tutor_creature" not in ks
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{T}: Add {G}.",
+        # triggered (ETB) search is not an activation loop
+        "When this creature enters, search your library for a basic land card.",
+        # activation exists but effect in a later sentence isn't a search
+        "{T}: Draw a card. Then each player searches their library for a card.",
+    ],
+    ids=["mana-ability", "etb-search", "activation-then-symmetric-search"],
+)
+def test_non_engine_abilities_do_not_fire(text):
+    assert "activated_tutor" not in keys(text)
+    assert "activated_tutor_creature" not in keys(text)

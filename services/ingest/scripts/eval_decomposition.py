@@ -99,15 +99,18 @@ def list_no_signals(limit: int) -> None:
                 f" WHERE {commanders.WHERE}"
                 " ORDER BY name"
             )
-            commanders = cur.fetchall()
+            # NB: do not name this local "commanders" — it would shadow the
+            # mtg_sql.commanders module used in the query above and raise
+            # UnboundLocalError before the query even runs.
+            rows = cur.fetchall()
     finally:
         conn.close()
 
     gaps = [
-        cmd for cmd in commanders if not _detect(cmd["oracle_text"], cmd["type_line"])
+        cmd for cmd in rows if not _detect(cmd["oracle_text"], cmd["type_line"])
     ]
 
-    total = len(commanders)
+    total = len(rows)
     print(f"Commanders with zero signals: {len(gaps)} / {total}")
     shown = gaps[:limit] if limit else gaps
     for cmd in shown:

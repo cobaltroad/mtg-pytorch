@@ -29,6 +29,11 @@ DECK_SIZE = 99  # non-commander cards
 #: The commander is the win condition and will be removed on sight.
 VOLTRON_KEYS = frozenset({"equipment_matters", "cast_trigger_aura_equipment"})
 
+#: Repeatable activated engines (Yisan, Vannifar, Captain Sisay): the whole
+#: deck routes through one activation loop, so removal answers the deck.
+#: Engine-tier protection regardless of how many other signals fire.
+ACTIVATED_ENGINE_KEYS = frozenset({"activated_tutor", "activated_tutor_creature"})
+
 #: The deck goes wide; opposing sweepers hurt more than our own help.
 GO_WIDE_KEYS = frozenset({
     "token_generator",
@@ -237,6 +242,10 @@ def derive_profile(
     # shrug off removal.
     if is_voltron:
         protection = Quota(6, "voltron signals: the commander is the win condition")
+    elif keys & ACTIVATED_ENGINE_KEYS:
+        protection = Quota(
+            5, "repeatable activated engine: the deck routes through its activation loop"
+        )
     elif n_signals >= 3:
         protection = Quota(
             5, f"engine commander: {n_signals} distinct signals route through it"
