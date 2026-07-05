@@ -8,16 +8,30 @@ training signal, not output target.
 
 ## Approach overview
 
-Deck building is decomposed into three learnable stages, each building on the
-previous:
+**The architecture is composition-first** (since PR #132; full design in
+[`docs/composition-first-plan.md`](docs/composition-first-plan.md)).  A human
+builds a deck top-down — legality constraints, then functional quotas, then
+best-in-slot card selection — and so does this system.  Deterministic
+composition is the skeleton; learned models only rank cards *within* slots:
 
-1. **Card representation** — embed every card into a dense vector space where
-   semantically similar cards are geometrically close.
-2. **Synergy and co-occurrence learning** — fine-tune those representations so
-   cards that belong together in a deck are close to each other and to the
-   commander they serve.
-3. **Generative deck construction** — a transformer decoder that, given a
-   commander and a partial deck, predicts which card to add next.
+1. **Legality & card facts** — color identity, singleton, structured pip
+   parsing, land classification (`card_facts` table; never learned).
+2. **Composition profile** — every quota (lands, ramp + max-MV ceiling, draw,
+   removal, sweepers, protection, theme) *derived* from the commander's mana
+   value, pips, and decompose signals, each carrying a "because" rationale
+   (`shared/composition/profile.py`).
+3. **Slot filling** — staple SQL pools + the commander's theme pool, ranked
+   by the Phase 1/2 learned models; the model picks *which* 10 ramp pieces,
+   never *how many*.
+4. **Mana base & castability** — Karsten-style per-color source minimums and
+   a Monte Carlo goldfisher gate every build
+   (`shared/composition/{karsten,goldfish,builder}.py`).
+
+The learned components (below) exist to serve step 3: embed every card into
+a space where the bilinear relation head can score commander–card fit.
+Current work is tracked in the
+[composition backlog epic](https://github.com/cobaltroad/mtg-pytorch/issues/156)
+(`docs/composition-next-steps.md`).
 
 ---
 
@@ -112,7 +126,11 @@ positives with `TABLESAMPLE SYSTEM(10)` rather than a full table scan.
 Final loss benchmark: >0.65 = barely learning, 0.55–0.60 = good,
 0.45–0.50 = excellent.
 
-### Phase 3 — Commander synergy ranking
+### Phase 3 — Commander synergy ranking (retired)
+
+> **Status: retired by the composition-first architecture** (#151).  Within-slot
+> ranking uses the Phase 2 bilinear head; per-commander quota logic is
+> deterministic.  Documentation kept for checkpoint archaeology.
 
 **Loss:** Bayesian Personalised Ranking (BPR).
 **Data:** `mtg_commanders.pt` — synthetic per-commander positive sets derived
@@ -144,7 +162,12 @@ regime means the model faithfully reproduces the artifact's judgements; the
 true generalization test is recall on held-out commanders and `eval_deck.ps1`
 output on commanders with sparse decompose coverage.
 
-### Phase 4 — Generative deck construction
+### Phase 4 — Generative deck construction (retired)
+
+> **Status: retired by the composition-first architecture** (#151).  Deck-level
+> coherence (quotas, curve, diminishing returns, mana base) is now computed
+> analytically rather than learned from ~94 decklists — see
+> `docs/composition-first-plan.md` for the rationale.
 
 **Loss:** InfoNCE with 64 random negatives per position, temperature=0.1.
 **Architecture:** the DeckConstructor decoder with the Phase 3 CardEncoder
@@ -172,9 +195,9 @@ composition**.  Given a partial deck, the decoder learns:
 
 The practical consequence is that the same card may score differently at
 position 10 versus position 60, depending on what the deck already contains.
-This is the generative capability the heuristic scoring pipeline in
-`services/api/ops/deck/generate.py` approximates with its iterative
-re-scoring loop.
+The composition builder now provides this conditionality analytically —
+curve-target capacity and per-sub-theme diminishing-returns counters
+(`shared/composition/builder.py`) — which is why this phase was retired.
 
 Keeping the encoder's learning rate low (1% of decoder lr) is important:
 aggressive encoder updates can destroy Phase 3 synergy geometry, causing
@@ -234,116 +257,80 @@ dramatically improving coverage of the commander space.
 
 ---
 
-## 3. Deck building at inference
+## 3. Deck building at inference — the composition engine
 
-Deck generation is a pipeline of model scoring followed by deterministic
-structural enforcement.  The entry point is `services/api/ops/deck/generate.py`.
+The build path is `POST /commanders/{oracle_id}/build?ranking=model|heuristic`
+(`services/api/ops/composition.py`), backed by the pure engine in
+`shared/composition/`.  One build runs:
 
-### Scoring
+1. **Profile derivation** — decompose signals are read from `card_abilities`
+   (`source='decompose'`) and combined with the commander's MV and pips to
+   derive every quota, each with a "because" string that flows to the UI
+   ("10 ramp at ≤2 MV because the commander costs 4 and goes live turn 3").
+   Protection scales with commander-centricity: voltron 6 > activated
+   engine / multi-signal 5 > single-signal 3 > vanilla 2.
 
-For each candidate card in the card pool (filtered to the commander's color
-identity), the pipeline computes a composite score:
+2. **Pool assembly** — staple SQL pools (`shared/mtg_sql/staples/`: ramp,
+   draw engines/spells, removal + interaction, sweepers, protection) plus a
+   per-commander **theme pool** from materialized `decomposed_candidates`
+   synergy edges, whose `pattern_keys` metadata drives diminishing-returns
+   counters (the 8th sac outlet loses its slot to the 1st token payoff).
 
-```
-final_score = (1 - α) × model_score + α × synergy_score
-```
+3. **In-slot ranking** — with `ranking=model`, the Phase 1 encoder + Phase 2
+   bilinear head (`decomposed_candidates` relation) reorder every pool
+   except **ramp**, which stays heuristic: mana development is castability
+   physics (mana output per card) the synergy model can't see.
 
-- **model_score** — cosine similarity between the candidate's encoder output
-  and the commander's encoder output, boosted by role-specific multipliers
-  (tribal match, evasion, removal, value engine, commander-value text patterns).
-- **synergy_score** — mean pairwise synergy edge score between the candidate
-  and the cards already selected in the current iteration.
-- **α (synergy_alpha)** — blend weight, default 0.4 (40% synergy, 60% model).
-  Adjustable per request.
+4. **Mana base + castability gate** — nonbasics by quality score, basics
+   allocated to Karsten per-color source minimums before pip-census
+   proportionality, then a Monte Carlo goldfisher simulates hands and land
+   drops.  A feedback loop converts theme slots into lands until
+   P(commander cast on time) clears an MV- and pip-scaled floor.  The gate
+   catches broken mana bases; it never promises a turn-N commander.
 
-### Role-based multipliers (heuristic layer)
+Decks persist to the Generated Decks history with the full composition block
+(profile, breakdown, goldfish metrics, warnings) rendered by the UI.
 
-Several scoring modules apply score multipliers based on rule detection:
+### Regression harness
 
-| Module | What it boosts |
-|--------|---------------|
-| `ramp.py` | Mana producers (rocks, dorks, land-ramp) by land quality tier; Sol Ring / Arcane Signet are guaranteed includes |
-| `evasion.py` | Flying, trample, menace, unblockable enablers when the commander wants to attack |
-| `removal.py` | Hard removal (exile/destroy) and board wipes |
-| `value_engine.py` | Card draw and card advantage engines |
-| Tribal boost | 1.5× for creatures that share a creature type with the commander's tribal identity |
-| Commander-value | 1.4× for cards whose text references controlling a commander |
+`docker compose run --rm ingest python -m scripts.eval_harness` builds a
+golden 20-commander set and enforces hard invariants — 99 cards, singleton,
+color identity (verified against source data), quota audit (only
+builder-warned deviations tolerated), castability gate — plus a soft
+comparison of quota censuses against imported human deck distributions.
+Exit code 0/1; run before merging composition changes.
 
-### Structural enforcement
-
-After scoring, the deck is assembled deterministically to hit structural targets:
-
-| Slot | Target |
-|------|--------|
-| Ramp | 10 spells (Sol Ring + Arcane Signet guaranteed) |
-| Lands | 36 total; up to 20 nonbasics (Command Tower + Exotic Orchard guaranteed); basics fill to 36 |
-| Non-land spells | 63, distributed across a mana curve: 8 × 1-drop, 16 × 2, 14 × 3, 12 × 4, 7 × 5, 6 × 6+ |
-
-Ramp is selected first (highest-scoring mana producers), then the remaining
-spell slots are filled iteratively — each step re-scores candidates against
-the partial deck to maximise synergy density.  Lands are scored separately
-by mana quality (land embedding quality tier × color match).
-
-### Iterative selection and synergy density
-
-Rather than selecting all cards in one pass, the spell selection loop adds
-one card per step and recomputes synergy scores after each addition.  This
-means early high-synergy picks make later synergistic cards score higher —
-the deck self-reinforces its own theme as it builds.
-
-The final deck JSON reports `synergy_density` (mean pairwise synergy score
-across all card pairs) and `synergy_baseline` (what a random same-color deck
-would score), so the UI can show how much denser the generated deck is than a
-random baseline.
-
-### Commander analysis
-
-Before generation (or as a standalone call), `GET /commanders/{oracle_id}/analyze`
-runs a pure-heuristic parser over the commander's oracle text to extract
-structured signals: tribal identity, combat themes, counter/token strategies,
-MTG rules-term mechanics (e.g. "mana ability" → elfball engine), and anything
-the parser couldn't interpret (gaps).  The analysis produces `boost_overrides`
-— a list of scoring multiplier keys — that are passed directly to generation.
+**When decompose patterns change** (`stages/decompose.py` ORACLE_PATTERNS or
+`synergy/commander_mechanics.py` consumer SQL), re-run
+`--stage decompose_commanders` and `--stage compute_commander_value_synergy`
+so the API's materialized signals/edges match the code (staleness check
+tracked in #137).
 
 ---
 
 ## Known gaps
 
-### Commander decomposition misses activated-ability engines
+The full backlog lives in the
+[composition-first epic (#156)](https://github.com/cobaltroad/mtg-pytorch/issues/156);
+`docs/composition-next-steps.md` carries scope and verification methods for
+every item.  Highlights of what is still open:
 
-`stages/decompose.py` ORACLE_PATTERNS are trigger/static-oriented; there is
-no pattern for activated-ability engines ("{X}, {T}, Put a verse counter on
-~: search your library for a creature card…").  Commanders like **Yisan, the
-Wanderer Bard** fire **zero** decompose signals, so everything downstream
-treats them as incidental-value commanders — including the composition
-profile (`shared/composition/profile.py`), which assigns them minimal
-protection when they are in fact canonical remove-on-sight engines.
-
-Fix belongs in ORACLE_PATTERNS (e.g. an `activated_engine` key for repeatable
-activated abilities with a search/token/counter payoff), which improves both
-the commander artifact and the derived quotas.  Use
-`python -m scripts.eval_decomposition --no-signals` for the full gap list.
-
-### Decompose keys without consumer SQL leave theme pools empty
-
-Even when a commander's decompose patterns fire, the composition builder can
-only fill theme slots for keys that have an entry in
-`PATTERN_KEY_TO_CONSUMER_SQL` (`synergy/commander_mechanics.py`).  Keys
-without consumer SQL — currently the graveyard family (Muldrotha, Karador),
-`high_mv_payoff` (Kozilek), and per-color cast triggers (Niv-Mizzet) — yield
-an empty theme pool, so those decks are built entirely from staple-pool
-backfill ("goodstuff") with zero theme synergy density.  The builds are
-legal and castable, just themeless.  The recent `token_generator` /
-`proliferate_matters` / `trigger_doubling` commits are this same gap being
-closed key by key; W4's A/B eval (`scripts/build_deck.py`) makes the
-remaining holes measurable via `commander_edge_rate = 0`.
-
-### ~950 newest cards have no embeddings
-
-`card_embeddings` lags the card table until `--stage embed_cards` is re-run
-after a download.  Model-ranked builds handle this gracefully (unscored
-cards keep heuristic order at the pool tail), but new-set cards are
-effectively invisible to the Phase 1/2 scorers until re-embedding.
+- **~737 commanders fire zero decompose signals**
+  (`python -m scripts.eval_decomposition --no-signals`) and some fired keys
+  still lack consumer SQL — the systematic burn-down is #136.  Resolved
+  exemplars: graveyard family / Muldrotha + Karador (#133), high-MV +
+  a-player-casts / Kozilek + Niv-Mizzet (#134), activated tutor engines /
+  Yisan (#135) — all verified by `commander_edge_rate` 0 → 1.00.
+- **Materialized decompose data can drift from pattern code** — after any
+  ORACLE_PATTERNS / consumer-SQL change, `decompose_commanders` and
+  `compute_commander_value_synergy` must re-run; a staleness check is #137.
+- **~950 newest cards have no embeddings** until `--stage embed_cards`
+  re-runs (#139); model-ranked builds degrade gracefully (unscored cards
+  tail-rank in heuristic order).
+- **Goldfish fidelity**: commander cost reduction is a documented gate
+  relaxation rather than simulated (#142); MDFC lands are classified but
+  unused by the mana base (#143 territory alongside fetch-aware source
+  counting #144).
 
 ---
 

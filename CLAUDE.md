@@ -2,10 +2,20 @@
 
 ## What this project is
 
-A PyTorch system that trains a model to understand Magic: The Gathering card
-interactions and ultimately build 99-card Commander decks given a single
-commander card.  The goal is *model-discovered* decklists, not reproductions
-of human lists — human decks are training signal, not output target.
+A PyTorch system that builds 99-card Commander decks given a single commander
+card.  The goal is *model-discovered* decklists, not reproductions of human
+lists — human decks are training signal, not output target.
+
+**The architecture is composition-first** (since PR #132): deterministic
+quotas derived from the commander (lands / ramp / draw / interaction /
+protection / theme, each with a "because" rationale) form the skeleton;
+learned models (Phase 1 encoder + Phase 2 bilinear head) only rank candidates
+*within* each quota.  Phases 3/4 are retired (#151).
+
+Session bootstrap — read these for current context:
+- `docs/composition-first-plan.md` — the architecture (W1–W6, all complete)
+- `docs/composition-next-steps.md` — active backlog; tracked in GitHub epic #156
+- `scripts/eval_harness.py` — the regression gate for any composition change
 
 ## Repository layout
 
@@ -32,15 +42,29 @@ mtg-pytorch/
 │   │   │   └── export.py       #   Thin wrappers for all export sub-stages
 │   │   └── scripts/            # User-facing scripts (export, import, eval)
 │   │       ├── export_dataset.py           #   Build mtg_dataset.pt (Phases 1–2)
-│   │       ├── export_dataset_commanders.py #   Build mtg_commanders.pt (Phases 3–4)
+│   │       ├── export_dataset_commanders.py #   Build mtg_commanders.pt (legacy, Phases 3–4)
 │   │       ├── export_db_helpers.py        #   Shared DB loading utilities
-│   │       ├── eval_decomposition.py       #   Spot-check decompose output (DB required)
+│   │       ├── eval_decomposition.py       #   Spot-check decompose output; --no-signals gap list
+│   │       ├── eval_profile.py             #   Derived quota profile for a commander
+│   │       ├── build_deck.py               #   Composition build (heuristic or --ranking=model)
+│   │       ├── eval_harness.py             #   W6 regression gate (golden 20 commanders, exit 0/1)
 │   │       ├── import_moxfield.py          #   Batch Moxfield .txt deck imports
 │   │       ├── import_decklists.py         #   cardtrak JSON export imports
 │   │       └── import_spellbook.py         #   Commander Spellbook combo imports
 │   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
 │   └── ui/                     # Streamlit interface
-├── models/                     # Model architecture files (shared into jupyter)
+├── shared/                     # Mounted at /shared (PYTHONPATH) in api + ingest
+│   ├── composition/            # Composition engine — pure Python, no DB/torch deps
+│   │   ├── card_facts.py       #   Layer-1 parsing: pips, land classes, MDFC
+│   │   ├── profile.py          #   Quota derivation per commander (+ "because" strings)
+│   │   ├── karsten.py          #   Hypergeometric castability math
+│   │   ├── goldfish.py         #   Monte Carlo castability simulator
+│   │   ├── builder.py          #   Quota fill + mana base + feedback loop
+│   │   ├── ranking.py          #   Phase 1/2 checkpoint loader, in-slot ranking (lazy torch)
+│   │   ├── evaluation.py       #   Hard invariants + human-range checks (harness core)
+│   │   └── pool_helpers.py     #   DB-row → card dict, staple pool SQL map
+│   └── mtg_sql/                # Staple SQL fragments (ramp, removal, protection, …)
+├── models/                     # (empty — model classes live in trainer/api/ranking; #152)
 ├── notebooks/                  # Jupyter notebooks (mounted into jupyter service)
 └── mage/                       # XMage reference: Java rules engine (read-only)
 ```
@@ -105,9 +129,15 @@ docker compose run --rm ingest python pipeline.py --stage compute_textmatch_syne
 docker compose run --rm ingest python pipeline.py --stage compute_xmage_synergy
 docker compose run --rm ingest python pipeline.py --stage export_dataset
 
-# Commander artifact pipeline (required before export_dataset_commanders):
-# These stages are NOT part of process — run them explicitly after process
-# before building mtg_commanders.pt.
+# Commander decompose pipeline — ALSO REQUIRED by the composition build path:
+# the API reads card_abilities (source='decompose') for quota derivation and
+# decomposed_candidates synergy_edges for theme pools.  After ANY change to
+# ORACLE_PATTERNS (stages/decompose.py) or consumer SQL
+# (synergy/commander_mechanics.py), re-run BOTH stages below or the API
+# serves stale signals (staleness check tracked in #137):
+#   docker compose run --rm ingest python pipeline.py --stage decompose_commanders
+#   docker compose run --rm ingest python pipeline.py --stage compute_commander_value_synergy  # ~30 min
+# These stages are NOT part of process — run them explicitly.
 
 # Step 0: write decompose signals to card_abilities (source='decompose')
 #   prerequisite for export_dataset_commanders; also fixes the UI decompose panel.
@@ -154,6 +184,7 @@ open https://$UI_HOST
 ```mermaid
 flowchart TD
     DL["download\n(MTGJSON + combos)"]
+    CF["compute_card_facts\n→ card_facts (pips, land classes)"]
     EC["embed_cards\n(sentence-transformers 768-dim)"]
     TM["tag_mechanics\n(coarse + fine + oracle-pattern)"]
     XM["tag_abilities_xmage\n(XMage Java source)"]
@@ -163,8 +194,10 @@ flowchart TD
     ED["export_dataset\n→ mtg_dataset.pt"]
     DC["decompose_commanders\n→ card_abilities source='decompose'"]
     CVS["compute_commander_value_synergy\n→ decomposed_candidates edges"]
-    EDC["export_dataset_commanders\n→ mtg_commanders.pt"]
+    EDC["export_dataset_commanders\n→ mtg_commanders.pt (legacy)"]
+    BUILD[("Composition build\nAPI /build + scripts/build_deck\nreads card_facts + decompose\n+ decomposed_candidates")]
 
+    DL --> CF
     DL --> EC
     EC --> TM
     TM --> XM
@@ -179,9 +212,12 @@ flowchart TD
     DC --> CVS
     TTS -.->|"tribal edges"| EDC
     CVS --> EDC
+    CF --> BUILD
+    DC --> BUILD
+    CVS --> BUILD
 ```
 
-`download` + `embed_cards` + `tag_mechanics` + synergy stages + `export_dataset` are all run by `--stage process`.  The commander artifact stages (`decompose_commanders`, `compute_commander_value_synergy`, `export_dataset_commanders`) must be run explicitly after `process`.
+`download` + `compute_card_facts` + `embed_cards` + `tag_mechanics` + synergy stages + `export_dataset` are all run by `--stage process`.  The commander decompose stages (`decompose_commanders`, `compute_commander_value_synergy`) must be run explicitly after `process` — **and re-run after any decompose pattern / consumer SQL change**, since the composition build path reads their DB output.  `export_dataset_commanders` is legacy (retired Phases 3–4).
 
 ### Embedding model
 
@@ -234,40 +270,32 @@ These two must always agree or deck generation will silently fail:
 .\scripts\download_dataset.ps1
 ```
 
-4. Train all phases:
+4. Train the live phases (3/4 are retired — #151):
 
 ```powershell
 .\scripts\run.ps1 -Mode train -Phase 1 -Dataset .\ingest_cache\mtg_dataset.pt
 .\scripts\run.ps1 -Mode train -Phase 2 -Dataset .\ingest_cache\mtg_dataset.pt   # bilinear (default)
-.\scripts\run.ps1 -Mode train -Phase 3 -Dataset .\ingest_cache\mtg_commanders.pt
-.\scripts\run.ps1 -Mode train -Phase 4 -Dataset .\ingest_cache\mtg_commanders.pt
 ```
 
 Phase 2 trains `BilinearSynergyHead` (saves `phase2_bilinear_best.pt`) with the
-encoder frozen at `phase1_best.pt`.  `phase2_best.pt` is **not** written by the
-bilinear path — Phase 3 still loads the encoder from `phase1_best.pt`.  Upload
-both checkpoints to the API after training:
+encoder frozen at `phase1_best.pt`.  The composition build path loads the
+encoder from `phase2_best.pt`, falling back to `phase1_best.pt`
+(`shared/composition/ranking.py`).  Upload both checkpoints after training:
 
 5. Upload checkpoints to the Docker host via the UI, or:
 
 ```bash
-# Phase 1 encoder (required by Phase 3 and as fallback encoder)
+# Phase 1 encoder (fallback encoder for composition ranking)
 curl -X POST https://$API_HOST/admin/checkpoint \
   -H "x-admin-token: $ADMIN_TOKEN" \
   -F "file=@phase1_best.pt" \
   -F "name=phase1_best"
 
-# Phase 2 bilinear head (enables relation-aware inference scoring)
+# Phase 2 bilinear head (in-slot ranking for the composition builder)
 curl -X POST https://$API_HOST/admin/checkpoint \
   -H "x-admin-token: $ADMIN_TOKEN" \
   -F "file=@phase2_bilinear_best.pt" \
   -F "name=phase2_bilinear_best"
-
-# Phase 3/4 CommanderScorer (primary deck-building scorer)
-curl -X POST https://$API_HOST/admin/checkpoint \
-  -H "x-admin-token: $ADMIN_TOKEN" \
-  -F "file=@phase4_best.pt" \
-  -F "name=phase4_best"
 ```
 
 The API hot-swaps the model immediately (no restart needed).
@@ -276,6 +304,11 @@ Checkpoint files live in the `model_checkpoints` Docker volume, mounted at
 `/app/checkpoints` in the API and `/checkpoints` in Jupyter (read-only).
 
 ## Training progression
+
+**Status:** Phases 1–2 are the live learned components (within-slot ranking
+for the composition builder).  Phases 3–4 are **retired** (#151) — deck-level
+structure is computed by the composition engine, not learned.  Their
+documentation remains for checkpoint archaeology.
 
 The model is trained in four phases, each building on the last:
 
@@ -310,23 +343,20 @@ The model is trained in four phases, each building on the last:
 ```mermaid
 flowchart LR
     DS[("mtg_dataset.pt")]
-    DC[("mtg_commanders.pt")]
+    DC[("mtg_commanders.pt\n(legacy)")]
 
     P1["Phase 1\nCardEncoder\nNT-Xent\ncontrastive loss"]
     P2["Phase 2\nBilinearSynergyHead\nasymmetric InfoNCE\nper relation\n(encoder frozen)"]
-    P3["Phase 3\nCommanderScorer MLP\nBPR ranking\n(encoder frozen)"]
-    P4["Phase 4\nTransformer Decoder\nautoregressive\ndeck construction"]
+    P3["Phase 3 (retired)\nCommanderScorer MLP\nBPR ranking"]
+    P4["Phase 4 (retired)\nTransformer Decoder\nautoregressive"]
 
     DS --> P1
     DS --> P2
-    DC --> P3
-    DC --> P4
+    DC -.-> P3
+    DC -.-> P4
 
     P1 -->|"phase1_best.pt\nencoder weights"| P2
-    P1 -->|"phase1_best.pt\nencoder weights"| P3
-    P2 -->|"phase2_bilinear_best.pt"| INF
-    P3 -->|"phase3_best.pt"| P4
-    P4 -->|"phase4_best.pt"| INF[("API\nInference\n30% bilinear\n70% scorer")]
+    P2 -->|"phase2_bilinear_best.pt"| INF[("Composition build\nquotas deterministic;\nPhase 1/2 rank within slots\n(ramp stays heuristic)")]
 ```
 
 ## Key data sources
@@ -386,8 +416,8 @@ The Streamlit UI (`services/ui/app.py`) has two tabs:
 
 | Tab | Purpose |
 |-----|---------|
-| **Deck Builder** | Search for a commander, score candidates with CommanderScorer. |
-| **Generated Decks** | Browse and inspect all previously generated decks.  Auto-selects the most recently generated deck when navigating from the builder. |
+| **Deck Builder** | Search for a commander; **Composition build** section (POST `/commanders/{oracle_id}/build`, model or heuristic ranking) renders the quota table with "because" strings, goldfish metrics, theme density, and slot breakdown.  Legacy CommanderScorer candidate table below it (#151). |
+| **Generated Decks** | Browse and inspect all previously generated decks (composition decks include the full composition block).  Auto-selects the most recently generated deck when navigating from the builder. |
 
 The `app.py` is **baked into the Docker image** — changes require a rebuild:
 
