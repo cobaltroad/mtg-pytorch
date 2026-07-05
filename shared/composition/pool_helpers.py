@@ -33,7 +33,9 @@ POOL_SQL: dict[str, str] = {
     "ramp": _RAMP_SQL,
     "draw_engine": draw_engine.SQL,
     "draw_spell": draw_spell.SQL,
-    "spot_removal": f"(({removal.SQL}) OR ({interaction.SQL}))",
+    # Counterspells only from interaction — its protection clauses belong
+    # to the dedicated protection pool (#140).
+    "spot_removal": f"(({removal.SQL}) OR ({interaction.COUNTERSPELLS}))",
     "sweeper": sweeper.SQL,
     "protection": protection.SQL,
 }
@@ -41,10 +43,13 @@ POOL_SQL: dict[str, str] = {
 #: Canonical column list — c = cards, f = card_facts.
 CARD_COLUMNS = (
     "c.id::text AS id, c.name, c.cmc, c.mana_cost, c.color_identity,"
-    " c.produced_mana, c.type_line, c.oracle_text,"
+    " c.produced_mana, c.type_line, c.oracle_text, c.edhrec_rank,"
     " f.pips, f.hybrid_pips, f.is_land, f.is_basic, f.etb_tapped, f.is_fetch,"
     " f.is_mdfc_land"
 )
+
+#: Sort sentinel for cards MTGJSON has no EDHREC rank for (new/unplayed).
+UNRANKED = 10**9
 
 #: Land-pool WHERE fragment: real nonbasics plus spell-front modal DFCs with
 #: a land face (Malakir Rebirth) — playable as land drops (#143).
@@ -98,6 +103,7 @@ def row_to_card(row, roles: set[str]) -> dict:
         "etb_tapped": row["etb_tapped"],
         "is_fetch": row["is_fetch"],
         "is_mdfc_land": row["is_mdfc_land"],
+        "edhrec_rank": row["edhrec_rank"] if row["edhrec_rank"] is not None else UNRANKED,
         "roles": set(roles),
     }
 
@@ -105,11 +111,15 @@ def row_to_card(row, roles: set[str]) -> dict:
 def sort_pool(cards: list[dict], role: str) -> list[dict]:
     """Heuristic in-pool ranking (the baseline the model must beat).
 
-    Ramp prefers raw mana output (Thran Dynamo over trinkets), then the
-    2-MV signet tier; everything else cheap-first; name breaks ties.
+    Popularity prior (#140): EDHREC rank orders every pool — pool
+    membership already constrains *function*, so popularity within the
+    pool is "best-in-slot by table consensus".  Ramp keeps raw mana
+    output as its primary key (castability physics — Thran Dynamo must
+    outrank trinkets for big-mana commanders regardless of popularity).
+    Unranked cards (UNRANKED sentinel) tail out; name breaks final ties.
     """
     if role == "ramp":
-        cards.sort(key=lambda c: (-min(c["mana_output"], 3), abs(c["mv"] - 2), c["name"]))
+        cards.sort(key=lambda c: (-min(c["mana_output"], 3), c["edhrec_rank"], c["name"]))
     else:
-        cards.sort(key=lambda c: (c["mv"], c["name"]))
+        cards.sort(key=lambda c: (c["edhrec_rank"], c["mv"], c["name"]))
     return cards

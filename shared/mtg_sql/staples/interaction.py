@@ -28,6 +28,15 @@ from __future__ import annotations
 
 RATE: float = 0.06
 
+#: Counterspells only — the composition builder's spot-removal pool uses
+#: this instead of the full SQL union, because the hexproof/indestructible/
+#: shroud clauses below duplicate the dedicated protection pool
+#: (protection.py) and were eating removal slots once popularity ranking
+#: surfaced Swiftfoot Boots / Lightning Greaves to the top (#140).
+COUNTERSPELLS: str = (
+    "(oracle_text ILIKE '%%counter target%%' AND type_line NOT ILIKE '%%Land%%')"
+)
+
 SQL: str = (
     "("
     # counterspells (hard and conditional)

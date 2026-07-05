@@ -68,7 +68,7 @@ def _theme_pool(conn, keys: set[str], identity: frozenset[str], commander_id: st
             entry = hits.setdefault(card["id"], card)
             entry.setdefault("theme_keys", set()).add(key)
     pool = list(hits.values())
-    pool.sort(key=lambda c: (-len(c["theme_keys"]), c["mv"], c["name"]))
+    pool.sort(key=lambda c: (-len(c["theme_keys"]), c["edhrec_rank"], c["name"]))
     return pool
 
 

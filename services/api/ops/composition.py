@@ -87,7 +87,7 @@ async def _theme_pool(db: AsyncSession, commander_id: str, identity: frozenset) 
         entry = hits.setdefault(row["id"], row_to_card(row, {"theme"}))
         entry.setdefault("theme_keys", set()).update(keys)
     pool = list(hits.values())
-    pool.sort(key=lambda c: (-len(c.get("theme_keys", ())), c["mv"], c["name"]))
+    pool.sort(key=lambda c: (-len(c.get("theme_keys", ())), c["edhrec_rank"], c["name"]))
     return pool
 
 

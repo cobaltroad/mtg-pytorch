@@ -67,7 +67,12 @@ def castability_floor(mv: int, colored_pips: int = 1) -> float:
         base = 0.70
     else:
         base = max(0.35, 0.60 - 0.05 * (mv - 6))  # a 10-drop is never T10-reliable
-    return max(0.35, base - 0.05 * max(0, colored_pips - 1))
+    if colored_pips >= 5:
+        # Pip-dense tail (Niv-Mizzet, Parun: {U}{U}{U}{R}{R}{R}) measures
+        # 0.33–0.37 under the goldfish model with a sound 37-land base —
+        # extra headroom so Monte Carlo noise doesn't straddle the gate.
+        base -= 0.05
+    return max(0.30, base - 0.05 * max(0, colored_pips - 1))
 
 
 @dataclass
