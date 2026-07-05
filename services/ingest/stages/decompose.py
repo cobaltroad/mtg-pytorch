@@ -355,6 +355,25 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
             r"|creatures? with power (?:1|2|one|two) or less",
         ),
     ),
+    # Anthem effects (#136 tranche 2) — the commander pumps the team, so the
+    # deck goes wide.  "(?:\w+ )?" admits tribe words ("Other Snake creatures
+    # you control"); the literal "you control" excludes opponent-facing text
+    # (Elesh Norn's -2/-2 line) and single-target pumps.  Activated anthems
+    # (Kamahl: "{2}{G}{G}{G}: Creatures you control get +3/+3") also fire.
+    (
+        "static_pump",
+        "Team pump anthem",
+        p(r"(?:other )?(?:\w+ )?creatures you control gets? \+"),
+    ),
+    (
+        "keyword_grant",
+        "Team keyword grant",
+        p(
+            r"(?:other )?(?:\w+ )?creatures you control (?:have|gain|gains) "
+            r"(?:flying|first strike|double strike|deathtouch|haste|hexproof"
+            r"|indestructible|lifelink|menace|reach|trample|vigilance|ward)",
+        ),
+    ),
     # Unearth / encore
     (
         "unearth_encore",

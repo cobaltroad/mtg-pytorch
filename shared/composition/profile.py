@@ -41,6 +41,8 @@ GO_WIDE_KEYS = frozenset({
     "artifact_token_generator",
     "token_trigger",
     "weenie_matters",
+    "static_pump",      # anthem commanders pump the team → the deck goes wide
+    "keyword_grant",
 })
 
 # ── Quota model ───────────────────────────────────────────────────────────────
