@@ -116,8 +116,9 @@ def test_castability_floor_scales_with_pips():
     # Atraxa (MV 4, 4 pips) gets a lower bar than Wilhelt (MV 4, 2 pips):
     # no mana base fully recovers a 4-color pip requirement.
     assert castability_floor(4, 4) < castability_floor(4, 2) < castability_floor(4, 1)
-    assert castability_floor(10, 10) >= 0.35  # clamped
+    assert castability_floor(10, 10) >= 0.30  # clamped
     assert castability_floor(10, 1) < castability_floor(6, 1)  # MV-graded past 6
+    assert castability_floor(6, 6) < castability_floor(6, 4)  # pip-dense tail headroom
 
 
 def test_deterministic_under_seed():
@@ -233,6 +234,28 @@ def test_mdfc_spells_grant_land_credit():
     from composition.evaluation import check_build
     ci = {c["id"]: {"U", "B"} for c in r.deck}
     assert check_build(WILHELT_PROFILE, r, {"U", "B"}, ci) == []
+
+
+def test_sort_pool_popularity_prior():
+    """#140: EDHREC rank orders pools; ramp keeps mana output primary;
+    unranked cards tail out."""
+    from composition.pool_helpers import UNRANKED, sort_pool
+
+    def pc(name, rank, mv=2, output=1):
+        c = card(name, mv=mv)
+        c["edhrec_rank"] = rank if rank is not None else UNRANKED
+        c["mana_output"] = output
+        return c
+
+    pool = [pc("Junk Draw", None), pc("Rhystic Study", 44, mv=3), pc("Divination", 800)]
+    assert [c["name"] for c in sort_pool(pool, "draw_engine")] == [
+        "Rhystic Study", "Divination", "Junk Draw",
+    ]
+    ramp = [pc("Popular Trinket", 50, output=1), pc("Thran Dynamo", 400, mv=4, output=3),
+            pc("Obscure Rock", None, output=1)]
+    assert [c["name"] for c in sort_pool(ramp, "ramp")] == [
+        "Thran Dynamo", "Popular Trinket", "Obscure Rock",
+    ]
 
 
 def test_land_quality_fetch_and_mdfc():

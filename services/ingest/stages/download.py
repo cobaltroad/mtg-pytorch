@@ -153,6 +153,7 @@ def _normalise_mtgjson(name: str, faces: list[dict]) -> dict | None:
         "power":          face.get("power"),
         "toughness":      face.get("toughness"),
         "loyalty":        face.get("loyalty"),
+        "edhrec_rank":    face.get("edhrecRank"),         # 1 = most-played in EDH
         "scryfall_data":  face,                           # store raw face for reference
         "faces":          faces,                          # all faces (MDFC/split/adventure)
     }
@@ -177,6 +178,7 @@ def _normalise_scryfall(card: dict) -> dict | None:
         "power":          card.get("power"),
         "toughness":      card.get("toughness"),
         "loyalty":        card.get("loyalty"),
+        "edhrec_rank":    card.get("edhrec_rank"),
         "scryfall_data":  card,
         "faces":          card.get("card_faces") or [card],
     }
@@ -198,6 +200,7 @@ def _to_row(card: dict) -> dict:
         "power":          card.get("power"),
         "toughness":      card.get("toughness"),
         "loyalty":        card.get("loyalty"),
+        "edhrec_rank":    card.get("edhrec_rank"),
         "scryfall_data":  json.dumps(card.get("scryfall_data") or {}),
         "faces":          json.dumps(card.get("faces") or []),
     }
@@ -274,11 +277,13 @@ async def load_cards(path: Path, source: str) -> None:
                     INSERT INTO cards (
                         oracle_id, name, mana_cost, cmc, type_line, oracle_text,
                         colors, color_identity, keywords, legalities,
-                        produced_mana, power, toughness, loyalty, scryfall_data, faces
+                        produced_mana, power, toughness, loyalty, edhrec_rank,
+                        scryfall_data, faces
                     ) VALUES (
                         :oracle_id, :name, :mana_cost, :cmc, :type_line, :oracle_text,
                         :colors, :color_identity, :keywords, :legalities,
-                        :produced_mana, :power, :toughness, :loyalty, :scryfall_data, :faces
+                        :produced_mana, :power, :toughness, :loyalty, :edhrec_rank,
+                        :scryfall_data, :faces
                     )
                     ON CONFLICT (oracle_id) DO UPDATE SET
                         name          = EXCLUDED.name,
@@ -286,6 +291,7 @@ async def load_cards(path: Path, source: str) -> None:
                         type_line     = EXCLUDED.type_line,
                         keywords      = EXCLUDED.keywords,
                         legalities    = EXCLUDED.legalities,
+                        edhrec_rank   = EXCLUDED.edhrec_rank,
                         scryfall_data = EXCLUDED.scryfall_data,
                         faces         = EXCLUDED.faces
                 """),
