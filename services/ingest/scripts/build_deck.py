@@ -121,8 +121,9 @@ def _theme_density(conn, commander_id: str, theme_ids: list[str]) -> dict:
 
 
 def _land_pool(conn, identity: frozenset[str]) -> list[dict]:
-    where = "f.is_land AND NOT f.is_basic"
-    return _query_pool(conn, where, identity, "land")
+    from composition.pool_helpers import LAND_POOL_FILTER
+
+    return _query_pool(conn, LAND_POOL_FILTER, identity, "land")
 
 
 def _basics(conn) -> dict[str, dict]:

@@ -42,8 +42,13 @@ POOL_SQL: dict[str, str] = {
 CARD_COLUMNS = (
     "c.id::text AS id, c.name, c.cmc, c.mana_cost, c.color_identity,"
     " c.produced_mana, c.type_line, c.oracle_text,"
-    " f.pips, f.hybrid_pips, f.is_land, f.is_basic, f.etb_tapped, f.is_fetch"
+    " f.pips, f.hybrid_pips, f.is_land, f.is_basic, f.etb_tapped, f.is_fetch,"
+    " f.is_mdfc_land"
 )
+
+#: Land-pool WHERE fragment: real nonbasics plus spell-front modal DFCs with
+#: a land face (Malakir Rebirth) — playable as land drops (#143).
+LAND_POOL_FILTER = "((f.is_land AND NOT f.is_basic) OR f.is_mdfc_land)"
 
 #: Filter appended to every pool query: no-cost nonland cards (Evermind,
 #: suspend-only spells) are uncastable by normal means.
@@ -92,6 +97,7 @@ def row_to_card(row, roles: set[str]) -> dict:
         "mana_output": mana_output(row["oracle_text"]),
         "etb_tapped": row["etb_tapped"],
         "is_fetch": row["is_fetch"],
+        "is_mdfc_land": row["is_mdfc_land"],
         "roles": set(roles),
     }
 
