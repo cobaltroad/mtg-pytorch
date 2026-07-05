@@ -48,15 +48,36 @@ def _xmage_maps():
 
 # ── Oracle-text synergy edges ─────────────────────────────────────────────────
 
-async def compute_textmatch_synergy() -> None:
-    """Build synergy edges in small chunked transactions.
+async def _reset_score_type(score_type: str) -> None:
+    """Delete all edges of one score_type before a rebuild.
 
+    ON CONFLICT DO NOTHING preserves stale rows forever otherwise — the DB
+    carried ability_trigger edges from before the color-identity filter
+    existed in this file (issue #138), the same drift class the decompose
+    stage had (#137).  A stage re-run now yields exactly what current code
+    and tags produce.
+    """
+    async with Session() as db:
+        result = await db.execute(
+            text("DELETE FROM synergy_edges WHERE score_type = :st"),
+            {"st": score_type},
+        )
+        await db.commit()
+    log.info("Deleted %d stale %s edges before rebuild", result.rowcount, score_type)
+
+
+async def compute_textmatch_synergy() -> None:
+    """Rebuild ability_trigger synergy edges in small chunked transactions.
+
+    Existing ability_trigger edges are deleted first (see _reset_score_type).
     Fetches producer card IDs in Python, then drives INSERT...SELECT statements
     SYNERGY_CHUNK producers at a time so no single transaction materialises more
-    than ~200 × consumers rows.  Progress is checkpointed after every chunk so
-    a restart resumes without duplicates (ON CONFLICT DO NOTHING).
+    than ~200 × consumers rows.  Progress within a run is checkpointed after
+    every chunk (ON CONFLICT DO NOTHING); an interrupted run restarts from the
+    delete.
     """
     log.info("Computing ability-trigger synergy edges…")
+    await _reset_score_type("ability_trigger")
 
     for trigger_event, producer_where in PRODUCER_MAP.items():
         # Fetch just the IDs of producer cards — small result set
@@ -250,6 +271,7 @@ async def compute_xmage_synergy() -> None:
     by the co-occurrence training path.
     """
     log.info("Computing XMage-class synergy edges (compositional path)…")
+    await _reset_score_type("xmage_ability_trigger")
     XMAGE_PRODUCER_MAP, SPELLCAST_TRIGGER_PRODUCER_MAP = _xmage_maps()
 
     for ability_class, default_producer_where in XMAGE_PRODUCER_MAP.items():
@@ -318,6 +340,7 @@ async def compute_xmage_effect_synergy() -> None:
     during export.
     """
     log.info("Computing effect-peer synergy edges…")
+    await _reset_score_type("effect_peer")
 
     # Fetch all (trigger_event, effect_class) groups that have >1 distinct card.
     async with Session() as db:
