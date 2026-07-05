@@ -49,6 +49,10 @@ from mtg_sql.staples.removal import (
     DESTROY as _REMOVAL_DESTROY,
     DAMAGE as _REMOVAL_DAMAGE,
 )
+from mtg_sql.staples.protection import FLICKER as _FLICKER_SQL
+from mtg_sql.staples.draw_engine import SQL as _DRAW_ENGINE_SQL
+from mtg_sql.staples.draw_spell import SQL as _DRAW_SPELL_SQL
+from mtg_sql.staples.land_ramp import SQL as _LAND_RAMP_SQL
 
 
 # _spells values are raw SQL strings; _triggered_abilities / _activated_abilities
@@ -355,6 +359,50 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "unearth_encore": (
         f"(type_line ILIKE '%%Creature%%' AND {_family_sql('creature_etb')})"
     ),
+    # ── CONSUMER: ETB-trigger commanders want to re-trigger the ETB ───────────
+    # #136 tranche 1.  A commander whose value is its own enters-trigger
+    # (719 commanders fire this key) wants blink/flicker (removal fizzles,
+    # ETB re-fires), reanimation (re-enters from the graveyard), and
+    # Panharmonicon-class trigger doubling.
+    "etb_trigger": (
+        f"(({_FLICKER_SQL})"
+        " OR oracle_text ~* '(return|put) .{0,40}creature cards? from (your |a |all )?graveyards? (to|onto) the battlefield'"
+        " OR oracle_text ~* 'triggers? an additional time')"
+    ),
+    # ── CONSUMER: discard outlets want cards that like being discarded ────────
+    # Anje-class commanders: madness and the graveyard-recast keywords turn
+    # every discard into value, as do cast-from-graveyard payoffs.
+    "discard_outlet": (
+        "(oracle_text ~* '\\y(madness|flashback|escape|disturb|unearth|jump-start|retrace)\\y'"
+        " OR oracle_text ~* '(cast|play) .{0,60}from your graveyard')"
+    ),
+    # ── CONSUMER: equipment commanders want equipment (and auras) ─────────────
+    "equipment_matters": _spells["spell_aura_equipment"],
+    # ── CONSUMER: draw-trigger commanders want draw sources ───────────────────
+    # The commander responds to draws; the deck supplies them.
+    "draw_trigger": f"(({_DRAW_ENGINE_SQL}) OR ({_DRAW_SPELL_SQL}))",
+    # ── CONSUMER: lifegain-trigger commanders want lifegain sources ───────────
+    "lifegain_trigger": (
+        "(oracle_text ~* '\\ylifelink\\y'"
+        " OR oracle_text ~* 'you gain \\d+ life'"
+        " OR oracle_text ~* 'gain life equal')"
+    ),
+    # ── CONSUMER: landfall commanders want extra land drops + land ramp ───────
+    # (Fetch lands also fire landfall twice, but lands never occupy theme
+    # slots — the land pool already ranks fetches highly since #144.)
+    "landfall": (
+        f"(({_LAND_RAMP_SQL})"
+        " OR oracle_text ~* 'play (an|two|\\d+) additional lands?')"
+    ),
+    # ── CONSUMER: second-spell commanders want a cheap, dense curve ───────────
+    "second_spell": _spells["low_mv"],
+    # ── CONSUMER: weenie payoffs want cheap creatures ─────────────────────────
+    "weenie_matters": f"(type_line ILIKE '%%Creature%%' AND {_spells['low_mv']})",
+    # ── CONSUMER: artifact-count commanders want artifacts ────────────────────
+    "artifact_count": _spells["spell_artifact"],
+    # NOTE (#136): punisher, forced_attack, goad, and opponent_restriction are
+    # deliberately signal-only — those effects tax opponents; the deck cannot
+    # supply the resource they trigger on.
     # ── CONSUMER: activated creature-tutors want a creature toolbox ───────────
     # Yisan, Prime Speaker Vannifar: the engine fetches creatures directly
     # onto the battlefield, so the deck supplies the toolbox it selects from.
