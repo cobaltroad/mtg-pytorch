@@ -188,6 +188,10 @@ def _src(key: str) -> str:
 
 
 # ── Sub-pattern labels and fine-grained SQL ───────────────────────────────────
+from synergy.triggered_ability.attack import (
+    PATTERNS as _attack_patterns,
+    ATTACK_SQL as _ATTACK_SQL,
+)
 from synergy.triggered_ability.counter import PATTERNS as _counter_patterns
 from synergy.triggered_ability.lifegain import PATTERNS as _lifegain_patterns
 from synergy.triggered_ability.draw import PATTERNS as _draw_patterns
@@ -200,9 +204,9 @@ from synergy.combat.combat import PATTERNS as _combat_patterns
 _FINE_KEY_LABELS: dict[str, str] = {
     key: label
     for patterns in [
-        _counter_patterns, _lifegain_patterns, _draw_patterns,
-        _etb_patterns, _sacrifice_patterns, _sac_outlet_patterns,
-        _mana_producer_patterns, _combat_patterns,
+        _attack_patterns, _counter_patterns, _lifegain_patterns,
+        _draw_patterns, _etb_patterns, _sacrifice_patterns,
+        _sac_outlet_patterns, _mana_producer_patterns, _combat_patterns,
     ]
     for key, label, _ in patterns
 }
@@ -211,6 +215,7 @@ _FINE_KEY_LABELS: dict[str, str] = {
 # Mana sub-keys get a Creature type_line filter so only creatures are tagged
 # (mana_dork keys, not mana rocks which are handled by the coarse mana_dork entry).
 FINE_KEY_TO_SQL: dict[str, str] = {
+    **_ATTACK_SQL,
     **_COUNTER_SQL,
     **_LIFEGAIN_SQL,
     **_DRAW_SQL,
