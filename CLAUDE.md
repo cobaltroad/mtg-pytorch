@@ -173,7 +173,7 @@ docker compose restart api
 
 # 8. Rebuild pgvector index for full recall quality
 docker compose exec db psql -U mtg -d mtg -c \
-  "REINDEX INDEX CONCURRENTLY idx_card_embeddings_vec;"
+  "REINDEX INDEX CONCURRENTLY idx_card_embeddings_ivfflat;"
 
 # 9. Open UI
 open https://$UI_HOST

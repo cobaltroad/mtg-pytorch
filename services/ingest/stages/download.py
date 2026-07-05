@@ -311,7 +311,37 @@ async def download() -> None:
     """
     path, source = await fetch_cards()
     await load_cards(path, source)
+    await _warn_embedding_drift()
     await import_spellbook_stage()
+
+
+async def _warn_embedding_drift() -> None:
+    """Newly downloaded cards are invisible to model ranking until embedded.
+
+    Standalone `--stage download` runs used to drift silently (~950 cards
+    at one point — issue #139); `--stage process` embeds as its next step,
+    so the warning is informational there.
+    """
+    model = os.environ.get(
+        "EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
+    )
+    async with Session() as db:
+        result = await db.execute(
+            text(
+                "SELECT count(*) FROM cards c WHERE NOT EXISTS ("
+                "  SELECT 1 FROM card_embeddings e"
+                "  WHERE e.card_id = c.id AND e.model = :model)"
+            ),
+            {"model": model},
+        )
+        missing = result.scalar() or 0
+    if missing:
+        log.warning(
+            "%d cards have no %s embedding — model ranking cannot see them. "
+            "Run: pipeline.py --stage embed_cards",
+            missing,
+            model,
+        )
 
 
 if __name__ == "__main__":
