@@ -355,6 +355,10 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "unearth_encore": (
         f"(type_line ILIKE '%%Creature%%' AND {_family_sql('creature_etb')})"
     ),
+    # ── CONSUMER: activated creature-tutors want a creature toolbox ───────────
+    # Yisan, Prime Speaker Vannifar: the engine fetches creatures directly
+    # onto the battlefield, so the deck supplies the toolbox it selects from.
+    "activated_tutor_creature": _spells["spell_creature"],
     # ── CONSUMER: high-MV payoffs want expensive spells ───────────────────────
     # Kozilek (discard-MV-X counters), Zhulodok, Yuriko-style reveals: the
     # deck supplies the big mana values the commander converts into effect.
