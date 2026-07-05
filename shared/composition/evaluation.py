@@ -24,16 +24,31 @@ services/ingest/scripts/eval_harness.py.
 
 from __future__ import annotations
 
-from .builder import MAX_LANDS, BuildResult
+from .builder import MAX_LANDS, MIN_LANDS, BuildResult
 from .profile import CompositionProfile
 
 _WUBRG_C = set("WUBRGC")
 
 
+def _mdfc_spell_faces(result: BuildResult) -> int:
+    """Spell-slot modal-DFC land faces — excludes MDFCs placed in land slots."""
+    land_slot_names = set(result.breakdown.get("nonbasic_land", []))
+    return sum(
+        1 for c in result.deck
+        if c.get("is_mdfc_land") and not c["is_land"] and c["name"] not in land_slot_names
+    )
+
+
 def deck_census(result: BuildResult) -> dict[str, int]:
-    """Quota counts for one built deck, keyed like the profile quotas."""
+    """Quota counts for one built deck, keyed like the profile quotas.
+
+    Spell-front MDFCs placed in *land slots* count as lands (#143).
+    """
     br = result.breakdown
-    lands = sum(1 for c in result.deck if c["is_land"])
+    land_slot_names = set(br.get("nonbasic_land", []))
+    lands = sum(
+        1 for c in result.deck if c["is_land"] or c["name"] in land_slot_names
+    )
     forced_nonland = sum(
         1 for c in result.deck if c["name"] in br.get("forced", []) and not c["is_land"]
     )
@@ -82,9 +97,12 @@ def check_build(
                 )
 
     census = deck_census(result)
-    if not profile.lands.count <= census["lands"] <= MAX_LANDS:
+    # MDFC land credit (#143) legitimately lowers real land count, never
+    # below MIN_LANDS.
+    lands_floor = max(MIN_LANDS, profile.lands.count - _mdfc_spell_faces(result) // 2)
+    if not lands_floor <= census["lands"] <= MAX_LANDS:
         failures.append(
-            f"lands {census['lands']} outside [{profile.lands.count}, {MAX_LANDS}]"
+            f"lands {census['lands']} outside [{lands_floor}, {MAX_LANDS}]"
         )
 
     if not result.gate_passed:

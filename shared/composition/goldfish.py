@@ -23,6 +23,11 @@ Policy assumptions (deliberately simple, documented):
   * land choice: untapped before tapped, missing commander colors first
   * 'conditional' tapped lands are played as untapped (check/fast/shock
     lands are built to enter untapped when the game matters)
+  * spell-front MDFC land faces (is_mdfc_land, not is_land) are playable
+    land drops; they come online the following turn (#143)
+  * a fetch resolves same-turn to a source of any commander color — the
+    found land is a basic the deck runs; true fetches find untapped
+    (slightly optimistic for Evolving Wilds-class) (#144)
   * ramp is cast greedily before the commander; mana rocks/dorks come
     online next turn; land-ramp spells put a tapped land into play
   * one spell resource line per turn — no discard, no interaction, an
@@ -93,8 +98,14 @@ def _pips_satisfied(
 
 def _land_sort_key(card: dict, needed: set[str]) -> tuple:
     produces = set(card.get("produces") or [])
+    if card.get("is_fetch") and not produces:
+        produces = needed  # a fetch finds whichever basic is missing
     hits_need = bool(produces & needed)
-    untapped = card.get("etb_tapped") != "always"
+    # Spell-front MDFC faces come online next turn — treat as tapped.
+    untapped = (
+        card.get("etb_tapped") != "always"
+        and (card.get("is_land") or not card.get("is_mdfc_land"))
+    )
     return (not hits_need, not untapped)  # False sorts first
 
 
@@ -133,17 +144,25 @@ def simulate(
             if library:
                 hand.append(library.pop())
 
-            # Land drop.
-            lands = [c for c in hand if c["is_land"]]
+            # Land drop — real lands plus spell-front MDFC land faces.
+            lands = [c for c in hand if c["is_land"] or c.get("is_mdfc_land")]
             if lands:
                 lands.sort(key=lambda c: _land_sort_key(c, needed_colors))
                 land = lands[0]
                 hand.remove(land)
-                battlefield.append(
-                    (frozenset(land.get("produces") or []), land.get("mana_output", 1))
-                )
-                if land.get("etb_tapped") == "always":
-                    tapped_this_turn += 1
+                if land.get("is_fetch") and not land.get("produces"):
+                    # Resolves same-turn to a needed-color basic.
+                    battlefield.append((frozenset(needed_colors or {"C"}), 1))
+                    if land.get("etb_tapped") == "always":
+                        tapped_this_turn += 1
+                else:
+                    battlefield.append(
+                        (frozenset(land.get("produces") or []), land.get("mana_output", 1))
+                    )
+                    if land.get("etb_tapped") == "always" or (
+                        land.get("is_mdfc_land") and not land["is_land"]
+                    ):
+                        tapped_this_turn += 1
 
             def _available():
                 usable = battlefield[: len(battlefield) - tapped_this_turn]

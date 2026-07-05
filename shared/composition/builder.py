@@ -50,6 +50,7 @@ _WUBRG = "WUBRG"
 
 MAX_FEEDBACK_ITERATIONS = 3
 MAX_LANDS = 40
+MIN_LANDS = 33  # MDFC land credit never pushes real lands below this
 
 #: P(commander cast by max(go_live, MV)) floor, by commander MV and colored
 #: pip count.  Calibrated so a sound mana base passes and a 20-land pile
@@ -89,13 +90,26 @@ def land_quality(card: dict, identity: set[str]) -> float:
     """Heuristic quality of a nonbasic land for this color identity.
 
     Colors produced within the identity dominate; entering untapped is
-    worth about one color; fetches inherit dual-ish value in multicolor.
+    worth about one color.  A fetch with no produced_mana finds a basic of
+    any deck color (#144), so it scores like a dual-plus in multicolor.
+    Spell-front MDFC land faces (#143) come online tapped but carry a
+    flexibility bonus — the card is also a spell when the land isn't needed.
     """
-    on_color = len(set(card.get("produces") or []) & identity)
+    produces = set(card.get("produces") or [])
+    is_spell_face = card.get("is_mdfc_land") and not card.get("is_land")
+    if card.get("is_fetch") and not produces:
+        produces = set(identity)
+    on_color = len(produces & identity)
     tapped = card.get("etb_tapped")
-    untapped_bonus = 1.0 if tapped == "untapped" else 0.6 if tapped == "conditional" else 0.0
+    untapped_bonus = (
+        0.0 if is_spell_face  # MDFC backs come online next turn
+        else 1.0 if tapped == "untapped"
+        else 0.6 if tapped == "conditional"
+        else 0.0
+    )
     fetch_bonus = 0.8 if card.get("is_fetch") and len(identity) >= 2 else 0.0
-    return on_color * 2.0 + untapped_bonus + fetch_bonus
+    mdfc_bonus = 0.5 if is_spell_face else 0.0
+    return on_color * 2.0 + untapped_bonus + fetch_bonus + mdfc_bonus
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -249,6 +263,26 @@ def build_deck(
     # 3 + 4. Mana base with goldfish feedback: theme slots convert to lands
     # while the castability gate fails.
     lands_target = profile.lands.count
+
+    # MDFC land credit (#143): spell-slot modal DFCs with a land face act as
+    # partial lands — every two free one real land slot for more spells.
+    mdfc_spells = sum(1 for c in spells if c.get("is_mdfc_land") and not c["is_land"])
+    mdfc_credit = min(mdfc_spells // 2, lands_target - MIN_LANDS)
+    if mdfc_credit > 0:
+        extra: list[dict] = []
+        for pool_name in ("theme", "spot_removal", "draw_engine", "draw_spell",
+                          "protection", "ramp"):
+            extra += _take(pools.get(pool_name, []), mdfc_credit - len(extra), chosen)
+            if len(extra) >= mdfc_credit:
+                break
+        if extra:
+            lands_target -= len(extra)
+            spells += extra
+            theme += extra  # cuttable by the feedback loop
+            breakdown["theme"] = breakdown.get("theme", []) + [c["name"] for c in extra]
+            warnings.append(
+                f"credited {mdfc_spells} MDFC land faces as {len(extra)} land slots"
+            )
     total_pips = sum(r.pips for r in profile.pip_requirements)
     gate = max(0.0, castability_floor(profile.commander_mv, total_pips) - gate_relax)
     if gate_relax:
@@ -338,8 +372,15 @@ def _mana_base(
     # shortfall, so the deck always totals exactly 99.
     basics_needed = 99 - len(spells) - len(nonbasics)
 
-    # Per-color source count from nonbasics.
-    sources = {c: sum(1 for l in nonbasics if c in (l.get("produces") or [])) for c in identity}
+    # Per-color source count from nonbasics.  A fetch with no produced_mana
+    # counts toward every identity color — it finds whichever basic the
+    # hand is missing (#144).
+    def _is_source(land: dict, color: str) -> bool:
+        if color in (land.get("produces") or []):
+            return True
+        return bool(land.get("is_fetch")) and not land.get("produces")
+
+    sources = {c: sum(1 for l in nonbasics if _is_source(l, c)) for c in identity}
 
     per_color = {c: 0 for c in identity}
     if identity and basics_needed > 0:

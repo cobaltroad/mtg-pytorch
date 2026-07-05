@@ -181,6 +181,71 @@ def test_theme_diminishing_returns():
     assert picked_tokens >= quota - cap - 1   # minority sub-theme gets the rest
 
 
+def test_goldfish_fetches_resolve_to_needed_colors():
+    """#144: a fetch with empty produces finds a needed-color basic
+    same-turn; a plain colorless land never pays colored pips."""
+    fetch = card("Fetch", is_land=True, is_fetch=True, etb_tapped="untapped")
+    wastes = card("Wastes", is_land=True, produces=["C"], etb_tapped="untapped")
+    spell = card("Bear", mv=2, pips={"G": 1})
+    fetch_deck = [dict(fetch, id=f"f{i}") for i in range(37)] + [dict(spell, id=f"s{i}") for i in range(62)]
+    dead_deck = [dict(wastes, id=f"w{i}") for i in range(37)] + [dict(spell, id=f"s{i}") for i in range(62)]
+    p_fetch = simulate(fetch_deck, 2, {"G": 2}, 2, games=400).p_commander_by_go_live
+    p_dead = simulate(dead_deck, 2, {"G": 2}, 2, games=400).p_commander_by_go_live
+    assert p_fetch > 0.85
+    assert p_dead == 0.0
+
+
+def test_goldfish_mdfc_spell_faces_are_land_drops():
+    """#143: a hand of spell-front MDFC land faces still makes land drops."""
+    mdfc = card("Malakir Rebirth", mv=1, pips={"B": 1}, produces=["B"])
+    mdfc["is_mdfc_land"] = True
+    spell = card("Filler", mv=3, pips={"B": 1})
+    deck = [dict(mdfc, id=f"m{i}") for i in range(37)] + [dict(spell, id=f"s{i}") for i in range(62)]
+    r = simulate(deck, 2, {"B": 1}, 4, games=300)
+    # MDFC drops come online a turn late but the commander still lands.
+    assert r.p_commander_by_go_live > 0.8
+
+
+def test_fetches_count_toward_pip_minimums():
+    """#144: fetch-heavy mana bases satisfy per-color source minimums."""
+    pools, _, basics, forced = make_pools()
+    land_pool = [card(f"Fetch {i}", is_land=True, is_fetch=True, etb_tapped="untapped")
+                 for i in range(18)]
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert not any("minimums unreachable" in w for w in r.warnings)
+    assert r.gate_passed, r.warnings
+
+
+def test_mdfc_spells_grant_land_credit():
+    """#143: two spell-slot MDFC land faces free one real land slot."""
+    pools, land_pool, basics, forced = make_pools()
+    # Spread across curve buckets so bucket capacity can't exclude them all.
+    mdfc_theme = [dict(card(f"MDFC {i}", mv=(i % 5) + 1, pips={"B": 1}, produces=["B"]),
+                       is_mdfc_land=True, theme_keys={"death_trigger"})
+                  for i in range(10)]
+    pools["theme"] = mdfc_theme + pools["theme"]
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert any("MDFC land faces" in w for w in r.warnings), r.warnings
+    assert len(r.deck) == 99
+    # evaluation accepts the credited floor
+    from composition.evaluation import check_build
+    ci = {c["id"]: {"U", "B"} for c in r.deck}
+    assert check_build(WILHELT_PROFILE, r, {"U", "B"}, ci) == []
+
+
+def test_land_quality_fetch_and_mdfc():
+    identity = {"U", "B"}
+    fetch = card("x", is_land=True, is_fetch=True, etb_tapped="untapped")
+    dual_tapped = card("x", is_land=True, produces=["U", "B"], etb_tapped="always")
+    mdfc = dict(card("x", produces=["B"]), is_mdfc_land=True)
+    off_color = card("x", is_land=True, produces=["R"], etb_tapped="untapped")
+    # fetch (finds either color) beats a tapped dual; MDFC beats off-color
+    assert land_quality(fetch, identity) > land_quality(dual_tapped, identity)
+    assert land_quality(mdfc, identity) > land_quality(off_color, identity)
+
+
 def test_goldfish_prefers_more_lands():
     land = card("Forest", is_land=True, produces=["G"], etb_tapped="untapped")
     spell = card("Bear", mv=2, pips={"G": 1})

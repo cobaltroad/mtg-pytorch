@@ -264,7 +264,9 @@ async def build_commander_deck(
         for role, where in POOL_SQL.items()
     }
     pools["theme"] = await _theme_pool(db, commander["id"], identity)
-    land_pool = await _query_pool(db, "f.is_land AND NOT f.is_basic", identity, "land")
+    from composition.pool_helpers import LAND_POOL_FILTER
+
+    land_pool = await _query_pool(db, LAND_POOL_FILTER, identity, "land")
     basics = await _basics(db)
     forced = await _forced(db, identity)
 
