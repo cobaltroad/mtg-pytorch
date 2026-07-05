@@ -355,6 +355,26 @@ ORACLE_PATTERNS: list[tuple[str, str, re.Pattern]] = [
             r"|creatures? with power (?:1|2|one|two) or less",
         ),
     ),
+    # Phase-trigger engines (#136 tranche 3) — the commander's value fires at
+    # a phase boundary (Sen Triplets, Gabriel Angelfire).  The deck can buy
+    # more firings: extra turns, additional upkeep steps, trigger doubling.
+    (
+        "phase_trigger",
+        "Upkeep / end-step trigger",
+        p(r"at the beginning of (?:your |each |each player's )?(?:upkeep|end step)"),
+    ),
+    # Spell-copy engines (#136 tranche 3) — Rootha, Errant, Gorion; the deck
+    # supplies the instants/sorceries being copied.  "copy it" requires a
+    # cast clause in the same sentence so clone-token text does not fire.
+    (
+        "spell_copy",
+        "Spell copy engine",
+        p(
+            r"copy target (?:instant|sorcery|spell)"
+            r"|cast[^.]{0,60}copy (?:it|that spell)"
+            r"|\breplicate\b|\bstorm\b",
+        ),
+    ),
     # Anthem effects (#136 tranche 2) — the commander pumps the team, so the
     # deck goes wide.  "(?:\w+ )?" admits tribe words ("Other Snake creatures
     # you control"); the literal "you control" excludes opponent-facing text

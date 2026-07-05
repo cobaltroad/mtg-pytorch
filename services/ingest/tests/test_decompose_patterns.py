@@ -185,6 +185,42 @@ def test_anthems_fire(text, key):
     assert key in keys(text)
 
 
+# ── phase triggers + spell copy (issue #136 tranche 3) ───────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [
+        ("At the beginning of your upkeep, choose target opponent.", "phase_trigger"),
+        ("At the beginning of each end step, draw a card.", "phase_trigger"),
+        ("At the beginning of each player's upkeep, that player mills a card.", "phase_trigger"),
+        ("{2}, Return this to its owner's hand: Copy target instant or sorcery spell you control.",
+         "spell_copy"),                                                       # Rootha
+        ("Whenever you cast an Adventure spell, you may copy it.", "spell_copy"),  # Gorion
+        ("Each Saga spell you cast has replicate.", "spell_copy"),            # Ian Chesterton
+    ],
+    ids=["upkeep", "end-step", "each-players-upkeep", "rootha", "gorion", "replicate"],
+)
+def test_tranche3_patterns_fire(text, key):
+    assert key in keys(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # clone-token text is not a spell-copy engine
+        "Create a token that's a copy of target creature.",
+        # combat phase is attack_trigger territory, not phase_trigger
+        "At the beginning of combat on your turn, target creature gains flying.",
+    ],
+    ids=["clone-token", "combat-phase"],
+)
+def test_tranche3_negatives(text):
+    ks = keys(text)
+    assert "spell_copy" not in ks
+    assert "phase_trigger" not in ks
+
+
 def test_type_only_lord_is_tribals_domain():
     # "Other Vampires you control …" (no word "creatures") is a tribal
     # lord — tribal_vampire's consumer SQL covers it; keyword_grant

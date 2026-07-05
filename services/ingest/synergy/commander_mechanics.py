@@ -398,6 +398,16 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "second_spell": _spells["low_mv"],
     # ── CONSUMER: weenie payoffs want cheap creatures ─────────────────────────
     "weenie_matters": f"(type_line ILIKE '%%Creature%%' AND {_spells['low_mv']})",
+    # ── CONSUMER: phase-trigger engines want more phase firings ───────────────
+    # #136 tranche 3.  Extra turns, additional upkeep steps (Paradox Haze),
+    # and trigger doubling all multiply an upkeep/end-step engine.
+    "phase_trigger": (
+        "(oracle_text ~* 'takes? (an|two) extra turns?'"
+        " OR oracle_text ~* 'additional (upkeep|end) step'"
+        " OR oracle_text ~* 'triggers? an additional time')"
+    ),
+    # ── CONSUMER: spell-copy engines want instants and sorceries ──────────────
+    "spell_copy": _spells["spell_instant_sorcery"],
     # ── CONSUMER: anthems want bodies to pump — tokens + cheap creatures ──────
     # #136 tranche 2.  A team-wide pump or keyword grant scales with board
     # width; token generators and cheap creatures supply the width.
