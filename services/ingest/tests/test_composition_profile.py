@@ -157,6 +157,13 @@ def test_single_signal_commander_gets_moderate_protection():
     assert p.protection.count == 3
 
 
+def test_anthem_commander_is_go_wide():
+    # #136 tranche 2: anthem keys imply a wide board — fewer own sweepers.
+    p = derive_profile("Kongming", 3, {"W": 1, "U": 1}, ["W", "U"], {"static_pump"})
+    assert p.sweepers.count == 2
+    assert "goes wide" in p.sweepers.because
+
+
 def test_activated_engine_gets_engine_protection():
     # Yisan: activated tutor keys force engine-tier protection even though
     # only two signals fire (the deck routes through the activation loop).

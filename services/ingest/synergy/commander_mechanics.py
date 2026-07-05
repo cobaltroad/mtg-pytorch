@@ -398,6 +398,11 @@ PATTERN_KEY_TO_CONSUMER_SQL: dict[str, str] = {
     "second_spell": _spells["low_mv"],
     # ── CONSUMER: weenie payoffs want cheap creatures ─────────────────────────
     "weenie_matters": f"(type_line ILIKE '%%Creature%%' AND {_spells['low_mv']})",
+    # ── CONSUMER: anthems want bodies to pump — tokens + cheap creatures ──────
+    # #136 tranche 2.  A team-wide pump or keyword grant scales with board
+    # width; token generators and cheap creatures supply the width.
+    "static_pump": f"({_TOKEN_SQL} OR (type_line ILIKE '%%Creature%%' AND {_spells['low_mv']}))",
+    "keyword_grant": f"({_TOKEN_SQL} OR (type_line ILIKE '%%Creature%%' AND {_spells['low_mv']}))",
     # ── CONSUMER: artifact-count commanders want artifacts ────────────────────
     "artifact_count": _spells["spell_artifact"],
     # NOTE (#136): punisher, forced_attack, goad, and opponent_restriction are

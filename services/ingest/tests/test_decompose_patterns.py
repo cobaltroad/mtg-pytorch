@@ -164,3 +164,49 @@ def test_sisay_fires_generic_tutor_engine_only():
 def test_non_engine_abilities_do_not_fire(text):
     assert "activated_tutor" not in keys(text)
     assert "activated_tutor_creature" not in keys(text)
+
+
+# ── anthem effects (issue #136 tranche 2) ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [
+        ("Other creatures you control get +1/+1.", "static_pump"),           # Kongming
+        ("Other Snake creatures you control get +0/+1.", "static_pump"),     # Sachi (tribe word)
+        ("{2}{G}{G}{G}: Creatures you control get +3/+3 and gain trample until end of turn.",
+         "static_pump"),                                                     # Kamahl (activated)
+        ("Creatures you control have flying.", "keyword_grant"),
+        ("Zombie creatures you control have menace.", "keyword_grant"),
+    ],
+    ids=["kongming", "sachi-tribal", "kamahl-activated", "flying-grant", "tribal-keyword"],
+)
+def test_anthems_fire(text, key):
+    assert key in keys(text)
+
+
+def test_type_only_lord_is_tribals_domain():
+    # "Other Vampires you control …" (no word "creatures") is a tribal
+    # lord — tribal_vampire's consumer SQL covers it; keyword_grant
+    # deliberately stays out.
+    ks = keys("Other Vampires you control have deathtouch.")
+    assert "tribal_vampire" in ks
+    assert "keyword_grant" not in ks
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # opponent-facing debuff only — no anthem
+        "Creatures your opponents control get -2/-2.",
+        # single-target pump
+        "Target creature gets +3/+3 until end of turn.",
+        # granting a non-keyword ability
+        "Shamans you control have \"{T}: Add {G}{G}.\"",
+    ],
+    ids=["opponent-debuff", "single-target", "non-keyword-grant"],
+)
+def test_non_anthems_do_not_fire(text):
+    ks = keys(text)
+    assert "static_pump" not in ks
+    assert "keyword_grant" not in ks
