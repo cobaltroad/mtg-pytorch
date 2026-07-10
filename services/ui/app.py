@@ -24,17 +24,6 @@ def search_cards(q: str) -> list[dict]:
     return r.json()
 
 
-@st.cache_data(ttl=120)
-def score_candidates(oracle_id: str, checkpoint: str = "phase3_best") -> list[dict]:
-    r = httpx.get(
-        f"{API_URL}/commanders/{oracle_id}/candidates",
-        params={"checkpoint": checkpoint},
-        timeout=60,
-    )
-    r.raise_for_status()
-    return r.json()
-
-
 @st.cache_data(ttl=300)
 def get_commander_decompose(oracle_id: str) -> list[dict]:
     try:
@@ -49,16 +38,6 @@ def get_commander_decompose(oracle_id: str) -> list[dict]:
 def list_generated_decks() -> list[dict]:
     try:
         r = httpx.get(f"{API_URL}/decks/generated", timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=60)
-def list_checkpoints() -> list[dict]:
-    try:
-        r = httpx.get(f"{API_URL}/checkpoints", timeout=10)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -209,10 +188,10 @@ tab_deck, tab_history = st.tabs(["Deck Builder", "Generated Decks"])
 # ── Deck Builder tab ──────────────────────────────────────────────────────────
 
 with tab_deck:
-    st.subheader("Commander candidate scoring")
+    st.subheader("Commander deck builder")
     st.markdown(
-        "Search for a commander to see all color-identity-legal cards ranked by "
-        "commander-card fit score (Phase 3 CommanderScorer)."
+        "Search for a commander, review its decompose signals, and build a "
+        "99-card deck with the composition engine."
     )
 
     cmd_query = st.text_input("Commander name", placeholder="Atraxa, Praetors' Voice")
@@ -318,67 +297,8 @@ with tab_deck:
                     "Deck saved — also available in the **Generated Decks** tab."
                 )
 
-    # ── Advanced options ──────────────────────────────────────────────────────
-    _chosen_checkpoint = "phase3_best"
-    if commander:
-        with st.expander("Advanced options", expanded=False):
-            _available = list_checkpoints()
-            _default_ckpt = "phase3_best"
-            if _available:
-                _ckpt_options = [c["name"] for c in _available]
-                _default_ckpt_idx = (
-                    _ckpt_options.index(_default_ckpt)
-                    if _default_ckpt in _ckpt_options
-                    else 0
-                )
-                _chosen_checkpoint = st.selectbox(
-                    "Checkpoint",
-                    _ckpt_options,
-                    index=_default_ckpt_idx,
-                    help="Select a checkpoint to use for candidate scoring.",
-                )
-            else:
-                _chosen_checkpoint = _default_ckpt
-                st.caption(f"Checkpoint: `{_chosen_checkpoint}` (not yet uploaded)")
-
-    # ── Candidate scoring table ───────────────────────────────────────────────
-    if commander:
-        oracle_id = str(commander["oracle_id"])
-        with st.spinner("Scoring candidates…"):
-            try:
-                results = score_candidates(oracle_id, _chosen_checkpoint)
-            except httpx.HTTPStatusError as e:
-                st.error(
-                    f"Scoring failed ({e.response.status_code}): {e.response.text}"
-                )
-                results = []
-            except Exception as e:
-                st.error(f"Scoring failed: {e}")
-                results = []
-
-        if results:
-            st.caption(f"{len(results)} color-identity-legal candidates scored")
-            df = pd.DataFrame(
-                [
-                    {
-                        "name": r["name"],
-                        "type_line": r.get("type_line") or "",
-                        "mana_cost": r.get("mana_cost") or "",
-                        "score": round(r["score"], 4),
-                        "tags": ", ".join(r.get("tags") or []),
-                    }
-                    for r in results
-                ]
-            )
-            st.dataframe(
-                df,
-                use_container_width=True,
-                height=700,
-                column_config={
-                    "score": st.column_config.NumberColumn("Fit score", format="%.4f"),
-                    "tags": st.column_config.TextColumn("Tags"),
-                },
-            )
+    # (The Phase 3 CommanderScorer candidate table and checkpoint picker
+    #  lived here until #151 — the composition build above replaces them.)
 
 
 # ── Generated Decks tab ───────────────────────────────────────────────────────

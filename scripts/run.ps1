@@ -1,13 +1,13 @@
 param(
     # Shorthand: -Train N sets -Mode train -Phase N -Dataset .\ingest_cache\mtg_dataset.pt
-    [ValidateScript({ $_ -eq $null -or $_ -in 1,2,3 })]
+    [ValidateScript({ $_ -eq $null -or $_ -in 1,2 })]
     [Nullable[int]]$Train = $null,
 
     [ValidateSet('train', 'ingest')]
     [string]$Mode = 'train',
 
-    [ValidateSet(1, 2, 3)]
-    [int]$Phase = 3,
+    [ValidateSet(1, 2)]
+    [int]$Phase = 2,
 
     # Path to a pre-built training artifact (.pt from export_dataset stage).
     # When set, no DATABASE_URL is required -- all data is loaded from the file.
@@ -54,13 +54,12 @@ $ErrorActionPreference = 'Stop'
 
 # -Train N shorthand: expand to -Mode train -Phase N -Dataset <artifact>
 #   Phase 1-2 -> mtg_dataset.pt       (text equivalence + ability-trigger synergy)
-#   Phase 3-4 -> mtg_commanders.pt    (commander BPR from synergy_edges)
+#   (Phases 3-4 retired in #151 — composition-first architecture)
 if ($null -ne $Train) {
     $Mode    = 'train'
     $Phase   = $Train
     if (-not $Dataset) {
-        $artifactName = if ($Phase -le 2) { 'mtg_dataset.pt' } else { 'mtg_commanders.pt' }
-        $Dataset = Join-Path $PSScriptRoot "..\ingest_cache\$artifactName"
+        $Dataset = Join-Path $PSScriptRoot "..\ingest_cache\mtg_dataset.pt"
     }
 }
 
@@ -197,21 +196,8 @@ function Show-PostTrainingGuidance {
                 Write-Host ('   Checkpoint: ' + $ckpt + '\phase2_best.pt')
             }
             Write-Host ''
-            Write-Host ' Next step — download commanders artifact then train Phase 3:'
-            Write-Host '   .\scripts\download_commanders.ps1'
-            Write-Host '   .\scripts\run.ps1 -Train 3'
-        }
-        3 {
-            Write-Host ''
-            Write-Host ('   Checkpoint: ' + $ckpt + '\phase3_best.pt') -ForegroundColor White
-            Write-Host '   (CommanderScorer head only — Phase 2 encoder frozen)'
-            Write-Host ''
-            Write-Host ' Upload scorer and encoder to API:'
-            Write-Host '   curl -X POST $API_HOST/admin/checkpoint'
-            Write-Host '        -H "x-admin-token: $ADMIN_TOKEN"'
-            Write-Host ('        -F "file=@' + $ckpt + '\phase3_best.pt"')
-            Write-Host '        -F "name=phase3_best"'
-            Write-Host '   # Then open the UI or POST /decks/generate to verify output.'
+            Write-Host ' Upload phase1_best + phase2_bilinear_best to the API (see CLAUDE.md).'
+            Write-Host ' (Phases 3-4 retired in #151 — composition-first architecture.)'
         }
     }
 
@@ -275,17 +261,10 @@ function Assert-Prerequisites {
         }
     }
 
-    # -- Phase 3 requires phase2_best (encoder is frozen, not optional) ------
-    if ($mode -eq 'train' -and $phase -eq 3) {
-        Write-Host -NoNewline "  Checkpoint phase2_best.pt  "
-        if (Test-Path (Join-Path $checkpointsDir 'phase2_best.pt')) {
-            Write-Host "[found]" -ForegroundColor Green
-        } else {
-            Write-Host "[MISSING]" -ForegroundColor Red
-            Write-Host "    Phase 3 requires a phase2_best checkpoint." -ForegroundColor Yellow
-            Write-Host "    Run Phase 2 first: .\scripts\run.ps1 -Train 2" -ForegroundColor Yellow
-            $ok = $false
-        }
+    # -- Phases 3-4 retired (#151): only Phases 1-2 are trainable ------------
+    if ($mode -eq 'train' -and $phase -ge 3) {
+        Write-Host "  Phase $phase is retired (#151) — only Phases 1-2 train." -ForegroundColor Red
+        $ok = $false
     }
 
     Write-Host ""
@@ -358,7 +337,7 @@ if ($Mode -eq 'train') {
         }
     }
 
-    # Phase 3: encoder is frozen in train.py — no extra flags needed.
+
 
     Write-Host "Running trainer with args: $($cmd -join ' ')"
     Set-Location (Join-Path $RepoRoot 'services\trainer')

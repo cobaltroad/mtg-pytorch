@@ -30,34 +30,13 @@ DATASET_CMD_META_PATH = Path(
     os.environ.get("DATASET_CMD_META_PATH", "/data/mtg_commanders.json")
 )
 DECK_SAVE_DIR = Path(os.environ.get("DECK_SAVE_DIR", "/app/generated_decks"))
+CHECKPOINT_DIR = Path(os.environ.get("MODEL_CHECKPOINT_DIR", "/app/checkpoints"))
 
 app = FastAPI(
     title="MTG Commander AI",
     version="0.1.0",
     description="Card similarity search, synergy queries, and commander deck scoring.",
 )
-
-
-# ── Startup: pre-load embeddings in background ────────────────────────────────
-
-
-@app.on_event("startup")
-async def _preload_embeddings():
-    """Fire-and-forget embedding pre-load so the first generate request isn't slow."""
-    if not DATABASE_URL:
-        return
-
-    async def _load():
-        try:
-            from ops import inference
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, inference.get_embeddings, DATABASE_URL)
-            log.info("Embeddings pre-loaded successfully")
-        except Exception as exc:
-            log.warning("Background embedding pre-load failed: %s", exc)
-
-    asyncio.create_task(_load())
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
@@ -334,155 +313,9 @@ async def get_synergies(
     return await synergy_ops.top_partners(db, oracle_id, score_type, limit)
 
 
-# ── Commander candidate scoring ───────────────────────────────────────────────
-
-
-class CandidateOut(BaseModel):
-    oracle_id: UUID
-    name: str
-    type_line: str | None = None
-    mana_cost: str | None = None
-    cmc: float | None = None
-    score: float  # CommanderScorer fit (Phase 3)
-    cosine_sim: float  # Phase 2 encoder cosine similarity
-    tags: list[
-        str
-    ] = []  # role tags + xmage trigger tags; xmage tags prefixed with "⚡"
-
-
-@app.get("/commanders/{oracle_id}/candidates", response_model=list[CandidateOut])
-async def score_commander_candidates(
-    oracle_id: UUID,
-    checkpoint: str = "phase3_best",
-    db: AsyncSession = Depends(get_db),
-):
-    """Score all color-identity-legal cards against a commander.
-
-    Returns all candidates sorted by Phase 3 CommanderScorer output —
-    the model's learned estimate of commander-card fit.  No heuristic
-    adjustments applied.
-    """
-    if not DATABASE_URL:
-        raise HTTPException(503, "DATABASE_URL not configured")
-
-    result = await db.execute(
-        text(
-            "SELECT id::text, color_identity FROM cards WHERE oracle_id = :oid LIMIT 1"
-        ),
-        {"oid": str(oracle_id)},
-    )
-    row = result.fetchone()
-    if not row:
-        raise HTTPException(404, "Commander not found")
-    commander_id, color_identity = row[0], frozenset(row[1] or [])
-
-    from ops import inference
-
-    loop = asyncio.get_event_loop()
-
-    model = await loop.run_in_executor(None, inference.get_model, checkpoint)
-    if model is None:
-        raise HTTPException(
-            503, f"Model checkpoint '{checkpoint}' unavailable or dimension mismatch"
-        )
-
-    embeddings = await loop.run_in_executor(
-        None, inference.get_embeddings, DATABASE_URL
-    )
-    card_meta = await loop.run_in_executor(
-        None, inference.get_card_metadata, DATABASE_URL
-    )
-
-    decomposed_rows = await db.execute(
-        text(
-            "SELECT card_b::text FROM synergy_edges"
-            " WHERE score_type = 'decomposed_candidates' AND card_a = CAST(:cmd_id AS uuid)"
-        ),
-        {"cmd_id": commander_id},
-    )
-    candidates = [
-        row[0]
-        for row in decomposed_rows.fetchall()
-        if row[0] in embeddings and row[0] != commander_id
-    ]
-
-    if not candidates:
-        raise HTTPException(
-            503,
-            "No decomposed_candidates found for this commander. "
-            "Run pipeline.py --stage decompose_commanders then "
-            "--stage compute_commander_value_synergy first.",
-        )
-
-    scored = await loop.run_in_executor(
-        None,
-        lambda: inference.score_candidates(
-            commander_id, candidates, embeddings, model
-        ),
-    )
-
-    out = []
-    for cid, score, cosine_sim in scored:
-        meta = card_meta.get(cid)
-        if meta:
-            out.append(
-                CandidateOut(
-                    score=round(score, 6),
-                    cosine_sim=round(cosine_sim, 6),
-                    **meta,
-                )
-            )
-
-    # Fetch role + xmage trigger tags for all returned candidates in one query.
-    # Role tags are plain (e.g. "ramp"); xmage tags are prefixed with "⚡" to
-    # distinguish their source visually in the UI.
-    if out:
-        oracle_ids = [str(c.oracle_id) for c in out]
-        tag_rows = await db.execute(
-            text("""
-                SELECT c.oracle_id::text,
-                       ca.ability_type,
-                       ca.ability_name,
-                       ca.trigger_event,
-                       ca.source
-                FROM card_abilities ca
-                JOIN cards c ON c.id = ca.card_id
-                WHERE c.oracle_id = ANY(CAST(:oracle_ids AS uuid[]))
-                  AND (
-                    ca.ability_type = 'role'
-                    OR ca.source    = 'xmage'
-                  )
-            """),
-            {"oracle_ids": oracle_ids},
-        )
-        # Build oracle_id → sorted tag list
-        from collections import defaultdict
-
-        tags_by_oracle: dict[str, list[str]] = defaultdict(list)
-        seen_tags: dict[str, set[str]] = defaultdict(set)
-        for oid, ability_type, ability_name, trigger_event, source in tag_rows.fetchall():
-            if source == "xmage":
-                tag = f"⚡ {trigger_event or ability_name}"
-            else:
-                tag = trigger_event or ability_name
-            if tag not in seen_tags[oid]:
-                seen_tags[oid].add(tag)
-                tags_by_oracle[oid].append(tag)
-
-        # Attach tags to each candidate; role tags first, then xmage tags
-        for candidate in out:
-            oid = str(candidate.oracle_id)
-            raw = tags_by_oracle.get(oid, [])
-            candidate.tags = sorted(
-                [t for t in raw if not t.startswith("⚡")],
-            ) + sorted(
-                [t for t in raw if t.startswith("⚡")],
-            )
-
-    return out
-
-
 # ── Composition-first deck building (docs/composition-first-plan.md W5) ──────
+# (The Phase 3 CommanderScorer candidates endpoint lived here until #151;
+#  the composition build below is the deck-building path.)
 
 
 @app.post("/commanders/{oracle_id}/build")
@@ -556,29 +389,6 @@ async def get_generated_deck(filename: str):
     return json.loads(path.read_text())
 
 
-# ── Deck metrics ─────────────────────────────────────────────────────────────
-
-
-@app.get("/decks/metrics")
-async def deck_metrics():
-    """Return cached Recall@K metrics for the current phase3_best checkpoint."""
-    if not DATABASE_URL:
-        raise HTTPException(503, "DATABASE_URL not configured")
-
-    try:
-        from ops import inference
-
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: inference.recall_at_k(DATABASE_URL, checkpoint_name="phase3_best"),
-        )
-        return result
-    except Exception as exc:
-        log.error("Failed to compute deck metrics: %s", exc)
-        raise HTTPException(500, f"Metrics computation failed: {exc}")
-
-
 # ── Training ──────────────────────────────────────────────────────────────────
 
 
@@ -649,51 +459,27 @@ async def stop_training(container_id: str):
 # ── Checkpoint management ─────────────────────────────────────────────────────
 
 
-def _is_scorer_checkpoint(path) -> bool:
-    """Return True only if the checkpoint contains a CommanderScorer state dict.
-
-    CommanderScorer.net.0 is Linear(embed_dim * 2, embed_dim), so its weight
-    has shape (embed_dim, embed_dim * 2) — i.e. dim1 == 2 * dim0.
-
-    BilinearSynergyHead checkpoints have keys like "W.0", "W.1", …
-    CardEncoder checkpoints have net.0.weight with a large input dim (768).
-    Neither should appear in the scorer dropdown.
-    """
-    try:
-        import torch
-        state = torch.load(path, map_location="cpu", weights_only=True)
-        w = state.get("net.0.weight")
-        return w is not None and w.shape[1] == w.shape[0] * 2
-    except Exception:
-        return False
-
-
 @app.get("/checkpoints")
 async def list_checkpoints():
-    """List available CommanderScorer checkpoint files.
+    """List checkpoint files the composition build path can load.
 
-    Only checkpoints whose state dict matches the CommanderScorer architecture
-    are returned.  Encoder checkpoints (phase1_best, phase2_best) and the
-    bilinear head (phase2_bilinear_best) are excluded — selecting them as a
-    scorer would cause a 500 error.
+    Since #151 there is no user-selectable scorer — the composition engine
+    loads the encoder (phase2_best → phase1_best) and the bilinear head
+    automatically.  This listing is informational for the upload workflow.
     """
-    from ops import inference
-
-    if not inference.CHECKPOINT_DIR.exists():
+    if not CHECKPOINT_DIR.exists():
         return []
-    files = sorted(
-        inference.CHECKPOINT_DIR.glob("*.pt"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
     return [
         {
             "name": f.stem,
             "filename": f.name,
             "size_bytes": f.stat().st_size,
         }
-        for f in files
-        if _is_scorer_checkpoint(f)
+        for f in sorted(
+            CHECKPOINT_DIR.glob("*.pt"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
     ]
 
 
@@ -701,17 +487,16 @@ async def list_checkpoints():
 async def upload_checkpoint(
     file: UploadFile = File(...),
     x_admin_token: str = Header(default=""),
-    name: str = "phase3_best",
+    name: str = "phase2_bilinear_best",
 ):
-    """Upload a .pt checkpoint file and hot-swap it into the model cache."""
+    """Upload a .pt checkpoint file (composition ranking loads per-build)."""
     if ADMIN_TOKEN and x_admin_token != ADMIN_TOKEN:
         raise HTTPException(403, "Invalid admin token")
     if not file.filename or not file.filename.endswith(".pt"):
         raise HTTPException(400, "File must be a .pt checkpoint")
 
-    from ops import inference
-
-    dest = inference.CHECKPOINT_DIR / f"{name}.pt"
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = CHECKPOINT_DIR / f"{name}.pt"
     tmp = dest.with_suffix(".pt.tmp")
 
     try:
@@ -722,19 +507,10 @@ async def upload_checkpoint(
         tmp.unlink(missing_ok=True)
         raise HTTPException(500, f"Write failed: {exc}")
 
-    # Evict cached model(s) so next inference loads the new weights.
-    # Uploading phase2_best invalidates ALL bundles (each bundle embeds the encoder).
-    if name == "phase2_best":
-        inference._model_cache.clear()
-        log.info(
-            "phase2_best replaced — full model cache cleared (%d bytes)", len(data)
-        )
-    else:
-        inference._model_cache.pop(name, None)
-        log.info(
-            "Checkpoint uploaded and cache cleared: %s (%d bytes)", dest, len(data)
-        )
-    return {"saved": str(dest), "bytes": len(data), "cache_cleared": True}
+    # No cache to evict: the composition build path loads checkpoints fresh
+    # on every request (shared/composition/ranking.py).
+    log.info("Checkpoint uploaded: %s (%d bytes)", dest, len(data))
+    return {"saved": str(dest), "bytes": len(data)}
 
 
 # ── Training dataset ──────────────────────────────────────────────────────────

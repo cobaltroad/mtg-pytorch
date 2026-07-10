@@ -76,9 +76,13 @@ class Ranker:
 def load_ranker(checkpoint_dir: str | Path = DEFAULT_CHECKPOINT_DIR) -> Ranker | None:
     """Load the frozen encoder + bilinear head; None if unavailable.
 
-    Encoder comes from phase2_best.pt (the API's convention), falling back
-    to phase1_best.pt.  Returns None — never raises — when torch or the
-    checkpoints are missing, so callers can fall back to heuristic ranking.
+    Encoder comes from phase1_best.pt — the canonical encoder since the
+    bilinear Phase 2 (it freezes Phase 1's weights and never writes a new
+    encoder).  phase2_best.pt is accepted as a fallback for volumes that
+    only carry the legacy name.  (Order flipped in #151: the old
+    phase2-first convention served a stale encoder after the #138 retrain.)
+    Returns None — never raises — when torch or the checkpoints are
+    missing, so callers can fall back to heuristic ranking.
     """
     try:
         import torch
@@ -117,7 +121,7 @@ def load_ranker(checkpoint_dir: str | Path = DEFAULT_CHECKPOINT_DIR) -> Ranker |
             return (z_a @ W * z_b).sum(dim=-1)
 
     ckpt = Path(checkpoint_dir)
-    enc_path = next((p for p in (ckpt / "phase2_best.pt", ckpt / "phase1_best.pt") if p.exists()), None)
+    enc_path = next((p for p in (ckpt / "phase1_best.pt", ckpt / "phase2_best.pt") if p.exists()), None)
     bl_path = ckpt / "phase2_bilinear_best.pt"
     if enc_path is None or not bl_path.exists():
         log.warning("checkpoints missing in %s — model ranking disabled", ckpt)

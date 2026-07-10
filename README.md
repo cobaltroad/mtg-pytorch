@@ -159,7 +159,7 @@ the artifact, and that generalises to:
 As artifact coverage approaches 100%, Phase 3 loss increasingly measures
 *memorisation fidelity* rather than generalisation.  A low BPR loss in that
 regime means the model faithfully reproduces the artifact's judgements; the
-true generalization test is recall on held-out commanders and `eval_deck.ps1`
+true generalization test was recall on held-out commanders and the (since-removed) `eval_deck.ps1`
 output on commanders with sparse decompose coverage.
 
 ### Phase 4 — Generative deck construction (retired)

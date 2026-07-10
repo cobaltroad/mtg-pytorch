@@ -360,34 +360,6 @@ class CardEncoder(nn.Module):
         return F.normalize(self.net(x), dim=-1)
 
 
-class CommanderScorer(nn.Module):
-    """Phase 3 scoring head trained on top of a frozen Phase 2 CardEncoder.
-
-    Takes a pair of projected embeddings (commander, candidate card) and
-    produces a scalar affinity score.  The encoder is kept strictly frozen
-    during Phase 3 so that Phase 2's card-similarity geometry is preserved
-    exactly — Phase 3 learns how to *read* that geometry for commander-specific
-    scoring rather than overwriting it.
-    """
-
-    def __init__(self, embed_dim: int = 256):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(embed_dim * 2, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, 1),
-        )
-
-    def forward(
-        self,
-        z_cmd: torch.Tensor,   # (D,) or (K, D)
-        z_card: torch.Tensor,  # (K, D)
-    ) -> torch.Tensor:          # (K,)
-        if z_cmd.dim() == 1:
-            z_cmd = z_cmd.unsqueeze(0).expand_as(z_card)
-        return self.net(torch.cat([z_cmd, z_card], dim=-1)).squeeze(-1)
-
-
 class BilinearSynergyHead(nn.Module):
     """Phase 2 (Option B): relation-specific bilinear scoring matrices W_r.
 
@@ -1088,129 +1060,6 @@ def train_bilinear_phase(
 # ── Phase 3 ───────────────────────────────────────────────────────────────────
 
 
-def train_deck_phase(
-    encoder: CardEncoder,
-    scorer: CommanderScorer,
-    data: dict,
-    embeddings: dict[str, np.ndarray],
-    epochs: int,
-    lr: float,
-    batch_size: int = 32,
-    checkpoint_prefix: str = "phase",
-):
-    """Phase 3: BPR ranking loss on the commanders artifact deck entries.
-
-    The Phase 2 encoder is frozen — its card-similarity geometry is preserved
-    exactly.  Only the CommanderScorer head is trained, learning to read that
-    geometry for commander-specific card scoring.
-
-    All card embeddings are projected through the frozen encoder once at the
-    start of training and cached.  Per-step cost is purely the scorer forward
-    and backward pass.
-
-    BPR loss: -log(sigmoid(score_pos - score_neg))
-    """
-    decks = load_decks_from_artifact(data)
-    if not decks:
-        log.error("Phase 3: no decks in artifact.")
-        return {"phase": 3, "best_loss": None, "best_epoch": None,
-                "final_epoch": 0, "stopped_early": False}
-
-    device = next(encoder.parameters()).device
-
-    # Freeze encoder and pre-project the full card pool once.
-    encoder.requires_grad_(False)
-    encoder.eval()
-    all_ids = list(embeddings.keys())
-    id_to_idx = {cid: i for i, cid in enumerate(all_ids)}
-    all_raw = torch.from_numpy(
-        np.stack([embeddings[k] for k in all_ids]).astype(np.float32)
-    ).to(device)
-    log.info("Phase 3: pre-projecting %d cards through frozen encoder…", len(all_ids))
-    with torch.no_grad():
-        all_proj = torch.cat(
-            [encoder(all_raw[i: i + 512]) for i in range(0, all_raw.size(0), 512)],
-            dim=0,
-        )  # (N, D')
-    log.info("Phase 3: %d deck entries, scorer only", len(decks))
-
-    optimizer = torch.optim.AdamW(scorer.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-
-    best_loss = float("inf")
-    best_epoch = 0
-    for epoch in range(epochs):
-        scorer.train()
-        total_loss = 0.0
-        n_batches = 0
-
-        deck_indices = list(range(len(decks)))
-        random.shuffle(deck_indices)
-
-        for idx in deck_indices:
-            deck = decks[idx]
-            cmd_id = deck["commander_id"]
-            card_ids = deck["card_ids"]
-            legal_neg_idx = deck["legal_neg_indices"]
-
-            if cmd_id not in id_to_idx or len(card_ids) < 2:
-                continue
-
-            pos_indices = [id_to_idx[c] for c in card_ids if c in id_to_idx]
-            if len(pos_indices) < 2:
-                continue
-
-            z_cmd = all_proj[id_to_idx[cmd_id]]          # (D',)
-            z_pos = all_proj[torch.tensor(pos_indices, device=device)]  # (K, D')
-            K = z_pos.size(0)
-
-            neg_pool = (
-                legal_neg_idx.numpy()
-                if hasattr(legal_neg_idx, "numpy")
-                else legal_neg_idx
-            )
-            chosen = np.random.choice(neg_pool, size=K, replace=True)
-            z_neg = all_proj[torch.from_numpy(chosen).to(device)]  # (K, D')
-
-            score_pos = scorer(z_cmd, z_pos)   # (K,)
-            score_neg = scorer(z_cmd, z_neg)   # (K,)
-            loss = -F.logsigmoid(score_pos - score_neg).mean()
-
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(scorer.parameters(), 1.0)
-            optimizer.step()
-
-            total_loss += loss.item()
-            n_batches += 1
-
-        scheduler.step()
-        avg = total_loss / max(n_batches, 1)
-        log.info(
-            "Phase 3  epoch %d/%d  loss=%.4f  lr=%.2e",
-            epoch + 1, epochs, avg, scheduler.get_last_lr()[0],
-        )
-
-        if WANDB_ENABLED:
-            _wandb_log({
-                "phase": 3, "epoch": epoch + 1,
-                "loss": avg, "lr": scheduler.get_last_lr()[0],
-            })
-
-        if avg < best_loss:
-            best_loss = avg
-            best_epoch = epoch + 1
-            save_checkpoint(scorer, checkpoint_prefix + "3_best")
-
-    save_checkpoint(scorer, f"{checkpoint_prefix}3_epoch{epochs}")
-    return {"phase": 3, "best_loss": best_loss, "best_epoch": best_epoch,
-            "final_epoch": epochs, "stopped_early": False}
-
-
-
-# ── Checkpoint helpers ────────────────────────────────────────────────────────
-
-
 def save_checkpoint(model: nn.Module, name: str):
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     path = CHECKPOINT_DIR / f"{name}.pt"
@@ -1415,24 +1264,6 @@ def load_synergy_pairs_from_artifact(
     return pairs
 
 
-def load_decks_from_artifact(data: dict) -> list[dict]:
-    """Reconstruct deck list (same schema as load_decks) from artifact."""
-    card_ids = data["card_ids"]
-    decks = []
-    for d in data["decks"]:
-        cmd_idx = d["commander_idx"]
-        decks.append(
-            {
-                "commander_id": card_ids[cmd_idx],
-                "card_ids": [card_ids[i] for i in d["card_idxs"]],
-                "color_identity": frozenset(d.get("color_identity", [])),
-                "legal_neg_indices": d["legal_neg_indices"].numpy(),
-                "archetype": d.get("archetype", "unknown"),
-            }
-        )
-    return decks
-
-
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -1445,7 +1276,7 @@ def main():
         help="Path to pre-built training artifact (.pt from export_dataset.py). "
         "When set, all DB queries are skipped — no DATABASE_URL required.",
     )
-    parser.add_argument("--phase", type=int, choices=[1, 2, 3], default=2)
+    parser.add_argument("--phase", type=int, choices=[1, 2], default=2)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -1728,38 +1559,7 @@ def main():
             )
             _wandb_summary(summary)
 
-    elif args.phase == 3:
-        if not _artifact:
-            log.error("Phase 3 requires --dataset pointing to mtg_commanders.pt")
-            return
-
-        embeddings = load_embeddings_from_artifact(_artifact)
-        if not embeddings:
-            log.error("No embeddings found in artifact.")
-            return
-
-        input_dim = len(next(iter(embeddings.values())))
-        encoder = CardEncoder(input_dim=input_dim).to(device)
-        warm = "phase2_best"
-        if not (CHECKPOINT_DIR / (warm + ".pt")).exists():
-            log.error("Phase 3 requires a phase2_best checkpoint — run Phase 2 first.")
-            return
-        load_checkpoint(encoder, warm, device)
-
-        embed_dim = encoder.net[-1].out_features
-        scorer = CommanderScorer(embed_dim=embed_dim).to(device)
-
-        summary = train_deck_phase(
-            encoder,
-            scorer,
-            _artifact,
-            embeddings,
-            args.epochs,
-            args.lr,
-            args.batch_size,
-            checkpoint_prefix=pfx,
-        )
-        _wandb_summary(summary)
+# (Phase 3 CommanderScorer training removed in #151 — composition-first.)
 
     else:
         log.warning("Phase %d not yet implemented.", args.phase)
