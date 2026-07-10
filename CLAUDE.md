@@ -416,7 +416,7 @@ The Streamlit UI (`services/ui/app.py`) has two tabs:
 
 | Tab | Purpose |
 |-----|---------|
-| **Deck Builder** | Search for a commander; **Composition build** section (POST `/commanders/{oracle_id}/build`, model or heuristic ranking) renders the quota table with "because" strings, goldfish metrics, theme density, and slot breakdown.  Legacy CommanderScorer candidate table below it (#151). |
+| **Deck Builder** | Search for a commander; **Composition build** section (POST `/commanders/{oracle_id}/build`, model or heuristic ranking) renders the quota table with "because" strings, goldfish metrics, theme density, and slot breakdown.  (The CommanderScorer candidate table and checkpoint picker were removed in #151.) |
 | **Generated Decks** | Browse and inspect all previously generated decks (composition decks include the full composition block).  Auto-selects the most recently generated deck when navigating from the builder. |
 
 The `app.py` is **baked into the Docker image** — changes require a rebuild:
