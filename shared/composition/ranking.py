@@ -86,39 +86,11 @@ def load_ranker(checkpoint_dir: str | Path = DEFAULT_CHECKPOINT_DIR) -> Ranker |
     """
     try:
         import torch
-        import torch.nn as nn
-        import torch.nn.functional as F
+
+        from .models import BilinearSynergyHead, CardEncoder  # canonical (#152)
     except ImportError:
         log.warning("torch unavailable — model ranking disabled")
         return None
-
-    class CardEncoder(nn.Module):  # mirrors ops/model.py
-        def __init__(self, input_dim=768, hidden_dim=512, output_dim=256):
-            super().__init__()
-            self.net = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.GELU(),
-                nn.LayerNorm(hidden_dim),
-                nn.Dropout(0.1),
-                nn.Linear(hidden_dim, output_dim),
-            )
-
-        def forward(self, x):
-            return F.normalize(self.net(x), dim=-1)
-
-    class BilinearSynergyHead(nn.Module):  # mirrors ops/model.py
-        RELATIONS = ["effect_peer", "ability_trigger", "combo", "decomposed_candidates"]
-
-        def __init__(self, embed_dim=256):
-            super().__init__()
-            self.rel_to_idx = {r: i for i, r in enumerate(self.RELATIONS)}
-            self.W = nn.ParameterList(
-                [nn.Parameter(torch.eye(embed_dim)) for _ in self.RELATIONS]
-            )
-
-        def score(self, z_a, z_b, relation):
-            W = self.W[self.rel_to_idx[relation] if isinstance(relation, str) else relation]
-            return (z_a @ W * z_b).sum(dim=-1)
 
     ckpt = Path(checkpoint_dir)
     enc_path = next((p for p in (ckpt / "phase1_best.pt", ckpt / "phase2_best.pt") if p.exists()), None)
