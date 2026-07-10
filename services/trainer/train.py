@@ -37,6 +37,7 @@ import math
 import os
 import random
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -341,93 +342,10 @@ class ColorBucketBatchSampler(Sampler):
 # ── Model ─────────────────────────────────────────────────────────────────────
 
 
-class CardEncoder(nn.Module):
-    """Projects a pre-computed embedding into a shared latent space."""
-
-    def __init__(
-        self, input_dim: int = 768, hidden_dim: int = 512, output_dim: int = 256
-    ):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.GELU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, output_dim),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.net(x), dim=-1)
-
-
-class BilinearSynergyHead(nn.Module):
-    """Phase 2 (Option B): relation-specific bilinear scoring matrices W_r.
-
-    score(A, B, r) = A^T W_r B
-
-    One matrix per relation type, initialised to identity so that at the
-    start of training score(A, B, r) = cosine-similarity (Phase 1 geometry
-    is preserved exactly at init).
-
-    The CardEncoder is frozen during bilinear training — only W_r matrices
-    are updated.  This separates the four signal types that Phase 2 NT-Xent
-    incorrectly collapses together:
-
-        effect_peer           — symmetric functional equivalence (valid for
-                                similarity training)
-        ability_trigger       — producer → consumer (complementary, not similar)
-        combo                 — game-state interaction (complementary)
-        decomposed_candidates — commander → deck candidate (directed relevance)
-
-    At inference the decomposed_candidates relation is used to score how
-    well a given card fits a commander's strategy.
-    """
-
-    RELATIONS: list[str] = [
-        "effect_peer",
-        "ability_trigger",
-        "combo",
-        "decomposed_candidates",
-    ]
-
-    def __init__(self, embed_dim: int = 256):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.rel_to_idx: dict[str, int] = {r: i for i, r in enumerate(self.RELATIONS)}
-        # Identity init: score(A, B, r) = A · B (cosine sim for unit vectors).
-        self.W = nn.ParameterList(
-            [nn.Parameter(torch.eye(embed_dim)) for _ in self.RELATIONS]
-        )
-
-    def _rel_idx(self, relation: int | str) -> int:
-        if isinstance(relation, str):
-            return self.rel_to_idx[relation]
-        return relation
-
-    def score_matrix(
-        self, z_a: torch.Tensor, z_b: torch.Tensor, relation: int | str
-    ) -> torch.Tensor:
-        """Return (B_a, B_b) bilinear score matrix.
-
-        [i, j] = z_a[i]^T W_r z_b[j]
-
-        Diagonal entries are the positive-pair scores; off-diagonal entries
-        are in-batch negatives for InfoNCE loss.
-        """
-        W = self.W[self._rel_idx(relation)]
-        return z_a @ W @ z_b.T  # (B_a, B_b)
-
-    def score(
-        self, z_a: torch.Tensor, z_b: torch.Tensor, relation: int | str
-    ) -> torch.Tensor:
-        """Return (B,) pairwise bilinear scores.
-
-        score[i] = z_a[i]^T W_r z_b[i]
-
-        Used at inference to score (commander, candidate) pairs.
-        """
-        W = self.W[self._rel_idx(relation)]
-        return (z_a @ W * z_b).sum(dim=-1)  # (B,)
+# Model architectures are canonical in shared/composition/models.py (#152).
+# The path shim below lets the non-Docker Windows trainer resolve shared/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
+from composition.models import BilinearSynergyHead, CardEncoder  # noqa: E402
 
 
 # ── Datasets ──────────────────────────────────────────────────────────────────

@@ -53,18 +53,19 @@ mtg-pytorch/
 │   │       └── import_spellbook.py         #   Commander Spellbook combo imports
 │   ├── jupyter/                # Lightweight JupyterLab image (CPU, no training deps)
 │   └── ui/                     # Streamlit interface
-├── shared/                     # Mounted at /shared (PYTHONPATH) in api + ingest
+├── shared/                     # Mounted at /shared (PYTHONPATH) in api, ingest, jupyter
 │   ├── composition/            # Composition engine — pure Python, no DB/torch deps
 │   │   ├── card_facts.py       #   Layer-1 parsing: pips, land classes, MDFC
 │   │   ├── profile.py          #   Quota derivation per commander (+ "because" strings)
 │   │   ├── karsten.py          #   Hypergeometric castability math
 │   │   ├── goldfish.py         #   Monte Carlo castability simulator
 │   │   ├── builder.py          #   Quota fill + mana base + feedback loop
+│   │   ├── models.py           #   CANONICAL CardEncoder + BilinearSynergyHead (#152; torch)
 │   │   ├── ranking.py          #   Phase 1/2 checkpoint loader, in-slot ranking (lazy torch)
 │   │   ├── evaluation.py       #   Hard invariants + human-range checks (harness core)
 │   │   └── pool_helpers.py     #   DB-row → card dict, staple pool SQL map
 │   └── mtg_sql/                # Staple SQL fragments (ramp, removal, protection, …)
-├── models/                     # (empty — model classes live in trainer/api/ranking; #152)
+├── models/                     # (unused legacy dir — canonical classes: shared/composition/models.py)
 ├── notebooks/                  # Jupyter notebooks (mounted into jupyter service)
 └── mage/                       # XMage reference: Java rules engine (read-only)
 ```
