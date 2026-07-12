@@ -22,6 +22,7 @@ from mtg_sql.staples import (
     protection,
     removal,
     sweeper,
+    wincon,
 )
 from mtg_sql.staples.ramp import SQL as _RAMP_SQL
 
@@ -38,12 +39,18 @@ POOL_SQL: dict[str, str] = {
     "spot_removal": f"(({removal.SQL}) OR ({interaction.COUNTERSPELLS}))",
     "sweeper": sweeper.SQL,
     "protection": protection.SQL,
+    # Deliberate finishers for the wincon audit (#141) — not a quota; the
+    # builder guarantees a win path among the spells.
+    "wincon": wincon.SQL,
+    # Drain/ping sources — counted for density in the win-path audit,
+    # never drawn from as a pool.
+    "drain": wincon.DRAIN,
 }
 
 #: Canonical column list — c = cards, f = card_facts.
 CARD_COLUMNS = (
     "c.id::text AS id, c.name, c.cmc, c.mana_cost, c.color_identity,"
-    " c.produced_mana, c.type_line, c.oracle_text, c.edhrec_rank,"
+    " c.produced_mana, c.type_line, c.oracle_text, c.edhrec_rank, c.power,"
     " f.pips, f.hybrid_pips, f.is_land, f.is_basic, f.etb_tapped, f.is_fetch,"
     " f.is_mdfc_land"
 )
@@ -86,12 +93,21 @@ def _jsonish(value, default):
     return json.loads(value)
 
 
+def _power(value) -> int:
+    """Numeric power for win-path math; '*'-style powers count as 0."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def row_to_card(row, roles: set[str]) -> dict:
     """Convert a CARD_COLUMNS row (mapping-like) into a builder card dict."""
     return {
         "id": row["id"],
         "name": row["name"],
         "mv": int(row["cmc"] or 0),
+        "power": _power(row["power"]),
         "mana_cost": row["mana_cost"],
         "type_line": row["type_line"],
         "pips": _jsonish(row["pips"], {}),

@@ -24,7 +24,7 @@ services/ingest/scripts/eval_harness.py.
 
 from __future__ import annotations
 
-from .builder import MAX_LANDS, MIN_LANDS, BuildResult
+from .builder import MAX_LANDS, MIN_LANDS, BuildResult, assess_win_path
 from .profile import CompositionProfile
 
 _WUBRG_C = set("WUBRGC")
@@ -59,7 +59,9 @@ def deck_census(result: BuildResult) -> dict[str, int]:
         "spot_removal": len(br.get("spot_removal", [])),
         "sweepers": len(br.get("sweeper", [])),
         "protection": len(br.get("protection", [])),
-        "theme": len(br.get("theme", [])) + len(br.get("filler", [])),
+        # Forced wincons (#141) occupy theme slots — count them as theme.
+        "theme": len(br.get("theme", [])) + len(br.get("filler", []))
+        + len(br.get("wincon", [])),
     }
 
 
@@ -110,6 +112,15 @@ def check_build(
             f"castability gate failed: "
             f"P={result.goldfish.p_commander_by_go_live:.2f} < {result.gate:.2f}"
         )
+
+    # Win-path audit (#141): the deck needs a credible way to close games —
+    # dedicated finishers, a combat-win strategy (voltron/counters/anthem/
+    # infect), combat mass, or drain density.  A miss is tolerated only
+    # when the builder warned (color identities with no reachable path).
+    spells = [c for c in deck if not c["is_land"]]
+    win_ok, how = assess_win_path(spells, profile.signals)
+    if not win_ok and not any("no win path" in w for w in result.warnings):
+        failures.append(f"win-path audit failed ({how})")
 
     failures += quota_audit(profile, result, census)
     return failures
