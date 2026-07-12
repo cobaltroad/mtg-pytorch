@@ -61,6 +61,7 @@ def make_pools():
         "U": card("Island", is_land=True, is_basic=True, produces=["U"], etb_tapped="untapped"),
         "B": card("Swamp", is_land=True, is_basic=True, produces=["B"], etb_tapped="untapped"),
     }
+    pools["wincon"] = [card(f"Finisher {i}", mv=5, pips={"B": 1}) for i in range(4)]
     forced = [
         card("Sol Ring", mv=1, produces=["C"], roles={"ramp"}),
         card("Arcane Signet", mv=2, produces=["U", "B"], roles={"ramp"}),
@@ -234,6 +235,55 @@ def test_mdfc_spells_grant_land_credit():
     from composition.evaluation import check_build
     ci = {c["id"]: {"U", "B"} for c in r.deck}
     assert check_build(WILHELT_PROFILE, r, {"U", "B"}, ci) == []
+
+
+def test_wincon_audit_forces_finishers():
+    """#141: a wincon-less theme gets WINCON_MIN finishers swapped in."""
+    from composition.builder import WINCON_MIN
+
+    r = _build()  # make_pools theme has no wincons
+    assert len(r.breakdown["wincon"]) == WINCON_MIN
+    wincons = sum(1 for c in r.deck if "wincon" in (c.get("roles") or set()))
+    assert wincons >= WINCON_MIN
+    assert len(r.deck) == 99
+
+
+def test_wincon_audit_skips_when_theme_already_wins():
+    """A theme that already carries finishers is not touched."""
+    pools, land_pool, basics, forced = make_pools()
+    themed_wincons = [dict(card(f"Theme Finisher {i}", mv=4, pips={"B": 1}),
+                           theme_keys={"death_trigger"})
+                      for i in range(3)]
+    pools["wincon"] = themed_wincons + pools["wincon"]
+    pools["theme"] = themed_wincons + pools["theme"]
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert r.breakdown["wincon"] == []  # nothing forced
+    wincons = sum(1 for c in r.deck if "wincon" in (c.get("roles") or set()))
+    assert wincons >= 2
+
+
+def test_wincon_pool_exhausted_warns_and_is_tolerated():
+    from composition.evaluation import check_build
+
+    pools, land_pool, basics, forced = make_pools()
+    pools["wincon"] = []
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert any("wincon pool exhausted" in w for w in r.warnings)
+    ci = {c["id"]: {"U", "B"} for c in r.deck}
+    assert check_build(WILHELT_PROFILE, r, {"U", "B"}, ci) == []
+
+
+def test_silent_wincon_shortfall_fails_evaluation():
+    from composition.evaluation import check_build
+
+    r = _build()
+    for c in r.deck:  # fabricate: strip wincon tags without a warning
+        c.get("roles", set()).discard("wincon")
+    failures = check_build(WILHELT_PROFILE, r, {"U", "B"},
+                           {c["id"]: {"U", "B"} for c in r.deck})
+    assert any("wincon audit" in f for f in failures)
 
 
 def test_sort_pool_popularity_prior():

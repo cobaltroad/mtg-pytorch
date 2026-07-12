@@ -24,7 +24,7 @@ services/ingest/scripts/eval_harness.py.
 
 from __future__ import annotations
 
-from .builder import MAX_LANDS, MIN_LANDS, BuildResult
+from .builder import MAX_LANDS, MIN_LANDS, WINCON_MIN, BuildResult
 from .profile import CompositionProfile
 
 _WUBRG_C = set("WUBRGC")
@@ -59,7 +59,9 @@ def deck_census(result: BuildResult) -> dict[str, int]:
         "spot_removal": len(br.get("spot_removal", [])),
         "sweepers": len(br.get("sweeper", [])),
         "protection": len(br.get("protection", [])),
-        "theme": len(br.get("theme", [])) + len(br.get("filler", [])),
+        # Forced wincons (#141) occupy theme slots — count them as theme.
+        "theme": len(br.get("theme", [])) + len(br.get("filler", []))
+        + len(br.get("wincon", [])),
     }
 
 
@@ -109,6 +111,17 @@ def check_build(
         failures.append(
             f"castability gate failed: "
             f"P={result.goldfish.p_commander_by_go_live:.2f} < {result.gate:.2f}"
+        )
+
+    # Wincon audit (#141): the deck must contain deliberate finishers.
+    # A shortfall is tolerated only when the builder warned about it
+    # (color identities whose wincon pool is genuinely too thin).
+    wincons = sum(1 for c in deck if "wincon" in (c.get("roles") or set()))
+    if wincons < WINCON_MIN and not any(
+        "wincon pool exhausted" in w for w in result.warnings
+    ):
+        failures.append(
+            f"wincon audit: {wincons} deliberate finisher(s), need {WINCON_MIN}"
         )
 
     failures += quota_audit(profile, result, census)

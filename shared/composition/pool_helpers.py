@@ -22,6 +22,7 @@ from mtg_sql.staples import (
     protection,
     removal,
     sweeper,
+    wincon,
 )
 from mtg_sql.staples.ramp import SQL as _RAMP_SQL
 
@@ -38,6 +39,9 @@ POOL_SQL: dict[str, str] = {
     "spot_removal": f"(({removal.SQL}) OR ({interaction.COUNTERSPELLS}))",
     "sweeper": sweeper.SQL,
     "protection": protection.SQL,
+    # Deliberate finishers for the wincon audit (#141) — not a quota; the
+    # builder guarantees WINCON_MIN of these among the spells.
+    "wincon": wincon.SQL,
 }
 
 #: Canonical column list — c = cards, f = card_facts.
