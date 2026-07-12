@@ -170,7 +170,12 @@ def simulate(
 
             _, mana = _available()
 
-            # Greedy ramp before the commander comes down.
+            # Greedy ramp before the commander comes down.  Colored costs
+            # are checked against the sources usable this turn (#145) — a
+            # {G} dork is not castable off a hand of Swamps.  Approximation:
+            # each ramp cast re-checks against the full usable set rather
+            # than tracking which specific source paid which pip (mildly
+            # optimistic for multiple colored ramp casts in one turn).
             ramp_in_hand = sorted(
                 (c for c in hand if "ramp" in (c.get("roles") or set()) and not c["is_land"]),
                 key=lambda c: c["mv"],
@@ -178,6 +183,15 @@ def simulate(
             for card in ramp_in_hand:
                 if card["mv"] > mana:
                     break
+                usable_now, _ = _available()
+                if not _pips_satisfied(
+                    card.get("pips") or {},
+                    card.get("hybrid") or [],
+                    [colors for colors, _ in usable_now],
+                    mana,
+                    card["mv"],
+                ):
+                    continue  # colored cost unpayable — a pricier rock may still work
                 hand.remove(card)
                 mana -= card["mv"]
                 if card.get("produces"):

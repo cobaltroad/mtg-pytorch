@@ -355,6 +355,26 @@ def test_land_quality_fetch_and_mdfc():
     assert land_quality(mdfc, identity) > land_quality(off_color, identity)
 
 
+def test_goldfish_ramp_respects_colored_costs():
+    """#145: a {G} dork is not castable off Swamps — off-color ramp must
+    not accelerate the commander; on-color ramp must."""
+    swamp = card("Swamp", is_land=True, produces=["B"], etb_tapped="untapped")
+    forest = card("Forest", is_land=True, produces=["G"], etb_tapped="untapped")
+    dork = card("Elf", mv=1, pips={"G": 1}, produces=["G"], roles={"ramp"})
+    spell = card("Filler", mv=3, pips={})
+
+    def deck(land):
+        return ([dict(land, id=f"l{i}") for i in range(36)]
+                + [dict(dork, id=f"d{i}") for i in range(10)]
+                + [dict(spell, id=f"s{i}") for i in range(53)])
+
+    # 4-drop by T3 requires the dorks to actually cast.
+    p_off = simulate(deck(swamp), 4, {"B": 1}, 3, games=400).p_commander_by_go_live
+    p_on = simulate(deck(forest), 4, {"G": 1}, 3, games=400).p_commander_by_go_live
+    assert p_on > 0.3
+    assert p_off < 0.05  # dorks are dead cards off Swamps
+
+
 def test_goldfish_prefers_more_lands():
     land = card("Forest", is_land=True, produces=["G"], etb_tapped="untapped")
     spell = card("Bear", mv=2, pips={"G": 1})
