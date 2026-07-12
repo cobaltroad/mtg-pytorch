@@ -323,6 +323,7 @@ async def build_commander_deck(
     oracle_id: UUID,
     ranking: str = Query("model", pattern="^(model|heuristic)$"),
     goldfish_games: int = Query(400, ge=50, le=2000),
+    partner_oracle_id: UUID | None = Query(None, description="second commander for partner pairs (98-card deck)"),
     db: AsyncSession = Depends(get_db),
 ):
     """Build a full 99-card deck with the composition engine.
@@ -342,6 +343,7 @@ async def build_commander_deck(
             ranking=ranking,
             goldfish_games=goldfish_games,
             save_dir=DECK_SAVE_DIR,
+            partner_oracle_id=str(partner_oracle_id) if partner_oracle_id else None,
         )
     except LookupError as e:
         raise HTTPException(404, str(e))

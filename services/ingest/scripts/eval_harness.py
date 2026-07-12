@@ -61,6 +61,9 @@ GOLDEN_COMMANDERS = [
     "Karador, Ghost Chieftain",
 ]
 
+#: Partner pair built as a 98-card deck (#147) — appended to every run.
+GOLDEN_PARTNER: tuple[str, str] = ("Rograkh, Son of Rohgahh", "Silas Renn, Seeker Adept")
+
 #: Only compare census metrics a human decklist can be measured on the
 #: same way (pool membership is color-blind and archetype-blind, so theme
 #: has no human equivalent).
@@ -246,10 +249,14 @@ def main() -> None:
 
         report: list[dict] = []
         n_failures = 0
-        for name in names:
+        builds = [(name, None) for name in names]
+        if names is GOLDEN_COMMANDERS or args.commanders == "":
+            builds.append(GOLDEN_PARTNER)
+        for name, partner in builds:
             try:
                 profile, result = build_for_commander(
-                    name, goldfish_games=args.games, ranking=args.ranking
+                    name, goldfish_games=args.games, ranking=args.ranking,
+                    partner=partner,
                 )
             except SystemExit as e:
                 report.append({"commander": name, "failures": [f"build aborted: {e}"]})

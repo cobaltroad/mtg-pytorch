@@ -63,13 +63,24 @@ def normalize_deck_list(deck_list) -> list[dict]:
     return []
 
 
+def _split_partner_names(deck_name: str) -> list[str]:
+    """Split partner deck names on '//' or single '/' (#147).
+
+    cardtrak exports use both separators ('Tymna // Thrasios' and
+    'Tymna / Thrasios'); single-slash names were previously skipped.
+    Card names themselves never contain a bare slash.
+    """
+    sep = "//" if "//" in deck_name else "/"
+    return [p.strip() for p in deck_name.split(sep)]
+
+
 def resolve_commander(deck_name: str, name_index: dict[str, str]) -> str | None:
     """
     Commander is identified by deck_name.
     For partner decks (name1 // name2), try each part.
     Returns card_id or None.
     """
-    parts = [p.strip() for p in deck_name.split("//")]
+    parts = _split_partner_names(deck_name)
     for part in parts:
         cid = name_index.get(part.lower())
         if cid:
@@ -100,7 +111,7 @@ async def import_decks(decklists: list[dict], name_index: dict[str, str], conn) 
             continue
 
         # Resolve maindeck cards (exclude the commander itself by name)
-        cmd_names = {p.strip().lower() for p in deck_name.split("//")}
+        cmd_names = {p.lower() for p in _split_partner_names(deck_name)}
         card_ids: list[str] = []
         unresolved = 0
         for card in cards:

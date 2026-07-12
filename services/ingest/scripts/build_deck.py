@@ -8,6 +8,7 @@ prints the built deck with quota breakdown and goldfish metrics.
 Usage:
     docker compose run --rm ingest python -m scripts.build_deck "Wilhelt"
     docker compose run --rm ingest python -m scripts.build_deck "Syr Gwyn" --json
+    docker compose run --rm ingest python -m scripts.build_deck "Rograkh" --partner "Silas Renn"
 """
 from __future__ import annotations
 
@@ -29,7 +30,11 @@ from composition.pool_helpers import (  # noqa: E402
     row_to_card as _row_to_card,
     sort_pool,
 )
-from composition.profile import CompositionProfile, derive_profile  # noqa: E402
+from composition.profile import (  # noqa: E402
+    CompositionProfile,
+    derive_partner_profile,
+    derive_profile,
+)
 from stages.decompose import DATABASE_URL, _detect, _fetch  # noqa: E402
 from synergy.commander_mechanics import PATTERN_KEY_TO_CONSUMER_SQL  # noqa: E402
 
@@ -166,36 +171,72 @@ def _forced(conn, identity: frozenset[str]) -> list[dict]:
     return out
 
 
+def _commander_inputs(conn, name: str) -> dict:
+    """Fetch one commander's profile inputs (partial name match)."""
+    cards = _fetch(name)
+    if not cards:
+        sys.exit(f"No commander matching {name!r}")
+    c = cards[0]
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+        cur.execute("SELECT pips FROM card_facts WHERE card_id = %s::uuid", (c["id"],))
+        row = cur.fetchone()
+    pips = {}
+    if row:
+        pips = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    keys = {k for k, _l, _p in _detect(c["oracle_text"] or "", c["type_line"] or "")}
+    return {
+        "id": c["id"],
+        "name": c["name"],
+        "oracle_text": c["oracle_text"],
+        "mana_value": c["cmc"] or 0,
+        "pips": pips,
+        "color_identity": sorted(c["color_identity"] or []),
+        "decompose_keys": keys,
+    }
+
+
 def build_for_commander(
     name: str,
     goldfish_games: int = 500,
     ranking: str = "heuristic",
+    partner: str | None = None,
 ) -> tuple[CompositionProfile, object]:
-    """ranking: 'heuristic' (W3 baseline) or 'model' (Phase 1/2 re-ranked)."""
-    cards = _fetch(name)
-    if not cards:
-        sys.exit(f"No commander matching {name!r}")
-    commander = cards[0]
-    identity = frozenset(commander["color_identity"] or [])
-
+    """ranking: 'heuristic' (W3 baseline) or 'model' (Phase 1/2 re-ranked).
+    partner: second commander name for partner pairs (#147) — 98-card deck.
+    """
     conn = psycopg2.connect(DATABASE_URL)
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("SELECT pips FROM card_facts WHERE card_id = %s::uuid", (commander["id"],))
-            row = cur.fetchone()
-        pips = {}
-        if row:
-            pips = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        commanders = [_commander_inputs(conn, name)]
+        if partner:
+            commanders.append(_commander_inputs(conn, partner))
+        commander = commanders[0]
+        identity = frozenset(c for cmd in commanders for c in cmd["color_identity"])
+        keys = {k for cmd in commanders for k in cmd["decompose_keys"]}
 
-        keys = {k for k, _l, _p in _detect(commander["oracle_text"] or "", commander["type_line"] or "")}
-        profile = derive_profile(commander["name"], commander["cmc"] or 0, pips,
-                                 sorted(identity), keys)
+        if partner:
+            profile = derive_partner_profile(commanders)
+        else:
+            profile = derive_profile(commander["name"], commander["mana_value"],
+                                     commander["pips"], sorted(identity), keys)
 
+        commander_ids = {cmd["id"] for cmd in commanders}
         pools = {
-            role: [c for c in _query_pool(conn, where, identity, role) if c["id"] != commander["id"]]
+            role: [c for c in _query_pool(conn, where, identity, role) if c["id"] not in commander_ids]
             for role, where in _POOL_SQL.items()
         }
-        pools["theme"] = _theme_pool(conn, keys, identity, commander["id"])
+        theme_seen: dict = {}
+        for cmd in commanders:
+            for card in _theme_pool(conn, cmd["decompose_keys"], identity, cmd["id"]):
+                if card["id"] in commander_ids:
+                    continue
+                if card["id"] in theme_seen:
+                    theme_seen[card["id"]]["theme_keys"] |= card.get("theme_keys", set())
+                else:
+                    theme_seen[card["id"]] = card
+        pools["theme"] = sorted(
+            theme_seen.values(),
+            key=lambda c: (-len(c.get("theme_keys", ())), c["edhrec_rank"], c["name"]),
+        )
 
         if ranking == "model":
             from composition.ranking import load_ranker
@@ -219,7 +260,9 @@ def build_for_commander(
 
         # Commanders that discount their own cost (Karador) get a per-turn
         # generic discount simulated in the goldfisher (#142).
-        cost_reduction = bool(COST_REDUCTION_RE.search(commander["oracle_text"] or ""))
+        cost_reduction = any(
+            COST_REDUCTION_RE.search(cmd["oracle_text"] or "") for cmd in commanders
+        )
 
         result = build_deck(
             profile,
@@ -244,7 +287,15 @@ def main() -> None:
     if not args:
         sys.exit(__doc__)
     ranking = "model" if "--ranking=model" in sys.argv or "--model" in sys.argv else "heuristic"
-    profile, result = build_for_commander(args[0], ranking=ranking)
+    partner = None
+    for i, a in enumerate(sys.argv):
+        if a == "--partner" and i + 1 < len(sys.argv):
+            partner = sys.argv[i + 1]
+        elif a.startswith("--partner="):
+            partner = a.split("=", 1)[1]
+    if partner in args:
+        args.remove(partner)
+    profile, result = build_for_commander(args[0], ranking=ranking, partner=partner)
 
     if "--json" in sys.argv:
         print(json.dumps({
@@ -266,7 +317,8 @@ def main() -> None:
     print(f"theme density: commander_edge_rate={d['commander_edge_rate']:.2f} "
           f"pairwise_rate={d['pairwise_rate']:.3f}")
     lands = sum(1 for c in result.deck if c["is_land"])
-    print(f"99 cards: {lands} lands ({result.basic_counts}), {99 - lands} spells")
+    total = len(result.deck)
+    print(f"{total} cards: {lands} lands ({result.basic_counts}), {total - lands} spells")
     print(f"goldfish: P(cast by T{check_turn}) = {g.p_commander_by_go_live:.2f} "
           f"(gate {result.gate:.2f} {'PASS' if result.gate_passed else 'FAIL'}), "
           f"avg cast T{g.avg_cast_turn:.1f}, keepable {g.keepable_rate:.2f}")

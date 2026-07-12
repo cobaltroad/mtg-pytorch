@@ -378,3 +378,20 @@ class TestWinConditions:
         cards = [_storm_spell()] * 5 + [_spell("Sorcery", 1.0, "Draw a card.")] * 20 + [_land()] * 36
         result = detect_archetype(cards)
         assert "storm" in result["win_conditions"]
+
+
+# ── partner deck-name splitting (#147) ────────────────────────────────────────
+
+
+def test_split_partner_names():
+    from import_decklists import _split_partner_names
+
+    assert _split_partner_names("Tymna the Weaver // Thrasios, Triton Hero") == [
+        "Tymna the Weaver", "Thrasios, Triton Hero",
+    ]
+    assert _split_partner_names("Tymna the Weaver / Thrasios, Triton Hero") == [
+        "Tymna the Weaver", "Thrasios, Triton Hero",
+    ]
+    assert _split_partner_names("Atraxa, Praetors' Voice") == [
+        "Atraxa, Praetors' Voice",
+    ]

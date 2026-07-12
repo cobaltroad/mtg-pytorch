@@ -119,8 +119,14 @@ def simulate(
     max_turns: int = 12,
     seed: int = 0,
     generic_discount: bool = False,
+    second_commander: dict | None = None,
 ) -> GoldfishResult:
     """Run `games` solitaire simulations of `deck` (list of 99 card dicts).
+
+    second_commander (#147): partner pairs cast BOTH commanders —
+    {"mv": int, "pips": dict}.  The cheaper partner is cast first when
+    affordable (spending that turn's mana like a ramp cast); cast_turn
+    records the turn the LAST partner lands.
 
     generic_discount (#142): for commanders that reduce their own cost
     ("costs {1} less to cast for each creature card in your graveyard" —
@@ -150,6 +156,7 @@ def simulate(
         battlefield: list[tuple[frozenset[str], int]] = []
         tapped_this_turn = 0                     # sources unavailable until next turn
         cast_turn = None
+        partner_cast_done = second_commander is None
 
         for turn in range(1, max_turns + 1):
             tapped_this_turn = 0
@@ -220,9 +227,23 @@ def simulate(
                 effective_mv = colored_cost + max(0, generic_cost - (turn - 1))
 
             available, total = _available()
-            if cast_turn is None and _pips_satisfied(
-                commander_pips, hybrid, [colors for colors, _ in available],
-                total, effective_mv,
+            source_colors = [colors for colors, _ in available]
+
+            # Partner pairs: the cheaper partner comes down first, spending
+            # from this turn's total before the lead partner's check (#147).
+            if not partner_cast_done and _pips_satisfied(
+                second_commander.get("pips") or {}, [],
+                source_colors, total, second_commander["mv"],
+            ):
+                partner_cast_done = True
+                total -= second_commander["mv"]
+
+            if (
+                cast_turn is None
+                and partner_cast_done
+                and _pips_satisfied(
+                    commander_pips, hybrid, source_colors, total, effective_mv,
+                )
             ):
                 cast_turn = turn
                 break
