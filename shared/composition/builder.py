@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 _WUBRG = "WUBRG"
 
-MAX_FEEDBACK_ITERATIONS = 3
+MAX_FEEDBACK_ITERATIONS = 4  # 1 pip-relief swap attempt + land widening (#146)
 MAX_LANDS = 40
 MIN_LANDS = 33  # MDFC land credit never pushes real lands below this
 
@@ -385,6 +385,7 @@ def build_deck(
 
     result: GoldfishResult | None = None
     iterations = 0
+    tried_pip_swap = False
     while True:
         deck, basic_counts, nonbasic_names = _mana_base(
             profile, spells, forced_lands, ranked_lands, basics, lands_target, warnings
@@ -402,6 +403,21 @@ def build_deck(
             break
         if lands_target >= MAX_LANDS or not theme:
             break  # gate warning added after the loop
+        # Pip relief first (#146): swapping a pip-dense theme card for a
+        # lighter alternative can fix castability without spending a land
+        # slot.  ONE attempt only — if the swap doesn't clear the gate,
+        # later iterations escalate to land widening (a swap-only loop can
+        # burn the whole iteration budget 0.003 under the gate).
+        if not tried_pip_swap:
+            tried_pip_swap = True
+            swapped = _pip_offender_swap(
+                deck, spells, theme, chosen, breakdown, pools,
+                wincon_ids, drain_ids, identity, warnings,
+            )
+            if swapped:
+                log.info("goldfish %.2f < %.2f — pip-offender swap: %s",
+                         result.p_commander_by_go_live, gate, swapped)
+                continue
         cut = theme.pop()  # lowest-ranked theme/filler card becomes a land
         spells.remove(cut)
         chosen.discard(cut["id"])
@@ -434,6 +450,88 @@ def build_deck(
         warnings=warnings,
         win_path=win_path,
     )
+
+
+def _pip_offender_swap(
+    deck: list[dict],
+    spells: list[dict],
+    theme: list[dict],
+    chosen: set[str],
+    breakdown: dict,
+    pools: dict[str, list[dict]],
+    wincon_ids: set[str],
+    drain_ids: set[str],
+    identity: set[str],
+    warnings: list[str],
+) -> str | None:
+    """Swap the worst pip-offender theme card for a lighter alternative (#146).
+
+    Scarce colors are those with the worst demand/source ratio in the
+    current deck.  The offender is the theme card with the most pips in
+    scarce colors (wincons are never swapped); the replacement is the
+    next unchosen theme-pool card with strictly lighter colored demands.
+    Returns a description of the swap, or None when no useful swap exists.
+    """
+    sources = {c: 0.0 for c in identity}
+    demand = {c: 0.0 for c in identity}
+    for card in deck:
+        if card["is_land"]:
+            produces = set(card.get("produces") or [])
+            if card.get("is_fetch") and not produces:
+                produces = identity
+            for c in produces & set(identity):
+                sources[c] += 1
+    for s in spells:
+        for c, n in (s.get("pips") or {}).items():
+            if c in demand:
+                demand[c] += n
+    ratios = {c: demand[c] / max(sources[c], 1.0) for c in identity}
+    scarce = {c for c, r in sorted(ratios.items(), key=lambda kv: -kv[1])[:2] if r > 0}
+    if not scarce:
+        return None
+
+    def scarce_pips(card: dict) -> int:
+        return sum(n for c, n in (card.get("pips") or {}).items() if c in scarce)
+
+    offender = max(
+        (t for t in theme if "wincon" not in t.get("roles", set())),
+        key=scarce_pips,
+        default=None,
+    )
+    if offender is None or scarce_pips(offender) < 2:
+        return None  # nothing pip-dense enough to be worth a slot
+
+    replacement = next(
+        (
+            c for c in pools.get("theme", [])
+            if c["id"] not in chosen and not c["is_land"]
+            and scarce_pips(c) == 0
+            and sum((c.get("pips") or {}).values()) <= 1
+        ),
+        None,
+    )
+    if replacement is None:
+        return None
+
+    theme.remove(offender)
+    spells.remove(offender)
+    chosen.discard(offender["id"])
+    for slot in ("filler", "theme"):
+        if offender["name"] in breakdown.get(slot, []):
+            breakdown[slot].remove(offender["name"])
+            break
+    if replacement["id"] in wincon_ids:
+        replacement.setdefault("roles", set()).add("wincon")
+    if replacement["id"] in drain_ids:
+        replacement.setdefault("roles", set()).add("drain")
+    theme.append(replacement)
+    spells.append(replacement)
+    chosen.add(replacement["id"])
+    breakdown.setdefault("theme", []).append(replacement["name"])
+    warnings.append(
+        f"pip relief: swapped {offender['name']} for {replacement['name']}"
+    )
+    return f"{offender['name']} → {replacement['name']}"
 
 
 def _pip_map(profile: CompositionProfile):

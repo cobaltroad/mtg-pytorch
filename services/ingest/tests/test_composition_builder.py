@@ -355,6 +355,47 @@ def test_land_quality_fetch_and_mdfc():
     assert land_quality(mdfc, identity) > land_quality(off_color, identity)
 
 
+def test_pip_offender_swap_semantics():
+    """#146: the scarce-color pip hog is swapped for a light alternative;
+    wincons are never the offender."""
+    from composition.builder import _pip_offender_swap
+
+    identity = {"W", "U", "B", "G"}
+    lands = ([card(f"W{i}", is_land=True, produces=["W"]) for i in range(8)]
+             + [card(f"U{i}", is_land=True, produces=["U"]) for i in range(8)]
+             + [card(f"G{i}", is_land=True, produces=["G"]) for i in range(8)]
+             + [card("OneSwamp", is_land=True, produces=["B"])])  # B is scarce
+    hog = card("Necropotence", mv=3, pips={"B": 3})
+    winc = card("Torment", mv=6, pips={"B": 2}, roles={"wincon"})
+    light = card("Sol Trinket", mv=2, pips={})
+    spells = [hog, winc]
+    theme = [hog, winc]
+    deck = lands + spells
+    chosen = {hog["id"], winc["id"]}
+    breakdown = {"theme": [hog["name"], winc["name"]], "filler": []}
+    pools = {"theme": [dict(light)]}
+    warnings = []
+    swapped = _pip_offender_swap(deck, spells, theme, chosen, breakdown, pools,
+                                 set(), set(), identity, warnings)
+    assert swapped and "Necropotence" in swapped
+    assert hog not in spells and winc in spells       # wincon untouched
+    assert any(c["name"] == "Sol Trinket" for c in spells)
+    assert any("pip relief" in w for w in warnings)
+
+
+def test_pip_offender_swap_declines_light_themes():
+    """No swap when nothing is pip-dense enough to be worth a slot."""
+    from composition.builder import _pip_offender_swap
+
+    identity = {"U", "B"}
+    lands = [card(f"L{i}", is_land=True, produces=["U", "B"]) for i in range(10)]
+    mild = card("Mild", mv=2, pips={"B": 1})
+    spells, theme = [mild], [mild]
+    assert _pip_offender_swap(lands + spells, spells, theme, {mild["id"]},
+                              {"theme": [mild["name"]]}, {"theme": [card("Alt")]},
+                              set(), set(), identity, []) is None
+
+
 def test_goldfish_ramp_respects_colored_costs():
     """#145: a {G} dork is not castable off Swamps — off-color ramp must
     not accelerate the commander; on-color ramp must."""
