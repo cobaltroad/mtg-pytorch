@@ -340,7 +340,8 @@ every item.  Highlights of what is still open:
 |--------|------|
 | MTGJSON AtomicCards | Primary card data — downloaded and cached by the ingest pipeline |
 | Commander Spellbook | Combo packages; used to boost completion of near-complete combo lines |
-| Moxfield exports | Human decklists (imported for proxy context at inference; not used for Phase 3/4 training) |
+| Moxfield exports | Human decklists (`import_moxfield.py`) |
+| Archidekt API | Public decklists per commander (`import_archidekt.py`, #148) — training co-occurrence + harness quota statistics |
 | cardtrak | Internal collection tracker; additional decklist source |
 | XMage source | Java reference implementation; used to cross-check ability pattern extraction |
 
