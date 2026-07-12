@@ -25,6 +25,7 @@ import pytest
 
 # Allow importing from the parent ingest directory
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from import_utils import detect_archetype  # noqa: E402
 

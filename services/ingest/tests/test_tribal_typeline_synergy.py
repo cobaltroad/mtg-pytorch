@@ -27,7 +27,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from synergy.tribal import TRIBES  # noqa: E402
+from synergy.tribal import TRIBES as _TRIBES  # noqa: E402
+
+# synergy.tribal.TRIBES became (name, oracle_regex) tuples; these tests
+# reason about tribe names.
+TRIBES = [t for t, _ in _TRIBES]
 
 
 # ── Python equivalents of the pipeline SQL predicates ────────────────────────

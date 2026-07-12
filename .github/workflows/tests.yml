@@ -1,0 +1,31 @@
+name: tests
+
+# The full ingest test suite is DB-free and torch-free (#154): tests that
+# exercise DB-backed stages do so through pure functions and fabricated
+# rows.  DATABASE_URL is required at import time by stages/db.py but is
+# never connected to — the value below is a dummy.
+#
+# The W6 regression harness (scripts/eval_harness.py) is NOT run here: it
+# needs the live database and model checkpoints, so it stays a host-run
+# pre-merge check (see CLAUDE.md).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  pure-tests:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install pytest sqlalchemy asyncpg psycopg2-binary httpx
+      - name: Run test suite
+        working-directory: services/ingest
+        run: python -m pytest tests/ -q

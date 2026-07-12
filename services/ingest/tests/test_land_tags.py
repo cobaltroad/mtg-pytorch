@@ -25,7 +25,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from land_tags import annotate_land_oracle, build_land_tags  # noqa: E402
+from synergy.staples.land_tags import annotate_land_oracle, build_land_tags  # noqa: E402
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
