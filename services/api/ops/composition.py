@@ -30,7 +30,6 @@ from composition.pool_helpers import (
     CASTABLE_FILTER,
     COST_REDUCTION_RE,
     FORCED_NAMES,
-    GATE_RELAX_COST_REDUCTION,
     POOL_SQL,
     row_to_card,
     sort_pool,
@@ -289,11 +288,9 @@ async def build_commander_deck(
                 None, partial(ranker.rank_pool, pools[role], cmd_emb, embs)
             )
 
-    gate_relax = (
-        GATE_RELAX_COST_REDUCTION
-        if COST_REDUCTION_RE.search(commander["oracle_text"] or "")
-        else 0.0
-    )
+    # Commanders that discount their own cost (Karador) get a per-turn
+    # generic discount simulated in the goldfisher (#142).
+    cost_reduction = bool(COST_REDUCTION_RE.search(commander["oracle_text"] or ""))
 
     loop = asyncio.get_event_loop()
     build_result = await loop.run_in_executor(
@@ -306,7 +303,7 @@ async def build_commander_deck(
             basics,
             forced=forced,
             goldfish_games=goldfish_games,
-            gate_relax=gate_relax,
+            cost_reduction=cost_reduction,
         ),
     )
 

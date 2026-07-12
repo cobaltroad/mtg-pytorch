@@ -355,6 +355,39 @@ def test_land_quality_fetch_and_mdfc():
     assert land_quality(mdfc, identity) > land_quality(off_color, identity)
 
 
+def test_goldfish_generic_discount():
+    """#142: a Karador-shaped cost ({5}{B}{G}{W}) with generic_discount
+    casts turns earlier than without — colored pips never shrink."""
+    land = card("Tri", is_land=True, produces=["B", "G", "W"], etb_tapped="untapped")
+    spell = card("Filler", mv=3)
+    deck = ([dict(land, id=f"l{i}") for i in range(37)]
+            + [dict(spell, id=f"s{i}") for i in range(62)])
+    pips = {"B": 1, "G": 1, "W": 1}
+    p_plain = simulate(deck, 8, pips, 5, games=400).p_commander_by_go_live
+    p_disc = simulate(deck, 8, pips, 5, games=400, generic_discount=True).p_commander_by_go_live
+    assert p_disc > p_plain + 0.3   # discount transforms castability
+    # Floor: even with full generic discount the 3 colored pips remain —
+    # never castable before 3 sources exist.
+    p_early = simulate(deck, 8, pips, 2, games=400, generic_discount=True).p_commander_by_go_live
+    assert p_early < 0.9
+
+
+def test_builder_cost_reduction_passes_unrelaxed_gate():
+    """#142 acceptance: the gate is NOT relaxed; the simulation carries it."""
+    p = derive_profile("Karador-ish", 8, {"B": 1, "G": 1, "W": 1}, ["B", "G", "W"],
+                       {"graveyard_payoff"})
+    pools, land_pool, basics, forced = make_pools()
+    tri = [card(f"Tri {i}", is_land=True, produces=["B", "G", "W"], etb_tapped="untapped")
+           for i in range(20)]
+    basics = {c: card(n, is_land=True, is_basic=True, produces=[c], etb_tapped="untapped")
+              for c, n in (("B", "Swamp"), ("G", "Forest"), ("W", "Plains"))}
+    r = build_deck(p, pools, tri, basics, forced=[], goldfish_games=300,
+                   cost_reduction=True)
+    assert r.gate == castability_floor(8, 3)  # unrelaxed
+    assert not any("relaxed" in w for w in r.warnings)
+    assert r.gate_passed, (r.goldfish, r.warnings)
+
+
 def test_pip_offender_swap_semantics():
     """#146: the scarce-color pip hog is swapped for a light alternative;
     wincons are never the offender."""

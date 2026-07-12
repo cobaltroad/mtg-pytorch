@@ -189,19 +189,19 @@ def build_deck(
     forced: list[dict] | None = None,
     goldfish_games: int = 500,
     seed: int = 0,
-    gate_relax: float = 0.0,
+    cost_reduction: bool = False,
 ) -> BuildResult:
     """Assemble a 99-card deck.
 
-    pools      — ranked, color-legal candidates per quota:
-                 'ramp', 'draw_engine', 'draw_spell', 'spot_removal',
-                 'sweeper', 'protection', 'theme'
-    land_pool  — color-legal nonbasic lands (any order; ranked here)
-    basics     — color letter → basic-land card dict
-    forced     — auto-includes; counted against their quota (ramp/land)
-    gate_relax — subtract from the castability floor when the goldfisher
-                 is known to underestimate this commander (e.g. cost
-                 reduction in its own text); caller documents why
+    pools          — ranked, color-legal candidates per quota:
+                     'ramp', 'draw_engine', 'draw_spell', 'spot_removal',
+                     'sweeper', 'protection', 'theme'
+    land_pool      — color-legal nonbasic lands (any order; ranked here)
+    basics         — color letter → basic-land card dict
+    forced         — auto-includes; counted against their quota (ramp/land)
+    cost_reduction — commander discounts its own generic cost (Karador);
+                     simulated as a per-turn discount in the goldfisher
+                     (#142) — the gate itself is NOT relaxed
     """
     identity = set(profile.color_identity)
     warnings: list[str] = []
@@ -374,9 +374,7 @@ def build_deck(
                 f"credited {mdfc_spells} MDFC land faces as {len(extra)} land slots"
             )
     total_pips = sum(r.pips for r in profile.pip_requirements)
-    gate = max(0.0, castability_floor(profile.commander_mv, total_pips) - gate_relax)
-    if gate_relax:
-        warnings.append(f"castability gate relaxed by {gate_relax:.2f} (caller-documented)")
+    gate = castability_floor(profile.commander_mv, total_pips)
     check_turn = max(profile.go_live_turn, profile.commander_mv)
     ranked_lands = sorted(
         (c for c in land_pool if c["id"] not in chosen),
@@ -397,6 +395,7 @@ def build_deck(
             check_turn,
             games=goldfish_games,
             seed=seed,
+            generic_discount=cost_reduction,
         )
         iterations += 1
         if result.p_commander_by_go_live >= gate or iterations > MAX_FEEDBACK_ITERATIONS:
