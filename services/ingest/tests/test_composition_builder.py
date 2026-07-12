@@ -30,12 +30,12 @@ _ids = count()
 
 
 def card(name, mv=2, pips=None, is_land=False, is_basic=False, produces=None,
-         etb_tapped=None, is_fetch=False, roles=None):
+         etb_tapped=None, is_fetch=False, roles=None, power=0):
     return {
         "id": f"c{next(_ids)}", "name": name, "mv": mv, "pips": pips or {},
         "hybrid": [], "is_land": is_land, "is_basic": is_basic,
         "produces": produces or [], "etb_tapped": etb_tapped,
-        "is_fetch": is_fetch, "roles": roles or set(),
+        "is_fetch": is_fetch, "roles": roles or set(), "power": power,
     }
 
 
@@ -270,7 +270,7 @@ def test_wincon_pool_exhausted_warns_and_is_tolerated():
     pools["wincon"] = []
     r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
                    goldfish_games=300)
-    assert any("wincon pool exhausted" in w for w in r.warnings)
+    assert any("no win path" in w for w in r.warnings)
     ci = {c["id"]: {"U", "B"} for c in r.deck}
     assert check_build(WILHELT_PROFILE, r, {"U", "B"}, ci) == []
 
@@ -283,7 +283,43 @@ def test_silent_wincon_shortfall_fails_evaluation():
         c.get("roles", set()).discard("wincon")
     failures = check_build(WILHELT_PROFILE, r, {"U", "B"},
                            {c["id"]: {"U", "B"} for c in r.deck})
-    assert any("wincon audit" in f for f in failures)
+    assert any("win-path audit failed" in f for f in failures)
+
+
+def test_strategy_win_path_skips_forcing():
+    """Voltron/counters/anthem commanders ARE the win path — no forced
+    finishers even with a wincon-less theme."""
+    p = derive_profile("UB Voltron", 4, {"U": 1, "B": 1}, ["U", "B"],
+                       {"equipment_matters", "attack_trigger"})
+    pools, land_pool, basics, forced = make_pools()
+    r = build_deck(p, pools, land_pool, basics, forced=forced, goldfish_games=300)
+    assert r.breakdown["wincon"] == []
+    assert "strategy win path" in r.win_path
+
+
+def test_combat_mass_win_path_skips_forcing():
+    """A stompy theme of power-5+ bodies needs no dedicated Overrun."""
+    pools, land_pool, basics, forced = make_pools()
+    pools["theme"] = [dict(card(f"Fatty {i}", mv=(i % 4) + 3, pips={"B": 1}, power=6),
+                           theme_keys={"death_trigger"}) for i in range(30)]
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert r.breakdown["wincon"] == []
+    assert "combat mass" in r.win_path
+
+
+def test_drain_density_win_path_skips_forcing():
+    """An aristocrats theme dense in Blood Artist-class drains wins by
+    attrition — no forced finishers."""
+    pools, land_pool, basics, forced = make_pools()
+    drains = [dict(card(f"Drainer {i}", mv=(i % 3) + 1, pips={"B": 1}),
+                   theme_keys={"death_trigger"}) for i in range(12)]
+    pools["theme"] = drains + pools["theme"]
+    pools["drain"] = drains
+    r = build_deck(WILHELT_PROFILE, pools, land_pool, basics, forced=forced,
+                   goldfish_games=300)
+    assert r.breakdown["wincon"] == []
+    assert "drain density" in r.win_path
 
 
 def test_sort_pool_popularity_prior():

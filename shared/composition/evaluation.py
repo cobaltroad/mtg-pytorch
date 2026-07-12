@@ -24,7 +24,7 @@ services/ingest/scripts/eval_harness.py.
 
 from __future__ import annotations
 
-from .builder import MAX_LANDS, MIN_LANDS, WINCON_MIN, BuildResult
+from .builder import MAX_LANDS, MIN_LANDS, BuildResult, assess_win_path
 from .profile import CompositionProfile
 
 _WUBRG_C = set("WUBRGC")
@@ -113,16 +113,14 @@ def check_build(
             f"P={result.goldfish.p_commander_by_go_live:.2f} < {result.gate:.2f}"
         )
 
-    # Wincon audit (#141): the deck must contain deliberate finishers.
-    # A shortfall is tolerated only when the builder warned about it
-    # (color identities whose wincon pool is genuinely too thin).
-    wincons = sum(1 for c in deck if "wincon" in (c.get("roles") or set()))
-    if wincons < WINCON_MIN and not any(
-        "wincon pool exhausted" in w for w in result.warnings
-    ):
-        failures.append(
-            f"wincon audit: {wincons} deliberate finisher(s), need {WINCON_MIN}"
-        )
+    # Win-path audit (#141): the deck needs a credible way to close games —
+    # dedicated finishers, a combat-win strategy (voltron/counters/anthem/
+    # infect), combat mass, or drain density.  A miss is tolerated only
+    # when the builder warned (color identities with no reachable path).
+    spells = [c for c in deck if not c["is_land"]]
+    win_ok, how = assess_win_path(spells, profile.signals)
+    if not win_ok and not any("no win path" in w for w in result.warnings):
+        failures.append(f"win-path audit failed ({how})")
 
     failures += quota_audit(profile, result, census)
     return failures

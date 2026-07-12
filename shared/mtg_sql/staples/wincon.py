@@ -44,8 +44,10 @@ ALT_WIN: str = (
 
 X_SCALER: str = (
     "("
-    # "deals X damage" / "deals five times X damage" (Crackle with Power)
-    "  oracle_text ~* 'deals? ([a-z]+ times )?x damage to (any target|each|target (player|opponent)|up to)'"
+    # "deals X damage" / "deals five times X damage" (Crackle with Power).
+    # 'each opponent/player/of' but NOT 'each creature' — X-sweepers
+    # (Chain Reaction) kill boards, not players.
+    "  oracle_text ~* 'deals? ([a-z]+ times )?x damage to (any target|each (opponent|player|of)|target (player|opponent)|up to)'"
     "  OR oracle_text ~* 'each opponent loses x life'"
     "  OR oracle_text ~* 'target (player|opponent) loses x life'"
     # repeat-X drains (Torment of Hailfire)
@@ -73,3 +75,18 @@ EXTRA_COMBAT: str = (
 )
 
 SQL: str = f"({ALT_WIN} OR {X_SCALER} OR {OVERRUN} OR {EXTRA_COMBAT})"
+
+#: Incremental drain/ping sources — Blood Artist, Zulaport Cutthroat,
+#: Impact Tremors, Purphoros, Prodigal Sorcerer-class pingers.  A single
+#: one is not a finisher, so this is deliberately NOT part of SQL above:
+#: the builder's win-path audit counts their *density* (DRAIN_MIN in
+#: shared/composition/builder.py) — enough of them is an attrition win
+#: with no dedicated finisher at all.
+DRAIN: str = (
+    "("
+    "  oracle_text ~* 'whenever[^.]{0,80}, (each opponent|that player|target (player|opponent)) loses \\d+ life'"
+    "  OR oracle_text ~* 'whenever[^.]{0,80}deals? \\d+ damage to (each opponent|that player|any target)'"
+    "  OR oracle_text ~* '\\{t\\}[^:]{0,30}: [^.]{0,20}deals? 1 damage to any target'"
+    ")"
+    f" AND {_NOT_LAND}"
+)

@@ -51,7 +51,41 @@ _WUBRG = "WUBRG"
 MAX_FEEDBACK_ITERATIONS = 3
 MAX_LANDS = 40
 MIN_LANDS = 33  # MDFC land credit never pushes real lands below this
-WINCON_MIN = 2  # deliberate finishers every deck must contain (#141)
+
+# Win-path audit (#141): a deck must have a credible way to close games.
+# Any ONE of these satisfies it:
+WINCON_MIN = 2        # dedicated finishers (wincon pool), or
+BIG_CREATURE_POWER = 5
+BIG_CREATURE_MIN = 6  # this many power-5+ bodies = a beatdown plan, or
+DRAIN_MIN = 6         # this many ping/lifeloss triggers = attrition, or
+                      # a COMBAT_WIN_KEYS strategy (voltron/counters/anthem/
+                      # infect — the theme itself is the win path).
+
+
+def assess_win_path(spells: list[dict], signals: list[str]) -> tuple[bool, str]:
+    """Does this spell selection have a credible way to win?
+
+    Returns (satisfied, how).  Used by the builder to decide whether to
+    force finishers, and by evaluation.check_build to verify the result.
+    Cards must already carry their 'wincon'/'drain' role tags.
+    """
+    from .profile import COMBAT_WIN_KEYS
+
+    strategy = set(signals) & COMBAT_WIN_KEYS
+    if strategy:
+        return True, f"strategy win path ({', '.join(sorted(strategy))})"
+    finishers = sum(1 for c in spells if "wincon" in c.get("roles", set()))
+    if finishers >= WINCON_MIN:
+        return True, f"{finishers} dedicated finishers"
+    big = sum(
+        1 for c in spells if c.get("power", 0) >= BIG_CREATURE_POWER
+    )
+    if big >= BIG_CREATURE_MIN:
+        return True, f"combat mass ({big} power-{BIG_CREATURE_POWER}+ creatures)"
+    drains = sum(1 for c in spells if "drain" in c.get("roles", set()))
+    if drains >= DRAIN_MIN:
+        return True, f"drain density ({drains} ping/lifeloss sources)"
+    return False, f"finishers={finishers} big={big} drains={drains}"
 
 #: P(commander cast by max(go_live, MV)) floor, by commander MV and colored
 #: pip count.  Calibrated so a sound mana base passes and a 20-land pile
@@ -87,6 +121,7 @@ class BuildResult:
     iterations: int
     warnings: list[str] = field(default_factory=list)
     theme_density: dict | None = None  # attached by DB-side evaluators
+    win_path: str = ""  # how the win-path audit was satisfied (#141)
 
 
 # ── Land quality ──────────────────────────────────────────────────────────────
@@ -266,43 +301,54 @@ def build_deck(
         if filler:
             warnings.append(f"backfilled {len(filler)} theme slots from staple pools")
 
-    # Wincon audit (#141): a deck can satisfy every quota and still have no
-    # way to win.  Tag every selected spell that belongs to the wincon pool;
-    # if fewer than WINCON_MIN, swap the lowest-ranked theme cards for the
-    # best unpicked finishers.  Forced wincons are NOT added to the cuttable
-    # theme list — the mana-base feedback loop may not remove them.
+    # Win-path audit (#141): a deck can satisfy every quota and still have
+    # no way to win.  Tag wincon-pool and drain-pool members, then check
+    # the four win paths (strategy / finishers / combat mass / drain
+    # density).  Only when NONE holds are the lowest-ranked theme cards
+    # swapped for finishers — a voltron, counters, anthem, stompy, or
+    # aristocrats deck is left untouched.  Forced wincons are NOT added to
+    # the cuttable theme list — the mana-base feedback loop may not remove
+    # them.
     wincon_pool = pools.get("wincon", [])
     wincon_ids = {c["id"] for c in wincon_pool}
+    drain_ids = {c["id"] for c in pools.get("drain", [])}
     for c in spells:
         if c["id"] in wincon_ids:
             c.setdefault("roles", set()).add("wincon")
-    have_wincons = sum(1 for c in spells if "wincon" in c.get("roles", set()))
+        if c["id"] in drain_ids:
+            c.setdefault("roles", set()).add("drain")
+
+    win_ok, win_path = assess_win_path(spells, profile.signals)
     forced_wincons: list[dict] = []
-    for cand in wincon_pool:
-        if have_wincons >= WINCON_MIN:
-            break
-        if cand["id"] in chosen or cand["is_land"]:
-            continue
-        cut = next(
-            (t for t in reversed(theme) if "wincon" not in t.get("roles", set())), None
-        )
-        if cut is None:
-            break
-        theme.remove(cut)
-        spells.remove(cut)
-        chosen.discard(cut["id"])
-        for slot in ("filler", "theme"):
-            if cut["name"] in breakdown.get(slot, []):
-                breakdown[slot].remove(cut["name"])
+    if not win_ok:
+        have_wincons = sum(1 for c in spells if "wincon" in c.get("roles", set()))
+        for cand in wincon_pool:
+            if have_wincons >= WINCON_MIN:
                 break
-        cand.setdefault("roles", set()).add("wincon")
-        spells.append(cand)
-        chosen.add(cand["id"])
-        forced_wincons.append(cand)
-        have_wincons += 1
+            if cand["id"] in chosen or cand["is_land"]:
+                continue
+            cut = next(
+                (t for t in reversed(theme) if "wincon" not in t.get("roles", set())),
+                None,
+            )
+            if cut is None:
+                break
+            theme.remove(cut)
+            spells.remove(cut)
+            chosen.discard(cut["id"])
+            for slot in ("filler", "theme"):
+                if cut["name"] in breakdown.get(slot, []):
+                    breakdown[slot].remove(cut["name"])
+                    break
+            cand.setdefault("roles", set()).add("wincon")
+            spells.append(cand)
+            chosen.add(cand["id"])
+            forced_wincons.append(cand)
+            have_wincons += 1
+        win_ok, win_path = assess_win_path(spells, profile.signals)
+        if not win_ok:
+            warnings.append(f"no win path: {win_path} — wincon pool exhausted")
     breakdown["wincon"] = [c["name"] for c in forced_wincons]
-    if have_wincons < WINCON_MIN:
-        warnings.append(f"wincon pool exhausted: {have_wincons}/{WINCON_MIN}")
 
     # 3 + 4. Mana base with goldfish feedback: theme slots convert to lands
     # while the castability gate fails.
@@ -386,6 +432,7 @@ def build_deck(
         gate_passed=result.p_commander_by_go_live >= gate,
         iterations=iterations,
         warnings=warnings,
+        win_path=win_path,
     )
 
 

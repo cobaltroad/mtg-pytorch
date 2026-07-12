@@ -34,6 +34,20 @@ VOLTRON_KEYS = frozenset({"equipment_matters", "cast_trigger_aura_equipment"})
 #: Engine-tier protection regardless of how many other signals fire.
 ACTIVATED_ENGINE_KEYS = frozenset({"activated_tutor", "activated_tutor_creature"})
 
+#: Strategies that ARE a combat win path by themselves — auras/equipment
+#: make the commander lethal, counters grow the board out of range,
+#: anthems are Overrun-over-time, infect halves the clock.  Decks built on
+#: these need no dedicated finisher (win-path audit, #141).
+COMBAT_WIN_KEYS = frozenset({
+    "equipment_matters",
+    "cast_trigger_aura_equipment",
+    "counter_placement",
+    "counter_doubler",
+    "static_pump",
+    "keyword_grant",
+    "poison_infect",
+})
+
 #: The deck goes wide; opposing sweepers hurt more than our own help.
 GO_WIDE_KEYS = frozenset({
     "token_generator",
@@ -85,6 +99,7 @@ class CompositionProfile:
     commander_name: str
     commander_mv: int
     color_identity: list[str]
+    signals: list[str]  # decompose keys that fired (win-path audit reads these)
     go_live_turn: int
     go_live_because: str
     lands: Quota
@@ -114,6 +129,7 @@ class CompositionProfile:
             "commander": self.commander_name,
             "commander_mv": self.commander_mv,
             "color_identity": self.color_identity,
+            "signals": self.signals,
             "go_live_turn": {"turn": self.go_live_turn, "because": self.go_live_because},
             "quotas": {
                 "lands": vars(self.lands),
@@ -282,6 +298,7 @@ def derive_profile(
     ]
 
     return CompositionProfile(
+        signals=sorted(keys),
         commander_name=commander_name,
         commander_mv=mv,
         color_identity=list(color_identity),
