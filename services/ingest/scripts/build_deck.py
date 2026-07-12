@@ -25,7 +25,6 @@ from composition.pool_helpers import (  # noqa: E402
     CASTABLE_FILTER,
     COST_REDUCTION_RE,
     FORCED_NAMES,
-    GATE_RELAX_COST_REDUCTION,
     POOL_SQL as _POOL_SQL,
     row_to_card as _row_to_card,
     sort_pool,
@@ -218,11 +217,9 @@ def build_for_commander(
                 for role, pool in pools.items()
             }
 
-        # The goldfisher can't model a commander discounting its own cost
-        # (Karador); relax its gate rather than pretend the sim is right.
-        gate_relax = 0.0
-        if COST_REDUCTION_RE.search(commander["oracle_text"] or ""):
-            gate_relax = GATE_RELAX_COST_REDUCTION
+        # Commanders that discount their own cost (Karador) get a per-turn
+        # generic discount simulated in the goldfisher (#142).
+        cost_reduction = bool(COST_REDUCTION_RE.search(commander["oracle_text"] or ""))
 
         result = build_deck(
             profile,
@@ -231,7 +228,7 @@ def build_for_commander(
             _basics(conn),
             forced=_forced(conn, identity),
             goldfish_games=goldfish_games,
-            gate_relax=gate_relax,
+            cost_reduction=cost_reduction,
         )
 
         theme_names = set(result.breakdown.get("theme", []))

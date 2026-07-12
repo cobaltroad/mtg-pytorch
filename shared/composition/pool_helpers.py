@@ -72,10 +72,10 @@ CASTABLE_FILTER = "(c.mana_cost IS NOT NULL OR f.is_land)"
 _ADD_CLAUSE_RE = re.compile(r"add ((?:\{[WUBRGCS0-9]\})+)", re.IGNORECASE)
 _ADD_SYMBOL_RE = re.compile(r"\{[WUBRGCS0-9]\}")
 
-#: Commander discounts its own cost (Karador) — the goldfisher can't model
-#: it, so callers relax the castability gate by GATE_RELAX_COST_REDUCTION.
+#: Commander discounts its own cost (Karador, Ghalta) — callers pass
+#: cost_reduction=True to build_deck, which simulates a per-turn generic
+#: discount in the goldfisher (#142).  The gate is never relaxed.
 COST_REDUCTION_RE = re.compile(r"costs? \{?[X0-9]*\}? ?less to cast", re.IGNORECASE)
-GATE_RELAX_COST_REDUCTION = 0.15
 
 
 def mana_output(oracle_text: str | None) -> int:

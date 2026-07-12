@@ -118,11 +118,23 @@ def simulate(
     games: int = 500,
     max_turns: int = 12,
     seed: int = 0,
+    generic_discount: bool = False,
 ) -> GoldfishResult:
-    """Run `games` solitaire simulations of `deck` (list of 99 card dicts)."""
+    """Run `games` solitaire simulations of `deck` (list of 99 card dicts).
+
+    generic_discount (#142): for commanders that reduce their own cost
+    ("costs {1} less to cast for each creature card in your graveyard" —
+    Karador, Ghalta-class), the generic portion of the cost shrinks by
+    one per turn starting turn 2.  The resource driving the discount
+    (graveyard fill, board power) accumulates roughly per-turn in a deck
+    built around it; colored pips are never discounted.  This replaces
+    the old flat gate relaxation.
+    """
     rng = random.Random(seed)
     hybrid = commander_hybrid or []
     needed_colors = {c for c in commander_pips if c in _WUBRG}
+    colored_cost = sum(commander_pips.values()) + len(hybrid)
+    generic_cost = max(0, commander_mv - colored_cost)
 
     cast_turns: list[int] = []
     keepable = 0
@@ -203,10 +215,14 @@ def simulate(
                     battlefield.append((frozenset(needed_colors or {"C"}), 1))
                 tapped_this_turn += 1  # new source comes online next turn
 
+            effective_mv = commander_mv
+            if generic_discount:
+                effective_mv = colored_cost + max(0, generic_cost - (turn - 1))
+
             available, total = _available()
             if cast_turn is None and _pips_satisfied(
                 commander_pips, hybrid, [colors for colors, _ in available],
-                total, commander_mv,
+                total, effective_mv,
             ):
                 cast_turn = turn
                 break
