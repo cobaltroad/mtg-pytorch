@@ -355,6 +355,46 @@ def test_land_quality_fetch_and_mdfc():
     assert land_quality(mdfc, identity) > land_quality(off_color, identity)
 
 
+def test_goldfish_casts_both_partners():
+    """#147: cast_turn records the LAST partner landing; the cheap
+    partner's cost delays the expensive one."""
+    land = card("Dual", is_land=True, produces=["U", "B"], etb_tapped="untapped")
+    spell = card("Filler", mv=3)
+    deck = ([dict(land, id=f"l{i}") for i in range(37)]
+            + [dict(spell, id=f"s{i}") for i in range(61)])
+    solo = simulate(deck, 3, {"U": 1, "B": 1}, 3, games=400).p_commander_by_go_live
+    # A 2-drop partner sequences onto T2 and barely dents the lead's T3
+    # (that's how real partner decks play); a 3-drop partner CANNOT share
+    # the T3 deadline — both need 6 mana.
+    cheap = simulate(deck, 3, {"U": 1, "B": 1}, 3, games=400,
+                     second_commander={"mv": 2, "pips": {"B": 1}}).p_commander_by_go_live
+    assert abs(cheap - solo) < 0.15
+    clash = simulate(deck, 3, {"U": 1, "B": 1}, 3, games=400,
+                     second_commander={"mv": 3, "pips": {"B": 1}}).p_commander_by_go_live
+    assert clash < 0.1
+    # A free partner (Rograkh) costs nothing.
+    free = simulate(deck, 3, {"U": 1, "B": 1}, 3, games=400,
+                    second_commander={"mv": 0, "pips": {}}).p_commander_by_go_live
+    assert abs(free - solo) < 0.05
+
+
+def test_builder_partner_deck_is_98():
+    from composition.evaluation import check_build
+    from composition.profile import derive_partner_profile
+
+    p = derive_partner_profile([
+        dict(name="A", mana_value=2, pips={"U": 1}, color_identity=["U"],
+             decompose_keys=set()),
+        dict(name="B", mana_value=3, pips={"B": 1}, color_identity=["B"],
+             decompose_keys={"artifact_count"}),
+    ])
+    pools, land_pool, basics, forced = make_pools()
+    r = build_deck(p, pools, land_pool, basics, forced=forced, goldfish_games=300)
+    assert len(r.deck) == 98
+    ci = {c["id"]: {"U", "B"} for c in r.deck}
+    assert check_build(p, r, {"U", "B"}, ci) == []
+
+
 def test_goldfish_generic_discount():
     """#142: a Karador-shaped cost ({5}{B}{G}{W}) with generic_discount
     casts turns earlier than without — colored pips never shrink."""

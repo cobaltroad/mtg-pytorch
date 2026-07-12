@@ -375,6 +375,11 @@ def build_deck(
             )
     total_pips = sum(r.pips for r in profile.pip_requirements)
     gate = castability_floor(profile.commander_mv, total_pips)
+    if profile.partner_cast and profile.partner_cast["mv"] > 0:
+        # Partner pairs thread two casts through one curve (#147); the
+        # floor calibration is single-commander, so grant the same 0.10
+        # headroom a sound pair measures under the sequential-cast model.
+        gate = max(0.35, gate - 0.10)
     check_turn = max(profile.go_live_turn, profile.commander_mv)
     ranked_lands = sorted(
         (c for c in land_pool if c["id"] not in chosen),
@@ -396,6 +401,7 @@ def build_deck(
             games=goldfish_games,
             seed=seed,
             generic_discount=cost_reduction,
+            second_commander=profile.partner_cast,
         )
         iterations += 1
         if result.p_commander_by_go_live >= gate or iterations > MAX_FEEDBACK_ITERATIONS:
@@ -437,7 +443,9 @@ def build_deck(
     elif iterations > 1:
         warnings.append(f"mana base widened to {lands_target} lands to pass the castability gate")
 
-    assert len(deck) == 99, f"built {len(deck)} cards, expected 99"
+    assert len(deck) == profile.deck_size, (
+        f"built {len(deck)} cards, expected {profile.deck_size}"
+    )
     return BuildResult(
         deck=deck,
         breakdown=breakdown,
@@ -557,8 +565,9 @@ def _mana_base(
     ]
     nonbasics = nonbasics[:lands_target]
     # Basics absorb both the remaining land budget and any spell-pool
-    # shortfall, so the deck always totals exactly 99.
-    basics_needed = 99 - len(spells) - len(nonbasics)
+    # shortfall, so the deck always totals exactly profile.deck_size
+    # (99, or 98 for partner pairs — #147).
+    basics_needed = profile.deck_size - len(spells) - len(nonbasics)
 
     # Per-color source count from nonbasics.  A fetch with no produced_mana
     # counts toward every identity color — it finds whichever basic the

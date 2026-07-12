@@ -80,8 +80,10 @@ def check_build(
     failures: list[str] = []
     deck = result.deck
 
-    if len(deck) != 99:
-        failures.append(f"deck has {len(deck)} cards, expected 99")
+    if len(deck) != profile.deck_size:
+        failures.append(
+            f"deck has {len(deck)} cards, expected {profile.deck_size}"
+        )
 
     nonbasic_ids = [c["id"] for c in deck if not c["is_basic"]]
     if len(nonbasic_ids) != len(set(nonbasic_ids)):

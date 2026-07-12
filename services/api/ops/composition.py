@@ -34,7 +34,11 @@ from composition.pool_helpers import (
     row_to_card,
     sort_pool,
 )
-from composition.profile import CompositionProfile, derive_profile
+from composition.profile import (
+    CompositionProfile,
+    derive_partner_profile,
+    derive_profile,
+)
 from composition.ranking import load_ranker
 
 log = logging.getLogger(__name__)
@@ -205,7 +209,7 @@ def _deck_json(
 
     return {
         "checkpoint": f"composition/{ranking}",
-        "commander": {"name": commander["name"], "oracle_id": commander["oracle_id"]},
+        "commander": {"name": profile.commander_name, "oracle_id": commander["oracle_id"]},
         "cards": cards_out,
         "scores": scores,
         "composition": {
@@ -222,14 +226,8 @@ def _deck_json(
     }
 
 
-async def build_commander_deck(
-    db: AsyncSession,
-    oracle_id: str,
-    ranking: str = "model",
-    goldfish_games: int = 400,
-    save_dir: Path | None = None,
-) -> dict:
-    """Build a deck for a commander; returns the deck JSON (+deck_filename)."""
+async def _commander_inputs(db: AsyncSession, oracle_id: str) -> dict:
+    """Fetch one commander's row + decompose keys as profile inputs."""
     result = await db.execute(
         text(
             f"SELECT {CARD_COLUMNS}, c.oracle_id::text AS oracle_id"
@@ -237,32 +235,80 @@ async def build_commander_deck(
         ),
         {"oid": oracle_id},
     )
-    commander = result.mappings().first()
-    if commander is None:
-        raise LookupError("Commander not found (or card_facts not computed)")
-    identity = frozenset(commander["color_identity"] or [])
-
+    row = result.mappings().first()
+    if row is None:
+        raise LookupError(
+            f"Commander {oracle_id} not found (or card_facts not computed)"
+        )
     keys_result = await db.execute(
         text(
             "SELECT DISTINCT trigger_event FROM card_abilities"
             " WHERE card_id = CAST(:cid AS uuid) AND source = 'decompose'"
         ),
-        {"cid": commander["id"]},
+        {"cid": row["id"]},
     )
-    keys = {row[0] for row in keys_result.fetchall() if row[0]}
-
-    pips = commander["pips"]
+    keys = {r[0] for r in keys_result.fetchall() if r[0]}
+    pips = row["pips"]
     if isinstance(pips, str):
         pips = json.loads(pips or "{}")
-    profile = derive_profile(
-        commander["name"], commander["cmc"] or 0, pips, sorted(identity), keys
-    )
+    return {
+        "row": row,
+        "id": row["id"],
+        "name": row["name"],
+        "oracle_text": row["oracle_text"],
+        "mana_value": row["cmc"] or 0,
+        "pips": pips,
+        "color_identity": sorted(row["color_identity"] or []),
+        "decompose_keys": keys,
+    }
+
+
+async def build_commander_deck(
+    db: AsyncSession,
+    oracle_id: str,
+    ranking: str = "model",
+    goldfish_games: int = 400,
+    save_dir: Path | None = None,
+    partner_oracle_id: str | None = None,
+) -> dict:
+    """Build a deck for a commander (or partner pair, #147).
+
+    Returns the deck JSON (+deck_filename).
+    """
+    commanders = [await _commander_inputs(db, oracle_id)]
+    if partner_oracle_id:
+        commanders.append(await _commander_inputs(db, partner_oracle_id))
+    commander = commanders[0]["row"]
+    identity = frozenset(c for cmd in commanders for c in cmd["color_identity"])
+    commander_ids = {cmd["id"] for cmd in commanders}
+
+    if partner_oracle_id:
+        profile = derive_partner_profile(commanders)
+    else:
+        profile = derive_profile(
+            commanders[0]["name"], commanders[0]["mana_value"],
+            commanders[0]["pips"], sorted(identity), commanders[0]["decompose_keys"],
+        )
 
     pools = {
-        role: [c for c in await _query_pool(db, where, identity, role) if c["id"] != commander["id"]]
+        role: [c for c in await _query_pool(db, where, identity, role) if c["id"] not in commander_ids]
         for role, where in POOL_SQL.items()
     }
-    pools["theme"] = await _theme_pool(db, commander["id"], identity)
+    theme_merged: dict[str, dict] = {}
+    for cmd in commanders:
+        for card in await _theme_pool(db, cmd["id"], identity):
+            if card["id"] in commander_ids:
+                continue
+            if card["id"] in theme_merged:
+                theme_merged[card["id"]].setdefault("theme_keys", set()).update(
+                    card.get("theme_keys", set())
+                )
+            else:
+                theme_merged[card["id"]] = card
+    pools["theme"] = sorted(
+        theme_merged.values(),
+        key=lambda c: (-len(c.get("theme_keys", ())), c["edhrec_rank"], c["name"]),
+    )
     from composition.pool_helpers import LAND_POOL_FILTER
 
     land_pool = await _query_pool(db, LAND_POOL_FILTER, identity, "land")
@@ -290,7 +336,9 @@ async def build_commander_deck(
 
     # Commanders that discount their own cost (Karador) get a per-turn
     # generic discount simulated in the goldfisher (#142).
-    cost_reduction = bool(COST_REDUCTION_RE.search(commander["oracle_text"] or ""))
+    cost_reduction = any(
+        COST_REDUCTION_RE.search(cmd["oracle_text"] or "") for cmd in commanders
+    )
 
     loop = asyncio.get_event_loop()
     build_result = await loop.run_in_executor(

@@ -185,6 +185,36 @@ def test_double_pip_demands_more_sources():
     assert req.sources >= 30
 
 
+def test_partner_profile_merges_and_shrinks_deck():
+    """#147: union identity + signals, 98 cards, per-partner pip clocks."""
+    from composition.profile import derive_partner_profile
+
+    p = derive_partner_profile([
+        dict(name="Rograkh, Son of Rohgahh", mana_value=0, pips={},
+             color_identity=["R"], decompose_keys=set()),
+        dict(name="Silas Renn, Seeker Adept", mana_value=3, pips={"U": 1, "B": 1},
+             color_identity=["U", "B"], decompose_keys={"artifact_count"}),
+    ])
+    assert p.deck_size == 98
+    assert p.slot_total() == 98
+    assert p.color_identity == ["B", "R", "U"]
+    assert "artifact_count" in p.signals
+    assert p.commander_mv == 3                     # lead = higher MV
+    assert p.partner_cast == {"mv": 0, "pips": {}}  # Rograkh rides along
+    # Silas must be castable on HIS clock (turn 3), not the lead's.
+    assert all(r.by_turn == 3 for r in p.pip_requirements)
+
+
+def test_partner_profile_requires_two():
+    from composition.profile import derive_partner_profile
+
+    with pytest.raises(ValueError):
+        derive_partner_profile([
+            dict(name="Solo", mana_value=3, pips={}, color_identity=["G"],
+                 decompose_keys=set()),
+        ])
+
+
 def test_as_dict_is_json_shaped():
     d = derive_profile(**WILHELT).as_dict()
     assert d["quotas"]["ramp"]["max_mv"] == 2

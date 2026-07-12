@@ -111,6 +111,10 @@ class CompositionProfile:
     theme: Quota
     curve_targets: list[CurveTarget] = field(default_factory=list)
     pip_requirements: list[PipRequirement] = field(default_factory=list)
+    deck_size: int = DECK_SIZE  # 99; 98 for partner pairs (#147)
+    #: For partner pairs: the non-lead partner's cast info
+    #: {"mv": int, "pips": dict} — the goldfisher casts both (#147).
+    partner_cast: dict | None = None
 
     def slot_total(self) -> int:
         return (
@@ -130,6 +134,7 @@ class CompositionProfile:
             "commander_mv": self.commander_mv,
             "color_identity": self.color_identity,
             "signals": self.signals,
+            "deck_size": self.deck_size,
             "go_live_turn": {"turn": self.go_live_turn, "because": self.go_live_because},
             "quotas": {
                 "lands": vars(self.lands),
@@ -182,6 +187,7 @@ def derive_profile(
     color_identity: list[str],
     decompose_keys: set[str] | frozenset[str] = frozenset(),
     threshold: float = DEFAULT_THRESHOLD,
+    deck_size: int = DECK_SIZE,
 ) -> CompositionProfile:
     """Derive the full quota profile for one commander.
 
@@ -279,7 +285,7 @@ def derive_profile(
         lands.count + ramp.count + draw.count + spot.count + sweepers.count + protection.count
     )
     theme = Quota(
-        count=DECK_SIZE - reserved,
+        count=deck_size - reserved,
         because=f"remainder after {reserved} infrastructure slots",
     )
 
@@ -291,7 +297,7 @@ def derive_profile(
             color=color,
             pips=count,
             by_turn=go_live,
-            sources=required_sources(go_live, count, DECK_SIZE, threshold),
+            sources=required_sources(go_live, count, deck_size, threshold),
         )
         for color, count in sorted(pips.items())
         if color in "WUBRG" and count > 0
@@ -299,6 +305,7 @@ def derive_profile(
 
     return CompositionProfile(
         signals=sorted(keys),
+        deck_size=deck_size,
         commander_name=commander_name,
         commander_mv=mv,
         color_identity=list(color_identity),
@@ -311,6 +318,69 @@ def derive_profile(
         sweepers=sweepers,
         protection=protection,
         theme=theme,
-        curve_targets=_curve_targets(mv, DECK_SIZE - lands.count),
+        curve_targets=_curve_targets(mv, deck_size - lands.count),
         pip_requirements=pip_reqs,
     )
+
+
+def derive_partner_profile(
+    partners: list[dict],
+    threshold: float = DEFAULT_THRESHOLD,
+) -> CompositionProfile:
+    """Derive a quota profile for a partner pair (#147).
+
+    Each entry in ``partners``: {name, mana_value, pips, color_identity,
+    decompose_keys}.  Merging rules:
+
+    * color identity and decompose signals are the UNION of both partners
+    * the deck is 98 cards — two command-zone slots
+    * mana-value-driven quotas (go-live, ramp, lands, curve) key off the
+      LEAD partner (higher MV): by the time the expensive partner is due,
+      the cheap one has already come down
+    * pip requirements are computed per partner against its OWN on-curve
+      clock, then merged per color by max — Thrasios must be castable
+      turn 2 even though Tymna leads the quota math
+    """
+    if len(partners) != 2:
+        raise ValueError(f"partner profile needs exactly 2 commanders, got {len(partners)}")
+
+    lead = max(partners, key=lambda p: p["mana_value"])
+    identity = sorted({c for p in partners for c in p["color_identity"]})
+    keys = {k for p in partners for k in p["decompose_keys"]}
+
+    profile = derive_profile(
+        commander_name=" + ".join(p["name"] for p in partners),
+        mana_value=lead["mana_value"],
+        pips=lead["pips"],
+        color_identity=identity,
+        decompose_keys=keys,
+        threshold=threshold,
+        deck_size=DECK_SIZE - 1,
+    )
+
+    # Per-partner castability: each on its own clock, merged max per color.
+    merged: dict[str, PipRequirement] = {r.color: r for r in profile.pip_requirements}
+    for p in partners:
+        if p is lead:
+            continue
+        mv = int(round(p["mana_value"]))
+        own_go_live = max(2, mv) if mv < 4 else mv - 1
+        for color, count in sorted(p["pips"].items()):
+            if color not in "WUBRG" or count <= 0:
+                continue
+            req = PipRequirement(
+                color=color,
+                pips=count,
+                by_turn=own_go_live,
+                sources=required_sources(own_go_live, count, profile.deck_size, threshold),
+            )
+            cur = merged.get(color)
+            if cur is None or req.sources > cur.sources:
+                merged[color] = req
+    profile.pip_requirements = [merged[c] for c in sorted(merged)]
+    other = next(p for p in partners if p is not lead)
+    profile.partner_cast = {
+        "mv": int(round(other["mana_value"])),
+        "pips": {c: n for c, n in other["pips"].items() if c in "WUBRG"},
+    }
+    return profile
