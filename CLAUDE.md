@@ -373,6 +373,11 @@ flowchart LR
   extract structured ability information that MTGJSON keywords don't cover.
 - **Moxfield** — user-curated Commander decklists exported as `.txt` files.
   Drop exports into a folder and run `import_moxfield.py` (see below).
+- **Archidekt** — public decklists via their open v3 API
+  (`python -m scripts.import_archidekt`, #148).  Rate-limited (1.5 s/request,
+  identifying User-Agent), most-viewed decks per commander, deduped by
+  source_url.  Feeds co-occurrence training AND the W6 harness's human
+  quota distributions.
 - **cardtrak** — internal collection tracker; decklists exported via
   `ml_decklists` view and imported with `import_decklists.py`.
 
