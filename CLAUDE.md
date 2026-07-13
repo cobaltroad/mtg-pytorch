@@ -392,6 +392,7 @@ flowchart LR
 | `synergy_edges`    | Pairwise synergy scores, multiple score types|
 | `decks`            | Commander decklists (synthesized training data) |
 | `generated_decks`  | Model output decks, one row per inference    |
+| `card_votes`       | 👍/👎 on generated-deck cards (`fit` = model label, `slot` = pool dispute) — #180 |
 
 ## Conventions
 
