@@ -3,6 +3,7 @@
 import json as _json
 import os
 import re
+import time as _time
 
 import httpx
 import pandas as pd
@@ -55,14 +56,31 @@ def get_generated_deck(filename: str) -> dict | None:
 
 
 def build_composition_deck(oracle_id: str, ranking: str, games: int) -> dict:
-    """POST a composition build — no caching, each call builds a fresh deck."""
+    """Submit a composition build job and poll until done (#150).
+
+    The async job pattern survives long builds without holding one HTTP
+    request open for the duration; the deck also persists to history
+    server-side regardless of what happens to this page.
+    """
     r = httpx.post(
-        f"{API_URL}/commanders/{oracle_id}/build",
+        f"{API_URL}/commanders/{oracle_id}/build/async",
         params={"ranking": ranking, "goldfish_games": games},
-        timeout=600,
+        timeout=30,
     )
     r.raise_for_status()
-    return r.json()
+    job_id = r.json()["job_id"]
+
+    deadline = _time.time() + 600
+    while _time.time() < deadline:
+        _time.sleep(2)
+        s = httpx.get(f"{API_URL}/build/jobs/{job_id}", timeout=10)
+        s.raise_for_status()
+        job = s.json()
+        if job["status"] == "done":
+            return job["result"]
+        if job["status"] == "error":
+            raise RuntimeError(job.get("error") or "build failed")
+    raise TimeoutError("build did not finish within 10 minutes")
 
 
 # ── UI constants ──────────────────────────────────────────────────────────────

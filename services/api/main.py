@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid as _uuid
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -16,7 +18,7 @@ from pydantic import BaseModel
 
 from sqlalchemy import text
 
-from db import get_db, AsyncSession
+from db import get_db, AsyncSession, SessionLocal
 from ops import cards as card_ops, synergy as synergy_ops, training as training_ops
 
 log = logging.getLogger(__name__)
@@ -349,6 +351,70 @@ async def build_commander_deck(
         raise HTTPException(404, str(e))
     except RuntimeError as e:
         raise HTTPException(503, str(e))
+
+
+# ── Async build jobs (#150) ──────────────────────────────────────────────────
+# In-memory job store: fine for a single-worker uvicorn.  Jobs are pruned
+# oldest-first beyond _BUILD_JOBS_MAX; results also persist to the deck
+# history regardless, so a lost job entry never loses the deck.
+
+_BUILD_JOBS: dict[str, dict] = {}
+_BUILD_JOBS_MAX = 50
+
+
+@app.post("/commanders/{oracle_id}/build/async")
+async def build_commander_deck_async(
+    oracle_id: UUID,
+    ranking: str = Query("model", pattern="^(model|heuristic)$"),
+    goldfish_games: int = Query(400, ge=50, le=2000),
+    partner_oracle_id: UUID | None = Query(None),
+):
+    """Submit a composition build as a background job (#150).
+
+    Returns {"job_id": …}; poll GET /build/jobs/{job_id}.  The synchronous
+    POST /commanders/{oracle_id}/build remains for direct calls.
+    """
+    job_id = _uuid.uuid4().hex
+    while len(_BUILD_JOBS) >= _BUILD_JOBS_MAX:
+        oldest = min(_BUILD_JOBS, key=lambda k: _BUILD_JOBS[k]["created_at"])
+        del _BUILD_JOBS[oldest]
+    _BUILD_JOBS[job_id] = {"status": "running", "created_at": time.time()}
+
+    async def _run() -> None:
+        from ops import composition
+
+        try:
+            async with SessionLocal() as session:
+                result = await composition.build_commander_deck(
+                    session,
+                    str(oracle_id),
+                    ranking=ranking,
+                    goldfish_games=goldfish_games,
+                    save_dir=DECK_SAVE_DIR,
+                    partner_oracle_id=str(partner_oracle_id) if partner_oracle_id else None,
+                )
+            _BUILD_JOBS[job_id].update(status="done", result=result)
+        except LookupError as exc:
+            _BUILD_JOBS[job_id].update(status="error", error=str(exc), code=404)
+        except Exception as exc:  # surfaced to the poller, never silent
+            log.exception("async build %s failed", job_id)
+            _BUILD_JOBS[job_id].update(status="error", error=str(exc), code=500)
+
+    asyncio.create_task(_run())
+    return {"job_id": job_id}
+
+
+@app.get("/build/jobs/{job_id}")
+async def build_job_status(job_id: str):
+    job = _BUILD_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown or expired job id")
+    out = {"status": job["status"]}
+    if job["status"] == "done":
+        out["result"] = job["result"]
+    elif job["status"] == "error":
+        out["error"] = job.get("error")
+    return out
 
 
 # ── Generated deck history ───────────────────────────────────────────────────
