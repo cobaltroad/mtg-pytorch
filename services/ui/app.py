@@ -55,6 +55,73 @@ def get_generated_deck(filename: str) -> dict | None:
         return None
 
 
+def submit_votes(filename: str, votes: list[dict]) -> dict:
+    r = httpx.post(f"{API_URL}/decks/generated/{filename}/votes", json=votes, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+@st.cache_data(ttl=15)
+def get_commander_votes(oracle_id: str) -> list[dict]:
+    try:
+        r = httpx.get(f"{API_URL}/commanders/{oracle_id}/votes", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+def render_vote_editor(deck: dict, filename: str) -> None:
+    """👍/👎 per card + wrong-slot flag; one submit (feedback loop #180)."""
+    with st.expander("🗳 Vote on picks", expanded=False):
+        st.caption(
+            "👍/👎 = does this card belong in this deck? (trains within-slot "
+            "ranking).  'Wrong slot' flags a pool-assignment bug instead."
+        )
+        rows = [
+            {"name": c["name"], "slot": c.get("slot", ""), "vote": "—", "wrong slot": False}
+            for c in deck.get("cards", [])
+            if not str(c.get("slot", "")).endswith("land")
+        ]
+        edited = st.data_editor(
+            pd.DataFrame(rows),
+            key=f"votes_{filename}",
+            hide_index=True,
+            use_container_width=True,
+            disabled=["name", "slot"],
+            column_config={
+                "vote": st.column_config.SelectboxColumn("vote", options=["—", "👍", "👎"]),
+                "wrong slot": st.column_config.CheckboxColumn("wrong slot"),
+            },
+        )
+        if st.button("Submit votes", key=f"submit_votes_{filename}"):
+            votes = []
+            for _, row in edited.iterrows():
+                if row["vote"] in ("👍", "👎"):
+                    votes.append({"card_name": row["name"],
+                                  "vote": 1 if row["vote"] == "👍" else -1,
+                                  "kind": "fit"})
+                if row["wrong slot"]:
+                    votes.append({"card_name": row["name"], "vote": -1, "kind": "slot"})
+            if not votes:
+                st.info("No votes selected.")
+            else:
+                try:
+                    out = submit_votes(filename, votes)
+                    get_commander_votes.clear()
+                    st.success(f"Stored {out['stored']} votes"
+                               + (f" (unknown: {out['unknown_cards']})" if out["unknown_cards"] else ""))
+                except Exception as e:
+                    st.error(f"Vote submit failed: {e}")
+
+        agg = get_commander_votes(str(deck.get("commander", {}).get("oracle_id", "")))
+        fit = [a for a in agg if a["kind"] == "fit"]
+        if fit:
+            st.caption("Prior votes for this commander:")
+            st.dataframe(pd.DataFrame(fit)[["card", "score", "votes", "slot"]],
+                         hide_index=True, use_container_width=True, height=200)
+
+
 def build_composition_deck(oracle_id: str, ranking: str, games: int) -> dict:
     """Submit a composition build job and poll until done (#150).
 
@@ -150,13 +217,15 @@ def render_composition(comp: dict) -> None:
 # ── Shared deck display ───────────────────────────────────────────────────────
 
 
-def render_deck(deck: dict) -> None:
+def render_deck(deck: dict, filename: str | None = None) -> None:
     """Render the full deck view. Accepts the deck result dict from the API."""
     st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
     st.markdown(f"**Commander:** {deck['commander']['name']}")
 
     if deck.get("composition"):
         render_composition(deck["composition"])
+    if filename and deck.get("composition"):
+        render_vote_editor(deck, filename)
 
     _safe_name = re.sub(r"[^\w]", "_", deck["commander"]["name"])
     _dl_cols = st.columns(2)
@@ -310,7 +379,7 @@ with tab_deck:
             if _built:
                 st.session_state["last_deck_filename"] = _built.get("deck_filename", "")
                 list_generated_decks.clear()
-                render_deck(_built)
+                render_deck(_built, filename=_built.get("deck_filename"))
                 st.info(
                     "Deck saved — also available in the **Generated Decks** tab."
                 )
@@ -394,4 +463,4 @@ with tab_history:
             if deck is None:
                 st.error("Could not load deck. The file may have been deleted.")
             else:
-                render_deck(deck)
+                render_deck(deck, filename=chosen_filename)

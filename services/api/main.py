@@ -457,6 +457,41 @@ async def get_generated_deck(filename: str):
     return json.loads(path.read_text())
 
 
+# ── Deck votes (feedback loop phase 1, #180) ─────────────────────────────────
+
+
+class VoteIn(BaseModel):
+    card_name: str
+    vote: int  # +1 / -1
+    kind: str = "fit"  # 'fit' (model label) | 'slot' (pool dispute)
+
+
+@app.post("/decks/generated/{filename}/votes")
+async def post_deck_votes(
+    filename: str,
+    votes: list[VoteIn],
+    db: AsyncSession = Depends(get_db),
+):
+    """Record 👍/👎 votes against a saved generated deck's cards."""
+    from ops import votes as vote_ops
+
+    for v in votes:
+        if v.vote not in (-1, 1) or v.kind not in ("fit", "slot"):
+            raise HTTPException(400, "vote must be ±1 and kind 'fit'|'slot'")
+    try:
+        return await vote_ops.apply_deck_votes(db, filename, votes, DECK_SAVE_DIR)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/commanders/{oracle_id}/votes")
+async def get_commander_votes(oracle_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Aggregated per-card votes for a commander."""
+    from ops import votes as vote_ops
+
+    return await vote_ops.aggregate_votes(db, str(oracle_id))
+
+
 # ── Training ──────────────────────────────────────────────────────────────────
 
 
