@@ -163,6 +163,13 @@ docker compose run --rm ingest python -m scripts.eval_harness                  #
 docker compose run --rm ingest python -m scripts.eval_harness --ranking heuristic
 docker compose run --rm ingest python -m scripts.eval_harness --commanders "Wilhelt" --json
 
+# Slot-dispute review queue (#182): 'slot'-kind card_votes vs live pool SQL.
+# Lists each open dispute with the named staple fragment that matched
+# (removal.DESTROY, protection.GRANT, …) and the file to fix; disputes drop
+# off once the rule no longer claims the card.  Exit 1 while queue non-empty.
+docker compose run --rm ingest python -m scripts.report_slot_disputes
+docker compose run --rm ingest python -m scripts.report_slot_disputes --json
+
 # Spot-check the decomposition output with eval_decomposition:
 docker compose run --rm ingest python -m scripts.eval_decomposition "Anje Falkenrath"         # named lookup (partial match)
 docker compose run --rm ingest python -m scripts.eval_decomposition --no-signals              # list commanders with zero signals (gap analysis)
