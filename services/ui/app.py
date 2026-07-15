@@ -71,8 +71,14 @@ def get_commander_votes(oracle_id: str) -> list[dict]:
         return []
 
 
-def render_vote_editor(deck: dict, filename: str) -> None:
-    """👍/👎 per card + wrong-slot flag; one submit (feedback loop #180)."""
+def render_vote_editor(deck: dict, filename: str, ctx: str) -> None:
+    """👍/👎 per card + wrong-slot flag; one submit (feedback loop #180).
+
+    ctx namespaces widget keys per tab: Streamlit executes ALL tabs every
+    run, and after a build the same deck renders in both the build tab and
+    the auto-selected history tab — same keys would raise
+    StreamlitDuplicateElementKey and crash the app.
+    """
     with st.expander("🗳 Vote on picks", expanded=False):
         st.caption(
             "👍/👎 = does this card belong in this deck? (trains within-slot "
@@ -85,7 +91,7 @@ def render_vote_editor(deck: dict, filename: str) -> None:
         ]
         edited = st.data_editor(
             pd.DataFrame(rows),
-            key=f"votes_{filename}",
+            key=f"{ctx}_votes_{filename}",
             hide_index=True,
             use_container_width=True,
             disabled=["name", "slot"],
@@ -94,7 +100,7 @@ def render_vote_editor(deck: dict, filename: str) -> None:
                 "wrong slot": st.column_config.CheckboxColumn("wrong slot"),
             },
         )
-        if st.button("Submit votes", key=f"submit_votes_{filename}"):
+        if st.button("Submit votes", key=f"{ctx}_submit_votes_{filename}"):
             votes = []
             for _, row in edited.iterrows():
                 if row["vote"] in ("👍", "👎"):
@@ -121,7 +127,7 @@ def render_vote_editor(deck: dict, filename: str) -> None:
         if _is_partner:
             st.caption("Partner deck — rebuild honoring votes via the API "
                        "(the UI rebuild only carries the lead commander).")
-        elif st.button("🔁 Rebuild honoring votes", key=f"amend_{filename}",
+        elif st.button("🔁 Rebuild honoring votes", key=f"{ctx}_amend_{filename}",
                        help="Rebuild this commander's deck with 👍 pinned and "
                        "👎 excluded (#184)."):
             with st.spinner("Rebuilding with vote overrides…"):
@@ -241,7 +247,7 @@ def render_composition(comp: dict) -> None:
 # ── Shared deck display ───────────────────────────────────────────────────────
 
 
-def render_deck(deck: dict, filename: str | None = None) -> None:
+def render_deck(deck: dict, filename: str | None = None, ctx: str = "hist") -> None:
     """Render the full deck view. Accepts the deck result dict from the API."""
     st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
     st.markdown(f"**Commander:** {deck['commander']['name']}")
@@ -249,7 +255,7 @@ def render_deck(deck: dict, filename: str | None = None) -> None:
     if deck.get("composition"):
         render_composition(deck["composition"])
     if filename and deck.get("composition"):
-        render_vote_editor(deck, filename)
+        render_vote_editor(deck, filename, ctx)
 
     _safe_name = re.sub(r"[^\w]", "_", deck["commander"]["name"])
     _dl_cols = st.columns(2)
@@ -258,6 +264,7 @@ def render_deck(deck: dict, filename: str | None = None) -> None:
         data=_json.dumps(deck, indent=2, default=str),
         file_name=f"{_safe_name}.json",
         mime="application/json",
+        key=f"{ctx}_dl_json_{filename or _safe_name}",
     )
     _deck_lines = [f"Commander\n1 {deck['commander']['name']}\n\nDeck"]
     for _c in deck["cards"]:
@@ -267,6 +274,7 @@ def render_deck(deck: dict, filename: str | None = None) -> None:
         data="\n".join(_deck_lines),
         file_name=f"{_safe_name}.txt",
         mime="text/plain",
+        key=f"{ctx}_dl_txt_{filename or _safe_name}",
     )
 
     rows = [
@@ -416,7 +424,7 @@ with tab_deck:
         # deck (and pending votes) vanish on the first click.
         _bd = st.session_state.get("built_deck")
         if _bd and _bd.get("commander", {}).get("oracle_id") == str(commander["oracle_id"]):
-            render_deck(_bd, filename=_bd.get("deck_filename"))
+            render_deck(_bd, filename=_bd.get("deck_filename"), ctx="build")
             st.info(
                 "Deck saved — also available in the **Generated Decks** tab."
             )
@@ -489,12 +497,12 @@ with tab_history:
                     st.markdown(
                         f"### {_checkpoint_label(deck_a.get('checkpoint', ''))}"
                     )
-                    render_deck(deck_a)
+                    render_deck(deck_a, ctx="cmpA")
                 with col_b:
                     st.markdown(
                         f"### {_checkpoint_label(deck_b.get('checkpoint', ''))}"
                     )
-                    render_deck(deck_b)
+                    render_deck(deck_b, ctx="cmpB")
         else:
             deck = get_generated_deck(chosen_filename)
             if deck is None:
