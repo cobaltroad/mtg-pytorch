@@ -155,6 +155,7 @@ docker compose run --rm ingest python pipeline.py --stage export_dataset_command
 docker compose run --rm ingest python -m scripts.eval_profile "Wilhelt"                # derived quota profile
 docker compose run --rm ingest python -m scripts.build_deck "Wilhelt"                  # heuristic baseline build (W3)
 docker compose run --rm ingest python -m scripts.build_deck "Wilhelt" --ranking=model  # Phase 1/2 model-ranked build (W4)
+docker compose run --rm ingest python -m scripts.build_deck "Wilhelt" --honor-votes    # amend pass (#184): pin net-👍, exclude net-👎
 
 # Regression harness (W6): golden 20-commander set — hard invariants (99 cards,
 # singleton, color identity, quota audit, castability gate) + human-deck quota

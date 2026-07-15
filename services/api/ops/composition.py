@@ -263,6 +263,19 @@ async def _commander_inputs(db: AsyncSession, oracle_id: str) -> dict:
     }
 
 
+async def _vote_nets(db: AsyncSession, commander_ids: set[str]) -> dict[str, int]:
+    """Net 'fit' vote per card id across the deck's commander(s) (#184)."""
+    result = await db.execute(
+        text(
+            "SELECT card_id::text, SUM(vote) FROM card_votes"
+            " WHERE kind = 'fit' AND commander_id = ANY(CAST(:cmds AS uuid[]))"
+            " GROUP BY card_id"
+        ),
+        {"cmds": list(commander_ids)},
+    )
+    return {cid: int(net) for cid, net in result.fetchall()}
+
+
 async def build_commander_deck(
     db: AsyncSession,
     oracle_id: str,
@@ -270,8 +283,14 @@ async def build_commander_deck(
     goldfish_games: int = 400,
     save_dir: Path | None = None,
     partner_oracle_id: str | None = None,
+    honor_votes: bool = False,
 ) -> dict:
     """Build a deck for a commander (or partner pair, #147).
+
+    honor_votes (#184): net-positive 'fit' votes pin cards to the front
+    of their pools (exempt from feedback-loop cuts); net-negative votes
+    exclude cards from pools and forced includes.  Quotas and the
+    castability gate are never relaxed.
 
     Returns the deck JSON (+deck_filename).
     """
@@ -334,6 +353,31 @@ async def build_commander_deck(
                 None, partial(ranker.rank_pool, pools[role], cmd_emb, embs)
             )
 
+    # Vote overrides apply AFTER ranking so pins survive the model's
+    # re-sort (#184).
+    vote_summary: dict | None = None
+    if honor_votes:
+        from composition.pool_helpers import apply_vote_overrides
+
+        nets = await _vote_nets(db, commander_ids={cmd["id"] for cmd in commanders})
+        upvoted = {cid for cid, n in nets.items() if n > 0}
+        downvoted = {cid for cid, n in nets.items() if n < 0}
+        pools, land_pool, forced, pinned, unplaced = apply_vote_overrides(
+            pools, land_pool, forced, upvoted, downvoted
+        )
+        unplaced_names = []
+        if unplaced:
+            rows = await db.execute(
+                text("SELECT name FROM cards WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                {"ids": list(unplaced)},
+            )
+            unplaced_names = sorted(r[0] for r in rows.fetchall())
+        vote_summary = {
+            "pinned": len(pinned),
+            "excluded": len(downvoted),
+            "unplaced_pins": unplaced_names,
+        }
+
     # Commanders that discount their own cost (Karador) get a per-turn
     # generic discount simulated in the goldfisher (#142).
     cost_reduction = any(
@@ -359,7 +403,17 @@ async def build_commander_deck(
     theme_ids = [c["id"] for c in build_result.deck if c["name"] in theme_names]
     density = await _theme_density(db, commander["id"], theme_ids)
 
+    if vote_summary is not None:
+        build_result.warnings.append(
+            f"vote overrides honored: {vote_summary['pinned']} pinned, "
+            f"{vote_summary['excluded']} excluded"
+            + (f"; pins not in any pool: {', '.join(vote_summary['unplaced_pins'])}"
+               if vote_summary["unplaced_pins"] else "")
+        )
+
     deck_json = _deck_json(profile, build_result, commander, ranking, density)
+    if vote_summary is not None:
+        deck_json["composition"]["vote_overrides"] = vote_summary
 
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)

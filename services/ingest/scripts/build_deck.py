@@ -27,6 +27,7 @@ from composition.pool_helpers import (  # noqa: E402
     COST_REDUCTION_RE,
     FORCED_NAMES,
     POOL_SQL as _POOL_SQL,
+    apply_vote_overrides,
     row_to_card as _row_to_card,
     sort_pool,
 )
@@ -200,9 +201,11 @@ def build_for_commander(
     goldfish_games: int = 500,
     ranking: str = "heuristic",
     partner: str | None = None,
+    honor_votes: bool = False,
 ) -> tuple[CompositionProfile, object]:
     """ranking: 'heuristic' (W3 baseline) or 'model' (Phase 1/2 re-ranked).
     partner: second commander name for partner pairs (#147) — 98-card deck.
+    honor_votes: amend pass (#184) — pin net-upvoted, exclude net-downvoted.
     """
     conn = psycopg2.connect(DATABASE_URL)
     try:
@@ -258,6 +261,27 @@ def build_for_commander(
                 for role, pool in pools.items()
             }
 
+        land_pool = _land_pool(conn, identity)
+        forced = _forced(conn, identity)
+        if honor_votes:
+            # After ranking, so pins survive the model re-sort (#184).
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT card_id::text, SUM(vote) FROM card_votes"
+                    " WHERE kind = 'fit' AND commander_id = ANY(%s::uuid[])"
+                    " GROUP BY card_id",
+                    (list(commander_ids),),
+                )
+                nets = {cid: int(net) for cid, net in cur.fetchall()}
+            pools, land_pool, forced, pinned, unplaced = apply_vote_overrides(
+                pools, land_pool, forced,
+                {c for c, n in nets.items() if n > 0},
+                {c for c, n in nets.items() if n < 0},
+            )
+            print(f"vote overrides: {len(pinned)} pinned, "
+                  f"{sum(1 for n in nets.values() if n < 0)} excluded, "
+                  f"{len(unplaced)} pins not in any pool")
+
         # Commanders that discount their own cost (Karador) get a per-turn
         # generic discount simulated in the goldfisher (#142).
         cost_reduction = any(
@@ -267,9 +291,9 @@ def build_for_commander(
         result = build_deck(
             profile,
             pools,
-            _land_pool(conn, identity),
+            land_pool,
             _basics(conn),
-            forced=_forced(conn, identity),
+            forced=forced,
             goldfish_games=goldfish_games,
             cost_reduction=cost_reduction,
         )
@@ -287,6 +311,7 @@ def main() -> None:
     if not args:
         sys.exit(__doc__)
     ranking = "model" if "--ranking=model" in sys.argv or "--model" in sys.argv else "heuristic"
+    honor_votes = "--honor-votes" in sys.argv
     partner = None
     for i, a in enumerate(sys.argv):
         if a == "--partner" and i + 1 < len(sys.argv):
@@ -295,7 +320,8 @@ def main() -> None:
             partner = a.split("=", 1)[1]
     if partner in args:
         args.remove(partner)
-    profile, result = build_for_commander(args[0], ranking=ranking, partner=partner)
+    profile, result = build_for_commander(args[0], ranking=ranking, partner=partner,
+                                          honor_votes=honor_votes)
 
     if "--json" in sys.argv:
         print(json.dumps({
