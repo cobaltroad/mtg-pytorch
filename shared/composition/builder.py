@@ -328,7 +328,8 @@ def build_deck(
             if cand["id"] in chosen or cand["is_land"]:
                 continue
             cut = next(
-                (t for t in reversed(theme) if "wincon" not in t.get("roles", set())),
+                (t for t in reversed(theme)
+                 if not {"wincon", "pinned"} & t.get("roles", set())),
                 None,
             )
             if cut is None:
@@ -423,7 +424,15 @@ def build_deck(
                 log.info("goldfish %.2f < %.2f — pip-offender swap: %s",
                          result.p_commander_by_go_live, gate, swapped)
                 continue
-        cut = theme.pop()  # lowest-ranked theme/filler card becomes a land
+        # Lowest-ranked theme/filler card becomes a land; vote-pinned cards
+        # (#184) are exempt, like forced wincons.
+        cut = next(
+            (t for t in reversed(theme) if "pinned" not in t.get("roles", set())),
+            None,
+        )
+        if cut is None:
+            break  # everything cuttable is pinned — gate warning after loop
+        theme.remove(cut)
         spells.remove(cut)
         chosen.discard(cut["id"])
         for slot in ("filler", "theme"):  # filler cuts first (it's appended last)
@@ -501,7 +510,7 @@ def _pip_offender_swap(
         return sum(n for c, n in (card.get("pips") or {}).items() if c in scarce)
 
     offender = max(
-        (t for t in theme if "wincon" not in t.get("roles", set())),
+        (t for t in theme if not {"wincon", "pinned"} & t.get("roles", set())),
         key=scarce_pips,
         default=None,
     )

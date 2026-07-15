@@ -71,8 +71,14 @@ def get_commander_votes(oracle_id: str) -> list[dict]:
         return []
 
 
-def render_vote_editor(deck: dict, filename: str) -> None:
-    """👍/👎 per card + wrong-slot flag; one submit (feedback loop #180)."""
+def render_vote_editor(deck: dict, filename: str, ctx: str) -> None:
+    """👍/👎 per card + wrong-slot flag; one submit (feedback loop #180).
+
+    ctx namespaces widget keys per tab: Streamlit executes ALL tabs every
+    run, and after a build the same deck renders in both the build tab and
+    the auto-selected history tab — same keys would raise
+    StreamlitDuplicateElementKey and crash the app.
+    """
     with st.expander("🗳 Vote on picks", expanded=False):
         st.caption(
             "👍/👎 = does this card belong in this deck? (trains within-slot "
@@ -85,7 +91,7 @@ def render_vote_editor(deck: dict, filename: str) -> None:
         ]
         edited = st.data_editor(
             pd.DataFrame(rows),
-            key=f"votes_{filename}",
+            key=f"{ctx}_votes_{filename}",
             hide_index=True,
             use_container_width=True,
             disabled=["name", "slot"],
@@ -94,7 +100,7 @@ def render_vote_editor(deck: dict, filename: str) -> None:
                 "wrong slot": st.column_config.CheckboxColumn("wrong slot"),
             },
         )
-        if st.button("Submit votes", key=f"submit_votes_{filename}"):
+        if st.button("Submit votes", key=f"{ctx}_submit_votes_{filename}"):
             votes = []
             for _, row in edited.iterrows():
                 if row["vote"] in ("👍", "👎"):
@@ -114,7 +120,29 @@ def render_vote_editor(deck: dict, filename: str) -> None:
                 except Exception as e:
                     st.error(f"Vote submit failed: {e}")
 
-        agg = get_commander_votes(str(deck.get("commander", {}).get("oracle_id", "")))
+        _oid = str(deck.get("commander", {}).get("oracle_id", ""))
+        _is_partner = bool(
+            (deck.get("composition") or {}).get("profile", {}).get("partner_cast")
+        )
+        if _is_partner:
+            st.caption("Partner deck — rebuild honoring votes via the API "
+                       "(the UI rebuild only carries the lead commander).")
+        elif st.button("🔁 Rebuild honoring votes", key=f"{ctx}_amend_{filename}",
+                       help="Rebuild this commander's deck with 👍 pinned and "
+                       "👎 excluded (#184)."):
+            with st.spinner("Rebuilding with vote overrides…"):
+                try:
+                    _amended = build_composition_deck(_oid, "model", 300, True)
+                    st.session_state["last_deck_filename"] = _amended.get(
+                        "deck_filename", "")
+                    st.session_state["built_deck"] = _amended
+                    list_generated_decks.clear()
+                    st.success(f"Rebuilt — saved as {_amended.get('deck_filename')}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Rebuild failed: {e}")
+
+        agg = get_commander_votes(_oid)
         fit = [a for a in agg if a["kind"] == "fit"]
         if fit:
             st.caption("Prior votes for this commander:")
@@ -122,7 +150,8 @@ def render_vote_editor(deck: dict, filename: str) -> None:
                          hide_index=True, use_container_width=True, height=200)
 
 
-def build_composition_deck(oracle_id: str, ranking: str, games: int) -> dict:
+def build_composition_deck(oracle_id: str, ranking: str, games: int,
+                           honor_votes: bool = False) -> dict:
     """Submit a composition build job and poll until done (#150).
 
     The async job pattern survives long builds without holding one HTTP
@@ -131,7 +160,8 @@ def build_composition_deck(oracle_id: str, ranking: str, games: int) -> dict:
     """
     r = httpx.post(
         f"{API_URL}/commanders/{oracle_id}/build/async",
-        params={"ranking": ranking, "goldfish_games": games},
+        params={"ranking": ranking, "goldfish_games": games,
+                "honor_votes": honor_votes},
         timeout=30,
     )
     r.raise_for_status()
@@ -217,7 +247,7 @@ def render_composition(comp: dict) -> None:
 # ── Shared deck display ───────────────────────────────────────────────────────
 
 
-def render_deck(deck: dict, filename: str | None = None) -> None:
+def render_deck(deck: dict, filename: str | None = None, ctx: str = "hist") -> None:
     """Render the full deck view. Accepts the deck result dict from the API."""
     st.success(f"Deck generated with checkpoint `{deck['checkpoint']}`")
     st.markdown(f"**Commander:** {deck['commander']['name']}")
@@ -225,7 +255,7 @@ def render_deck(deck: dict, filename: str | None = None) -> None:
     if deck.get("composition"):
         render_composition(deck["composition"])
     if filename and deck.get("composition"):
-        render_vote_editor(deck, filename)
+        render_vote_editor(deck, filename, ctx)
 
     _safe_name = re.sub(r"[^\w]", "_", deck["commander"]["name"])
     _dl_cols = st.columns(2)
@@ -234,6 +264,7 @@ def render_deck(deck: dict, filename: str | None = None) -> None:
         data=_json.dumps(deck, indent=2, default=str),
         file_name=f"{_safe_name}.json",
         mime="application/json",
+        key=f"{ctx}_dl_json_{filename or _safe_name}",
     )
     _deck_lines = [f"Commander\n1 {deck['commander']['name']}\n\nDeck"]
     for _c in deck["cards"]:
@@ -243,6 +274,7 @@ def render_deck(deck: dict, filename: str | None = None) -> None:
         data="\n".join(_deck_lines),
         file_name=f"{_safe_name}.txt",
         mime="text/plain",
+        key=f"{ctx}_dl_txt_{filename or _safe_name}",
     )
 
     rows = [
@@ -361,14 +393,19 @@ with tab_deck:
                 help="Monte Carlo iterations for castability metrics",
             )
         with _b_col3:
-            st.markdown("&nbsp;", unsafe_allow_html=True)
+            _honor = st.checkbox(
+                "🗳 Honor my votes",
+                help="Amend pass (#184): net-👍 cards are pinned (exempt from "
+                "feedback-loop cuts), net-👎 cards are excluded from pools. "
+                "Quotas and the castability gate still apply.",
+            )
             _do_build = st.button("🏗 Build 99-card deck", type="primary")
 
         if _do_build:
             with st.spinner("Building deck (quota fill + mana base + goldfish)…"):
                 try:
                     _built = build_composition_deck(
-                        str(commander["oracle_id"]), _ranking, _games
+                        str(commander["oracle_id"]), _ranking, _games, _honor
                     )
                 except httpx.HTTPStatusError as e:
                     st.error(f"Build failed ({e.response.status_code}): {e.response.text}")
@@ -378,11 +415,19 @@ with tab_deck:
                     _built = None
             if _built:
                 st.session_state["last_deck_filename"] = _built.get("deck_filename", "")
+                st.session_state["built_deck"] = _built
                 list_generated_decks.clear()
-                render_deck(_built, filename=_built.get("deck_filename"))
-                st.info(
-                    "Deck saved — also available in the **Generated Decks** tab."
-                )
+
+        # Render from session state, NOT the _do_build branch: any widget
+        # interaction (vote toggles, submit) reruns the script with
+        # _do_build False — rendering inside the branch would make the
+        # deck (and pending votes) vanish on the first click.
+        _bd = st.session_state.get("built_deck")
+        if _bd and _bd.get("commander", {}).get("oracle_id") == str(commander["oracle_id"]):
+            render_deck(_bd, filename=_bd.get("deck_filename"), ctx="build")
+            st.info(
+                "Deck saved — also available in the **Generated Decks** tab."
+            )
 
     # (The Phase 3 CommanderScorer candidate table and checkpoint picker
     #  lived here until #151 — the composition build above replaces them.)
@@ -452,12 +497,12 @@ with tab_history:
                     st.markdown(
                         f"### {_checkpoint_label(deck_a.get('checkpoint', ''))}"
                     )
-                    render_deck(deck_a)
+                    render_deck(deck_a, ctx="cmpA")
                 with col_b:
                     st.markdown(
                         f"### {_checkpoint_label(deck_b.get('checkpoint', ''))}"
                     )
-                    render_deck(deck_b)
+                    render_deck(deck_b, ctx="cmpB")
         else:
             deck = get_generated_deck(chosen_filename)
             if deck is None:

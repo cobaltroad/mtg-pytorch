@@ -139,3 +139,47 @@ def sort_pool(cards: list[dict], role: str) -> list[dict]:
     else:
         cards.sort(key=lambda c: (c["edhrec_rank"], c["mv"], c["name"]))
     return cards
+
+
+def apply_vote_overrides(
+    pools: dict[str, list[dict]],
+    land_pool: list[dict],
+    forced: list[dict],
+    upvoted: set[str],
+    downvoted: set[str],
+) -> tuple[dict[str, list[dict]], list[dict], list[dict], set[str], set[str]]:
+    """Per-build vote overrides — the amend pass (#184).
+
+    Downvoted card ids vanish from every pool, the land pool, and the
+    forced includes.  Upvoted ids move to the front of each pool they
+    appear in and gain the 'pinned' role, which the builder's cut paths
+    (feedback-loop land conversion, pip-offender swap, wincon-audit
+    swap) respect.  Pins never bypass quotas or the castability gate —
+    they only win the within-slot ranking they were already eligible
+    for.  Lands are exempt from pinning (the builder re-ranks lands by
+    land_quality; land votes aren't captured by the UI anyway).
+
+    Returns (pools, land_pool, forced, pinned_ids, unplaced_ids) —
+    unplaced_ids are upvoted cards found in no pool (pool SQL no longer
+    claims them), surfaced as a build warning by the caller.
+    """
+    keep = lambda c: c["id"] not in downvoted  # noqa: E731
+    out_pools: dict[str, list[dict]] = {}
+    pinned: set[str] = set()
+    for role, pool in pools.items():
+        pool = [c for c in pool if keep(c)]
+        if role != "drain":  # drain is a density audit, order-irrelevant
+            front = [c for c in pool if c["id"] in upvoted]
+            if front:
+                for c in front:
+                    c.setdefault("roles", set()).add("pinned")
+                    pinned.add(c["id"])
+                pool = front + [c for c in pool if c["id"] not in upvoted]
+        out_pools[role] = pool
+    return (
+        out_pools,
+        [c for c in land_pool if keep(c)],
+        [c for c in forced if keep(c)],
+        pinned,
+        upvoted - pinned,
+    )

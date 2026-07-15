@@ -326,6 +326,7 @@ async def build_commander_deck(
     ranking: str = Query("model", pattern="^(model|heuristic)$"),
     goldfish_games: int = Query(400, ge=50, le=2000),
     partner_oracle_id: UUID | None = Query(None, description="second commander for partner pairs (98-card deck)"),
+    honor_votes: bool = Query(False, description="amend pass (#184): pin net-upvoted cards, exclude net-downvoted"),
     db: AsyncSession = Depends(get_db),
 ):
     """Build a full 99-card deck with the composition engine.
@@ -346,6 +347,7 @@ async def build_commander_deck(
             goldfish_games=goldfish_games,
             save_dir=DECK_SAVE_DIR,
             partner_oracle_id=str(partner_oracle_id) if partner_oracle_id else None,
+            honor_votes=honor_votes,
         )
     except LookupError as e:
         raise HTTPException(404, str(e))
@@ -368,6 +370,7 @@ async def build_commander_deck_async(
     ranking: str = Query("model", pattern="^(model|heuristic)$"),
     goldfish_games: int = Query(400, ge=50, le=2000),
     partner_oracle_id: UUID | None = Query(None),
+    honor_votes: bool = Query(False),
 ):
     """Submit a composition build as a background job (#150).
 
@@ -392,6 +395,7 @@ async def build_commander_deck_async(
                     goldfish_games=goldfish_games,
                     save_dir=DECK_SAVE_DIR,
                     partner_oracle_id=str(partner_oracle_id) if partner_oracle_id else None,
+                    honor_votes=honor_votes,
                 )
             _BUILD_JOBS[job_id].update(status="done", result=result)
         except LookupError as exc:
